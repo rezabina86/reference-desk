@@ -30,7 +30,7 @@ written yet from that track's table; `"setupLabels"` names the setup sessions, w
 ```json
 { "schedule": "../Interview/02-Study-Plan/tracks/labs.md",
   "setupGroup": "Week 0 · setup",
-  "setupLabels": { "S1": "Contract, Kündigungsfrist, baseline" } }
+  "setupLabels": { "S1": "Short label for a session the table doesn't list" } }
 ```
 
 A session topic renders as a timeline in the rail (done / current / not yet), gets a card index of
