@@ -1,0 +1,8 @@
+{
+  "title": "Swift Concurrency",
+  "slug": "swift-concurrency",
+  "tagline": "How it actually works, from cores upward",
+  "summary": "Threads, tasks, actors and isolation — built up from first principles, with the mechanism from Apple's own material. Answers the three questions that stay confusing: what an actor really is, how it differs from a thread, and why @MainActor is not the main thread.",
+  "status": "complete",
+  "accentIndex": 0
+}

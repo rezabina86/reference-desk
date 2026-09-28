@@ -1,0 +1,8 @@
+{
+  "title": "Mobile System Design",
+  "slug": "system-design",
+  "tagline": "Whiteboard questions, answered client-side",
+  "summary": "Fourteen questions as interviewers actually ask them, each with a full answer in the shape a 45-minute round rewards: clarifying questions, scope, the box diagram, the API, two or three deep dives with their trade-offs, and the follow-ups that come after a good answer. Client-side throughout; no backend sharding.",
+  "status": "in progress",
+  "accentIndex": 3
+}

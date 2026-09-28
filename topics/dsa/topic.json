@@ -1,0 +1,8 @@
+{
+  "title": "DSA for Interviews",
+  "slug": "dsa",
+  "tagline": "56 problems, 13 patterns, mostly medium",
+  "summary": "The problems that come up again and again in coding rounds, grouped by the pattern that solves them. Each one gives the recognition cue, the approach in plain words, and a Swift solution kept hidden until you have tried. Built for the LeetCode-medium bar of German scale-ups, with the problems Zalando, Sixt and Delivery Hero are documented asking marked.",
+  "status": "in progress",
+  "accentIndex": 2
+}

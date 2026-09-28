@@ -1,0 +1,760 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Reference Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap">
+
+<style>
+:root{
+  --ground:#FBFAFC; --panel:#F2EFF5; --raised:#FFFFFF;
+  --ink:#17161C; --muted:#5D6C79; --faint:#8E93A0;
+  --rule:#E2DDE8; --rule-soft:#EDE9F1;
+  --accent:#AD3DA4; --accent-soft:#F6E9F5;
+  --link:#0B4F79; --warm:#B4472F; --warm-soft:#FBEDE9;
+  --code-bg:#F6F4F8;
+  --t-kw:#AD3DA4; --t-typ:#0B4F79; --t-str:#C0331C; --t-com:#5D6C79; --t-num:#1C00CF; --t-atr:#7A3E9D;
+  --shadow:0 1px 2px rgba(23,22,28,.05), 0 8px 24px -12px rgba(23,22,28,.18);
+  --serif:'Newsreader',Georgia,'Times New Roman',serif;
+  --sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#1B1B20; --panel:#232329; --raised:#26262E;
+    --ink:#E7E4EC; --muted:#9AA2AE; --faint:#7A818D;
+    --rule:#33333C; --rule-soft:#2B2B33;
+    --accent:#FF7AB2; --accent-soft:#33202C;
+    --link:#6BDFFF; --warm:#FF8170; --warm-soft:#32231F;
+    --code-bg:#1F1F26;
+    --t-kw:#FF7AB2; --t-typ:#6BDFFF; --t-str:#FF8170; --t-com:#7F8C98; --t-num:#D9C97C; --t-atr:#C5A3E0;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#1B1B20; --panel:#232329; --raised:#26262E;
+  --ink:#E7E4EC; --muted:#9AA2AE; --faint:#7A818D;
+  --rule:#33333C; --rule-soft:#2B2B33;
+  --accent:#FF7AB2; --accent-soft:#33202C;
+  --link:#6BDFFF; --warm:#FF8170; --warm-soft:#32231F;
+  --code-bg:#1F1F26;
+  --t-kw:#FF7AB2; --t-typ:#6BDFFF; --t-str:#FF8170; --t-com:#7F8C98; --t-num:#D9C97C; --t-atr:#C5A3E0;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--sans); font-size:16px; line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--link)}
+a:focus-visible,button:focus-visible,input:focus-visible{
+  outline:2px solid var(--accent); outline-offset:2px; border-radius:3px;
+}
+
+/* ------------------------------------------------------- programme rail */
+.tl-sect{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--faint); margin:18px 0 8px;
+}
+.tl{position:relative; padding-left:16px; margin:0 0 4px}
+.tl::before{content:""; position:absolute; left:4px; top:8px; bottom:8px; width:1px; background:var(--rule)}
+.tl a{
+  position:relative; display:block; padding:6px 8px 6px 10px; border-radius:6px;
+  text-decoration:none; color:var(--ink); font-size:13px; line-height:1.35;
+}
+.tl a::before{
+  content:""; position:absolute; left:-16px; top:12px; width:7px; height:7px; border-radius:50%;
+  background:var(--accent); border:2px solid var(--ground);
+}
+.tl a:hover{background:var(--panel)}
+.tl a.on{background:var(--accent-soft); font-weight:500}
+.tl a.on::before{box-shadow:0 0 0 3px var(--accent-soft)}
+.tl a .n{font-family:var(--mono); font-size:10px; color:var(--faint); margin-right:6px}
+.tl a.soon{opacity:.45; pointer-events:none}
+.tl a.soon::before{background:none; border:2px solid var(--rule)}
+.tl-more{
+  display:block; width:100%; margin-top:2px; padding:5px 0 5px 26px; border:0; background:none;
+  color:var(--muted); font:inherit; font-size:12px; text-align:left; cursor:pointer;
+}
+.tl-more:hover{color:var(--accent)}
+
+.tp{border-top:1px solid var(--rule-soft)}
+.tp:last-of-type{border-bottom:1px solid var(--rule-soft)}
+.tp > button{
+  display:flex; align-items:center; gap:8px; width:100%; padding:10px 2px; border:0; background:none;
+  cursor:pointer; color:var(--ink); font:inherit; font-size:13.5px; text-align:left;
+}
+.tp > button .chev{color:var(--faint); font-size:9px; width:9px}
+.tp > button .nm{flex:1}
+.tp > button .ct{font-family:var(--mono); font-size:10px; color:var(--faint)}
+.tp.open > button .nm{color:var(--accent); font-weight:500}
+.tp .kids{padding:0 0 8px}
+
+/* --------------------------------------------------------- on this page */
+.outline{
+  position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto;
+  padding:40px 18px 40px 20px; border-left:1px solid var(--rule);
+}
+.outline p.h{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--faint); margin:0 0 10px;
+}
+.outline a{
+  display:block; padding:5px 0 5px 10px; border-left:2px solid var(--rule); color:var(--muted);
+  text-decoration:none; font-size:12.5px; line-height:1.35;
+}
+.outline a:hover{color:var(--ink)}
+.outline a.on{border-left-color:var(--accent); color:var(--ink)}
+.outline:empty{display:none}
+
+/* ------------------------------------------------------------- progress */
+.prog{display:flex; align-items:center; gap:12px; margin:0 0 26px}
+.prog .lb{
+  font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--faint); white-space:nowrap;
+}
+.prog .bar{flex:1; height:3px; background:var(--rule-soft); border-radius:2px; overflow:hidden}
+.prog .bar i{display:block; height:100%; background:var(--accent)}
+
+/* ---------------------------------------------------------- index cards */
+.ix-head{display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:6px}
+.ix-head h1{font-family:var(--serif); font-weight:500; font-size:clamp(28px,4vw,36px); margin:0}
+.ix-head .meta{font-family:var(--mono); font-size:11px; color:var(--faint); white-space:nowrap}
+.ix-lede{color:var(--muted); max-width:62ch; margin:0 0 32px}
+.build{margin:0 0 28px}
+.build > h3{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--faint); font-weight:400; margin:0 0 12px; display:flex; gap:12px; align-items:center;
+}
+.build > h3::after{content:""; flex:1; height:1px; background:var(--rule-soft)}
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(228px,1fr)); gap:10px}
+.card{
+  display:block; padding:13px 14px; border:1px solid var(--rule); border-radius:8px;
+  background:var(--raised); text-decoration:none; color:var(--ink); box-shadow:var(--shadow);
+}
+.card:hover{border-color:var(--accent)}
+.card .n{font-family:var(--mono); font-size:10.5px; color:var(--accent); letter-spacing:.08em}
+.card b{display:block; font-size:14px; font-weight:600; margin:5px 0 4px; line-height:1.32}
+.card span.s{display:block; color:var(--muted); font-size:12.5px; line-height:1.45}
+.card.next{border-style:dashed; background:none; box-shadow:none; opacity:.62}
+.card.next .n{color:var(--faint)}
+
+/* ---------------------------------------------------------------- shell */
+.shell{display:grid; grid-template-columns:270px minmax(0,1fr); min-height:100vh}
+@media (min-width:1180px){.shell:has(.outline:not(:empty)){grid-template-columns:270px minmax(0,1fr) 220px}}
+@media (max-width:1179px){.outline{display:none}}
+.rail{
+  border-right:1px solid var(--rule); background:var(--panel);
+  position:sticky; top:0; height:100vh; overflow-y:auto;
+  padding:22px 0 40px; display:flex; flex-direction:column; gap:18px;
+}
+.rail-head{padding:0 20px; display:flex; flex-direction:column; gap:3px}
+.mark{
+  font-family:var(--serif); font-size:20px; font-weight:600; letter-spacing:-.01em;
+  background:none; border:0; padding:0; color:var(--ink); cursor:pointer; text-align:left;
+}
+.mark-sub{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint)}
+
+.find{padding:0 20px}
+.find input{
+  width:100%; font-family:var(--sans); font-size:13px; color:var(--ink);
+  background:var(--raised); border:1px solid var(--rule); border-radius:7px;
+  padding:7px 10px;
+}
+.find input::placeholder{color:var(--faint)}
+
+.tree{display:flex; flex-direction:column; gap:22px; padding:0 12px}
+.tree-group{display:flex; flex-direction:column; gap:2px}
+.tree-title{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--faint); padding:0 8px 6px;
+}
+.tree a{
+  display:grid; grid-template-columns:22px 1fr; gap:8px; align-items:baseline;
+  padding:5px 8px; border-radius:6px; text-decoration:none; color:var(--muted);
+  font-size:13.5px; line-height:1.4;
+}
+.tree a:hover{background:var(--rule-soft); color:var(--ink)}
+.tree a.on{background:var(--accent-soft); color:var(--ink); font-weight:500}
+.tree a.on .num{color:var(--accent)}
+.num{font-family:var(--mono); font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums}
+.rail-foot{margin-top:auto; padding:0 20px; font-size:11.5px; color:var(--faint); font-family:var(--mono)}
+
+/* ---------------------------------------------------------------- main */
+main{padding:0 0 96px; min-width:0}
+.wrap{max-width:672px; margin:0 auto; padding-inline:28px}
+.topbar{
+  display:none; align-items:center; gap:12px; padding:12px 18px;
+  border-bottom:1px solid var(--rule); background:var(--ground);
+  position:sticky; top:0; z-index:20;
+}
+.burger{
+  font:500 13px/1 var(--sans); color:var(--ink); background:var(--panel);
+  border:1px solid var(--rule); border-radius:7px; padding:8px 11px; cursor:pointer;
+}
+
+/* ---------------------------------------------------------------- home */
+.hero{padding-block:64px 8px}
+.hero h1{
+  font-family:var(--serif); font-weight:500; font-size:clamp(34px,5.5vw,48px);
+  line-height:1.1; letter-spacing:-.02em; margin:0 0 14px; text-wrap:balance;
+}
+.hero p{font-size:17.5px; color:var(--muted); margin:0; max-width:56ch}
+.hr{height:1px; background:var(--rule); margin-block:40px}
+
+.topic-card{
+  border:1px solid var(--rule); border-radius:12px; background:var(--raised);
+  padding:26px 26px 20px; box-shadow:var(--shadow); margin-bottom:20px;
+}
+.topic-card h2{
+  font-family:var(--serif); font-weight:600; font-size:26px; letter-spacing:-.015em;
+  margin:0 0 4px;
+}
+.topic-card h2 a{color:inherit; text-decoration:none}
+.topic-card h2 a:hover{color:var(--accent)}
+.tagline{font-family:var(--mono); font-size:11.5px; letter-spacing:.05em; color:var(--accent); text-transform:uppercase; margin:0 0 12px}
+.topic-card>p.blurb{color:var(--muted); margin:0 0 20px; font-size:15px}
+.facts{
+  display:flex; flex-wrap:wrap; gap:18px; padding-top:16px; margin-top:4px;
+  border-top:1px solid var(--rule-soft);
+  font-family:var(--mono); font-size:11.5px; color:var(--faint); letter-spacing:.03em;
+}
+.facts b{color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums}
+
+.chapters{list-style:none; margin:0; padding:0; display:flex; flex-direction:column}
+.chapters li{border-top:1px solid var(--rule-soft)}
+.chapters li:first-child{border-top:0}
+.chapters a{
+  display:grid; grid-template-columns:30px 1fr auto; gap:14px; align-items:baseline;
+  padding:11px 0; text-decoration:none; color:inherit;
+}
+.chapters a:hover .ch-t{color:var(--accent)}
+.ch-t{font-weight:500; font-size:15px}
+.ch-s{grid-column:2; color:var(--muted); font-size:13.5px; line-height:1.5; margin-top:1px}
+.ch-m{font-family:var(--mono); font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums}
+
+/* ---------------------------------------------------------------- chapter */
+.eyebrow{
+  display:flex; align-items:center; gap:10px; padding-block:48px 0;
+  font-family:var(--mono); font-size:11px; letter-spacing:.11em; text-transform:uppercase; color:var(--faint);
+}
+.eyebrow a{color:var(--faint); text-decoration:none}
+.eyebrow a:hover{color:var(--accent)}
+.eyebrow .dot{width:3px; height:3px; border-radius:50%; background:var(--rule); display:inline-block}
+
+article h1{
+  font-family:var(--serif); font-weight:500; font-size:clamp(30px,4.6vw,40px);
+  line-height:1.15; letter-spacing:-.02em; margin:14px 0 10px; text-wrap:balance;
+}
+.lede{font-size:17px; text-wrap:pretty; color:var(--muted); margin:0 0 6px; max-width:58ch}
+
+article h2{
+  font-family:var(--serif); font-weight:600; font-size:25px; letter-spacing:-.015em;
+  margin:44px 0 12px; text-wrap:balance;
+}
+article h3{
+  font-family:var(--sans); font-weight:600; font-size:15.5px; letter-spacing:.005em;
+  margin:32px 0 8px; text-wrap:balance;
+}
+article p{margin:0 0 16px; text-wrap:pretty}
+article ul,article ol{margin:0 0 18px; padding-left:22px}
+article li{margin-bottom:7px}
+article li::marker{color:var(--faint)}
+article hr{border:0; height:1px; background:var(--rule); margin-block:36px}
+article strong{font-weight:600}
+article :not(pre) > code{overflow-wrap:anywhere}
+
+code{
+  font-family:var(--mono); font-size:.875em;
+  background:var(--code-bg); border:1px solid var(--rule-soft);
+  border-radius:4px; padding:.08em .32em;
+}
+pre{
+  font-family:var(--mono); font-size:13px; line-height:1.62;
+  background:var(--code-bg); border:1px solid var(--rule);
+  border-radius:9px; padding:16px 18px; margin:0; position:relative;
+}
+pre code{background:none; border:0; padding:0; font-size:inherit}
+pre::after{
+  content:attr(data-lang); position:absolute; top:8px; right:12px;
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+}
+.t-kw{color:var(--t-kw)} .t-typ{color:var(--t-typ)} .t-str{color:var(--t-str)}
+.t-com{color:var(--t-com); font-style:italic} .t-num{color:var(--t-num)} .t-atr{color:var(--t-atr)}
+.scroll{overflow-x:auto; margin:0 0 20px; max-width:100%}
+
+table{border-collapse:collapse; width:100%; font-size:13.5px; line-height:1.5}
+th,td{text-align:left; padding:9px 14px 9px 0; border-bottom:1px solid var(--rule-soft); vertical-align:top}
+th{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--faint); font-weight:400; border-bottom:1px solid var(--rule);
+}
+td:first-child{color:var(--ink); font-weight:500}
+
+.aside{margin:0 0 22px; padding:2px 0 2px 20px; border-left:2px solid var(--rule)}
+.aside p:last-child{margin-bottom:0}
+.aside-label{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.11em; text-transform:uppercase;
+  margin:0 0 6px !important;
+}
+.aside.office{border-left-color:var(--warm)}
+.aside.office .aside-label{color:var(--warm)}
+.aside.office p:not(.aside-label){font-family:var(--serif); font-size:17px; line-height:1.6}
+.aside.hood{border-left-color:var(--accent)}
+.aside.hood .aside-label{color:var(--accent)}
+.aside.hood p:not(.aside-label){font-size:14.5px; color:var(--muted)}
+.aside.hood code{font-size:.86em}
+
+/* ---------------------------------------------------------------- diagram */
+.dg{
+  margin:0 0 24px; padding:16px; border:1px solid var(--rule); border-radius:8px;
+  background:var(--panel); font-size:13.5px; line-height:1.45; overflow-x:auto;
+}
+.dg figcaption, .dg .dg-title{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--faint); margin:0 0 14px;
+}
+.dg-row{display:grid; grid-template-columns:78px minmax(0,1fr); gap:12px; align-items:center}
+.dg-lane{
+  font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--faint); text-align:right; padding-top:2px;
+}
+.dg-nodes{display:flex; flex-wrap:wrap; gap:10px}
+.dg-node{
+  flex:1 1 150px; min-width:140px; padding:9px 11px; border:1px solid var(--rule);
+  border-radius:6px; background:var(--raised); color:var(--ink); box-shadow:var(--shadow);
+}
+.dg-node b{display:block; font-weight:600; font-size:13.5px}
+.dg-node span{display:block; margin-top:3px; color:var(--muted); font-size:12px}
+.dg-node code{background:none; padding:0; font-size:12px; color:var(--muted)}
+.dg-node.accent{border-color:var(--accent)}
+.dg-node.accent b{color:var(--accent)}
+.dg-node.warm{border-color:var(--warm)}
+.dg-node.warm b{color:var(--warm)}
+.dg-node.ghost{border-style:dashed; background:none; box-shadow:none}
+.dg-node.ghost b{color:var(--muted)}
+.dg-flow{
+  display:grid; grid-template-columns:78px minmax(0,1fr); gap:12px; align-items:center;
+  margin:8px 0; color:var(--muted); font-family:var(--mono); font-size:11px;
+}
+.dg-flow::before{content:"\2193"; text-align:right; color:var(--faint); font-size:15px}
+.dg-flow.up::before{content:"\2191"}
+.dg-flow.both::before{content:"\2195"}
+.dg-group{
+  border:1px dashed var(--rule); border-radius:8px; padding:12px 12px 4px; margin:0 0 10px;
+  position:relative; background:var(--ground);
+}
+.dg-group > .dg-group-label{
+  font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--faint); margin:0 0 10px;
+}
+.dg-split{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px}
+.dg-note{margin:10px 0 0; color:var(--muted); font-size:12.5px}
+.dg-legend{display:flex; flex-wrap:wrap; gap:8px; margin-top:14px}
+.dg-legend span{
+  font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--muted);
+  border:1px solid var(--rule); border-radius:4px; padding:3px 7px;
+}
+@media (max-width:640px){
+  .dg-row,.dg-flow{grid-template-columns:1fr}
+  .dg-lane{text-align:left}
+  .dg-flow::before{text-align:left}
+  .dg-node{flex:1 1 100%}
+}
+
+/* ------------------------------------------------------- session details */
+article details{
+  margin:0 0 20px; padding:0 0 0 16px; border-left:2px solid var(--rule);
+}
+article details>summary{
+  cursor:pointer; list-style:none; color:var(--accent);
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; text-transform:uppercase;
+  padding:4px 0;
+}
+article details>summary::-webkit-details-marker{display:none}
+article details>summary::before{content:"\25B8  "}
+article details[open]>summary::before{content:"\25BE  "}
+article details[open]>summary{margin-bottom:10px}
+article details>*:last-child{margin-bottom:0}
+/* an H1 inside a session body is a divider, not the chapter title */
+article h1:not(.title){
+  font-family:var(--mono); font-size:12px; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--faint); font-weight:400; margin:48px 0 20px; padding-top:20px;
+  border-top:1px solid var(--rule);
+}
+
+/* ----------------------------------------------------------------- reveal */
+details.reveal{margin:0 0 22px; border:1px solid var(--rule); border-radius:6px}
+details.reveal>summary{
+  cursor:pointer; list-style:none; padding:10px 14px;
+  font-family:var(--mono); font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--accent);
+}
+details.reveal>summary::-webkit-details-marker{display:none}
+details.reveal>summary::before{content:"\25B8  "}
+details.reveal[open]>summary::before{content:"\25BE  "}
+details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
+.reveal-body{padding:14px 14px 2px}
+
+/* ---------------------------------------------------------------- sources */
+.sources{margin-top:52px; padding-top:24px; border-top:1px solid var(--rule)}
+.sources h2{font-family:var(--mono); font-size:11px; letter-spacing:.11em; text-transform:uppercase; color:var(--faint); margin:0 0 14px; font-weight:400}
+.src{display:flex; flex-direction:column; gap:2px}
+.src a{
+  display:grid; grid-template-columns:auto 1fr; gap:10px; align-items:baseline;
+  padding:8px 0; text-decoration:none; color:var(--ink); font-size:14px;
+  border-bottom:1px solid var(--rule-soft);
+}
+.src a:hover .s-l{color:var(--accent)}
+.s-r{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.04em; color:var(--accent);
+  background:var(--accent-soft); border-radius:4px; padding:2px 6px; white-space:nowrap;
+}
+.s-r:empty{display:none}
+.s-l{line-height:1.45}
+.s-u{display:block; font-family:var(--mono); font-size:11px; color:var(--faint); word-break:break-all; margin-top:2px}
+
+.pager{display:flex; gap:12px; margin-top:44px}
+.pager a{
+  flex:1; min-width:0; text-decoration:none; color:inherit;
+  border:1px solid var(--rule); border-radius:9px; padding:14px 16px; background:var(--raised);
+}
+.pager a:hover{border-color:var(--accent)}
+.pager .dir{font-family:var(--mono); font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:var(--faint); display:block; margin-bottom:3px}
+.pager .nm{font-weight:500; font-size:14.5px}
+.pager .next{text-align:right}
+
+/* ---------------------------------------------------------------- results */
+.results{list-style:none; padding:0; margin:0}
+.results li{border-bottom:1px solid var(--rule-soft)}
+.results a{display:block; padding:14px 0; text-decoration:none; color:inherit}
+.results a:hover .ch-t{color:var(--accent)}
+.results .where{font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); margin-bottom:3px}
+.empty{color:var(--muted); padding:28px 0}
+
+@media (max-width:880px){
+  .shell{grid-template-columns:1fr}
+  .rail{
+    position:fixed; inset:0 auto 0 0; width:280px; z-index:30;
+    transform:translateX(-100%); transition:transform .22s ease; box-shadow:var(--shadow);
+  }
+  .rail.open{transform:none}
+  .topbar{display:flex}
+  .wrap{padding-inline:20px}
+  .hero{padding-block:40px 4px}
+  .eyebrow{padding-block:30px 0}
+  .pager{flex-direction:column}
+  .pager .next{text-align:left}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important; scroll-behavior:auto !important}
+}
+@media (max-width:620px){
+  .ix-head{flex-direction:column; gap:4px}
+  .ix-head .meta{white-space:normal}
+}
+.wrap:has(.ix-head){max-width:1040px}
+
+/* --- rail overrides: the programme rail replaces the old tree layout --- */
+.tree{gap:0}
+.tree .tl a, .tree .tl-sect a{display:block; grid-template-columns:none; padding-left:10px}
+.tree .tl-sect a{padding:0; color:inherit; text-decoration:none}
+.tree .tl-sect a:hover{color:var(--accent)}
+.tree .tl a{padding:6px 8px 6px 10px}
+.tree .tp > button{padding:10px 8px}
+.tree .tp .kids a{display:grid}
+.tree .tl a .n{display:inline; color:var(--faint)}
+
+</style>
+
+<div class="shell">
+  <aside class="rail" id="rail">
+    <div class="rail-head">
+      <button class="mark" id="home-link">The Reference Desk</button>
+      <span class="mark-sub">Engineering notes</span>
+    </div>
+    <div class="find"><input id="find" type="search" placeholder="Filter chapters…" autocomplete="off"></div>
+    <nav class="tree" id="tree"></nav>
+    <div class="rail-foot" id="foot"></div>
+  </aside>
+  <main>
+    <div class="topbar"><button class="burger" id="burger">Contents</button></div>
+    <div class="wrap" id="view"></div>
+  </main>
+  <aside class="outline" id="outline"></aside>
+</div>
+
+<script type="application/json" id="payload">__DATA__</script>
+<script>
+(function () {
+  var DATA = JSON.parse(document.getElementById('payload').textContent);
+  var view = document.getElementById('view');
+  var tree = document.getElementById('tree');
+  var rail = document.getElementById('rail');
+  var find = document.getElementById('find');
+  var outline = document.getElementById('outline');
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function topicBy(slug) { return DATA.topics.filter(function (t) { return t.slug === slug; })[0]; }
+
+  document.getElementById('foot').textContent = 'Built ' + DATA.built;
+
+  /* ------------------------------------------------------------- sidebar */
+  var showAllUpcoming = false;
+
+  function sessionRail(t, route) {
+    var out = '', group = null;
+    t.chapters.forEach(function (c) {
+      if (c.group !== group) {
+        out += (group === null ? '' : '</div>') + '<p class="tl-sect">' + esc(c.group) + '</p><div class="tl">';
+        group = c.group;
+      }
+      var on = route.topic === t.slug && route.chapter === c.slug;
+      out += '<a class="' + (on ? 'on' : '') + '" href="#/' + t.slug + '/' + c.slug + '" title="' +
+             esc(c.title) + '"><span class="n">' + esc(c.day.replace(/^0+/, '')) + '</span>' +
+             esc(c.short || c.title) + '</a>';
+    });
+    var up = (t.upcoming || []);
+    var shown = showAllUpcoming ? up : up.slice(0, 2);
+    shown.forEach(function (u) {
+      if (u.group !== group) {
+        out += '</div><p class="tl-sect">' + esc(u.group) + '</p><div class="tl">';
+        group = u.group;
+      }
+      out += '<a class="soon" title="' + esc(u.full || u.short) + '"><span class="n">' + esc(u.day) + '</span>' +
+             esc(u.short) + '</a>';
+    });
+    out += group === null ? '' : '</div>';
+    if (up.length > 2) {
+      out += '<button class="tl-more" data-more="1">' +
+             (showAllUpcoming ? 'Show less' : 'Show the remaining ' + (up.length - 2) + ' days') + '</button>';
+    }
+    var done = t.chapters.filter(function (c) { return c.day && c.day.indexOf('S') !== 0; }).length;
+    return '<p class="tl-sect" style="margin-top:4px"><a href="#/' + t.slug + '" style="color:inherit;text-decoration:none">' +
+           esc(t.title) + ' · ' + done + ' of ' + (t.total || t.chapters.length) + '</a></p>' + out;
+  }
+
+  function paintTree(route) {
+    var sessions = DATA.topics.filter(function (t) { return t.kind === 'sessions'; });
+    var others = DATA.topics.filter(function (t) { return t.kind !== 'sessions'; });
+
+    var html = sessions.map(function (t) { return sessionRail(t, route); }).join('');
+    if (others.length) html += '<p class="tl-sect">Reference</p>';
+
+    html += others.map(function (t) {
+      var open = route.topic === t.slug;
+      var kids = !open ? '' : '<div class="kids">' + t.chapters.map(function (c, i) {
+        var on = route.chapter === c.slug;
+        return '<a class="' + (on ? 'on' : '') + '" href="#/' + t.slug + '/' + c.slug + '">' +
+               '<span class="num">' + pad(i + 1) + '</span><span>' + esc(c.title) + '</span></a>';
+      }).join('') + '</div>';
+      return '<div class="tp' + (open ? ' open' : '') + '"><button data-topic="' + esc(t.slug) + '">' +
+        '<span class="chev">' + (open ? '▾' : '▸') + '</span><span class="nm">' + esc(t.title) + '</span>' +
+        '<span class="ct">' + t.chapters.length + '</span></button>' + kids + '</div>';
+    }).join('');
+
+    tree.innerHTML = html;
+  }
+
+  tree.addEventListener('click', function (e) {
+    var more = e.target.closest('[data-more]');
+    if (more) { showAllUpcoming = !showAllUpcoming; route(); return; }
+    var head = e.target.closest('[data-topic]');
+    if (head) { location.hash = '#/' + head.getAttribute('data-topic'); }
+  });
+
+  /* ---------------------------------------------------------------- home */
+  function home() {
+    var cards = DATA.topics.map(function (t) {
+      var list = t.chapters.map(function (c, i) {
+        return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
+          '<span class="num">' + pad(i + 1) + '</span>' +
+          '<span class="ch-t">' + esc(c.title) + '</span>' +
+          '<span class="ch-m">' + esc(c.minutes) + ' min</span>' +
+          '<span class="ch-s">' + esc(c.summary) + '</span></a></li>';
+      }).join('');
+      return '<section class="topic-card">' +
+        '<p class="tagline">' + esc(t.tagline || '') + '</p>' +
+        '<h2><a href="#/' + t.slug + '">' + esc(t.title) + '</a></h2>' +
+        '<p class="blurb">' + esc(t.summary || '') + '</p>' +
+        '<ul class="chapters">' + list + '</ul>' +
+        '<div class="facts"><span><b>' + t.chapters.length + '</b> chapters</span>' +
+        '<span><b>' + t.minutes + '</b> min end to end</span>' +
+        '<span><b>' + t.sources.length + '</b> sources</span></div></section>';
+    }).join('');
+
+    view.innerHTML =
+      '<header class="hero"><h1>The Reference Desk</h1>' +
+      '<p>Things worth understanding properly rather than looking up again. Each topic builds from the ground ' +
+      'up, every claim about mechanism carries its source, and the sources are linked where they are used.</p></header>' +
+      '<div class="hr"></div>' + cards;
+    document.title = 'The Reference Desk';
+  }
+
+  /* -------------------------------------------------------- session index */
+  function sessionIndex(t) {
+    var groups = [], byGroup = {};
+    t.chapters.forEach(function (c) {
+      if (!byGroup[c.group]) { byGroup[c.group] = []; groups.push(c.group); }
+      byGroup[c.group].push(
+        '<a class="card" href="#/' + t.slug + '/' + c.slug + '"><span class="n">DAY ' +
+        esc(c.day.replace(/^0+/, '')) + '</span><b>' + esc(c.short || c.title) + '</b>' +
+        '<span class="s">' + esc(c.minutes) + ' min · reading, code, questions</span></a>');
+    });
+    (t.upcoming || []).forEach(function (u) {
+      if (!byGroup[u.group]) { byGroup[u.group] = []; groups.push(u.group); }
+      byGroup[u.group].push(
+        '<div class="card next"><span class="n">DAY ' + esc(u.day) + '</span><b>' + esc(u.short) +
+        '</b><span class="s">not written yet</span></div>');
+    });
+    var done = t.chapters.length;
+    view.innerHTML =
+      '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + done + ' written · ' +
+      (t.total || done) + ' planned · ' + t.minutes + ' min</span></div>' +
+      '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
+      groups.map(function (g) {
+        return '<section class="build"><h3>' + esc(g) + '</h3><div class="cards">' +
+               byGroup[g].join('') + '</div></section>';
+      }).join('');
+    document.title = t.title + ' · The Reference Desk';
+  }
+
+  /* ---------------------------------------------------------- topic index */
+  function topicIndex(t) {
+    var list = t.chapters.map(function (c, i) {
+      return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
+        '<span class="num">' + pad(i + 1) + '</span><span class="ch-t">' + esc(c.title) + '</span>' +
+        '<span class="ch-m">' + esc(c.minutes) + ' min</span>' +
+        '<span class="ch-s">' + esc(c.summary) + '</span></a></li>';
+    }).join('');
+    view.innerHTML =
+      '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + t.chapters.length +
+      ' chapters · ' + t.minutes + ' min</span></div>' +
+      '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
+      '<ul class="chapters">' + list + '</ul>';
+    document.title = t.title + ' · The Reference Desk';
+  }
+
+  /* ------------------------------------------------------------- chapter */
+  function chapter(t, c, idx) {
+    var prev = t.chapters[idx - 1], next = t.chapters[idx + 1];
+    var srcs = c.sources.length ? '<section class="sources"><h2>Sources for this chapter</h2><div class="src">' +
+      c.sources.map(function (s) {
+        return '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' +
+          '<span class="s-r">' + esc(s.ref) + '</span>' +
+          '<span class="s-l">' + esc(s.label) + '<span class="s-u">' + esc(s.url) + '</span></span></a>';
+      }).join('') + '</div></section>' : '';
+
+    var pager = '<nav class="pager">' +
+      (prev ? '<a href="#/' + t.slug + '/' + prev.slug + '"><span class="dir">Previous</span>' +
+              '<span class="nm">' + esc(prev.title) + '</span></a>' : '') +
+      (next ? '<a class="next" href="#/' + t.slug + '/' + next.slug + '"><span class="dir">Next</span>' +
+              '<span class="nm">' + esc(next.title) + '</span></a>' : '') + '</nav>';
+
+    var prog = '';
+    if (t.kind === 'sessions' && c.day && c.day.indexOf('S') !== 0) {
+      var n = parseInt(c.day, 10), total = t.total || t.chapters.length;
+      var slice = 0, size = 0;
+      t.chapters.concat(t.upcoming || []).forEach(function (x) {
+        if (x.group === c.group) { size++; if (String(parseInt(x.day, 10)) === String(n)) slice = size; }
+      });
+      prog = '<div class="prog"><span class="lb">' + esc(c.group) +
+        (slice ? ' · slice ' + slice + ' of ' + size : '') + '</span>' +
+        '<span class="bar"><i style="width:' + Math.round(n / total * 100) + '%"></i></span>' +
+        '<span class="lb">Day ' + n + ' of ' + total + '</span></div>';
+    }
+
+    view.innerHTML = '<article>' + prog +
+      '<div class="eyebrow"><a href="#/' + t.slug + '">' + esc(t.title) + '</a><span class="dot"></span>' +
+      'Chapter ' + pad(idx + 1) + ' of ' + pad(t.chapters.length) +
+      '<span class="dot"></span>' + esc(c.minutes) + ' min</div>' +
+      '<h1 class="title">' + esc(c.title) + '</h1>' +
+      '<p class="lede">' + esc(c.summary) + '</p>' +
+      c.html + srcs + pager + '</article>';
+    document.title = c.title + ' · The Reference Desk';
+    paintOutline(c);
+  }
+
+  var spy = null;
+  function paintOutline(c) {
+    var items = c.outline || [];
+    if (items.length < 3) { outline.innerHTML = ''; return; }
+    outline.innerHTML = '<p class="h">' + (c.day ? 'This session' : 'On this page') + '</p>' + items.map(function (o) {
+      return '<a href="#' + esc(o.a) + '" data-anchor="' + esc(o.a) + '">' + esc(o.t) + '</a>';
+    }).join('');
+
+    if (spy) spy.disconnect();
+    var links = {};
+    outline.querySelectorAll('a').forEach(function (a) { links[a.getAttribute('data-anchor')] = a; });
+    spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        var a = links[e.target.id];
+        if (!a) return;
+        if (e.isIntersecting) {
+          outline.querySelectorAll('a.on').forEach(function (x) { x.classList.remove('on'); });
+          a.classList.add('on');
+        }
+      });
+    }, { rootMargin: '0px 0px -75% 0px' });
+    items.forEach(function (o) {
+      var el = document.getElementById(o.a);
+      if (el) spy.observe(el);
+    });
+  }
+
+  /* -------------------------------------------------------------- search */
+  function search(q) {
+    outline.innerHTML = '';
+    var hits = [];
+    DATA.topics.forEach(function (t) {
+      t.chapters.forEach(function (c, i) {
+        var hay = (c.title + ' ' + c.summary + ' ' + c.text).toLowerCase();
+        if (hay.indexOf(q) !== -1) hits.push({ t: t, c: c, i: i });
+      });
+    });
+    view.innerHTML = '<div class="eyebrow">' + hits.length + ' chapter' + (hits.length === 1 ? '' : 's') +
+      ' matching &ldquo;' + esc(q) + '&rdquo;</div>' +
+      (hits.length ? '<ul class="results">' + hits.map(function (h) {
+        return '<li><a href="#/' + h.t.slug + '/' + h.c.slug + '">' +
+          '<div class="where">' + esc(h.t.title) + ' · ' + pad(h.i + 1) + '</div>' +
+          '<div class="ch-t">' + esc(h.c.title) + '</div>' +
+          '<div class="ch-s">' + esc(h.c.summary) + '</div></a></li>';
+      }).join('') + '</ul>' : '<p class="empty">Nothing here yet. Try a different word.</p>');
+  }
+
+  /* -------------------------------------------------------------- router */
+  function route() {
+    var q = find.value.trim().toLowerCase();
+    var parts = (location.hash || '#/').replace(/^#\/?/, '').split('/').filter(Boolean);
+    var r = { topic: parts[0], chapter: parts[1] };
+    paintTree(r);
+    if (q.length > 1) { search(q); return; }
+
+    var t = r.topic && topicBy(r.topic);
+    if (!t) { outline.innerHTML = ''; home(); }
+    else if (!r.chapter) {
+      outline.innerHTML = '';
+      if (t.kind === 'sessions') sessionIndex(t); else topicIndex(t);
+    }
+    else {
+      var idx = -1;
+      t.chapters.forEach(function (c, i) { if (c.slug === r.chapter) idx = i; });
+      if (idx === -1) { outline.innerHTML = ''; home(); } else chapter(t, t.chapters[idx], idx);
+    }
+    window.scrollTo(0, 0);
+    rail.classList.remove('open');
+  }
+
+  window.addEventListener('hashchange', route);
+  find.addEventListener('input', route);
+  document.getElementById('burger').addEventListener('click', function () { rail.classList.toggle('open'); });
+  document.getElementById('home-link').addEventListener('click', function () {
+    find.value = ''; location.hash = '#/';
+    if (location.hash === '#/') route();
+  });
+  route();
+})();
+</script>

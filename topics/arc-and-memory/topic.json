@@ -1,0 +1,8 @@
+{
+  "title": "ARC and Memory",
+  "slug": "arc-and-memory",
+  "tagline": "Who owns this object, and when does it go",
+  "summary": "Automatic reference counting from the ground up — what memory is, why something has to decide when an object dies, and how Swift made the compiler do it. Answers the questions that stay confusing: why ARC isn't a garbage collector, why an object can die before the end of its scope, what weak actually costs, and why a retain cycle is a design mistake rather than a bug.",
+  "status": "complete",
+  "accentIndex": 1
+}

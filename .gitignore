@@ -1,0 +1,7 @@
+.DS_Store
+
+# The full build: it contains the day sessions. Never publish it.
+/index.html
+
+# Day sessions quote an employment contract and a CV. They stay on the Mac.
+/topics/daily/
