@@ -43,7 +43,7 @@ Zalando publicly recommends a structure for its coding round, and it works every
 | **T**est | Walk one example through your code by hand. |
 | **O**ptimise | What you'd change with more time, and what it costs. |
 
-The step candidates skip is **A**. Saying *"this is a sliding window, O(n) time, O(k) space"* before typing is worth more than a clean solution written in silence. It is also the 90-second test in this programme: if you can't name the pattern by then, that's what gets logged.
+The step candidates skip is **A**. Saying *"this is a sliding window, O(n) time, O(k) space"* before typing is worth more than a clean solution written in silence. <!--private-->It is also the 90-second test in this programme: if you can't name the pattern by then, that's what gets logged.<!--/private--><!--public-->Give yourself ninety seconds to name it. Past that, you are not recognising the pattern, you are deriving it — which is a different skill and a slower one.<!--/public-->
 
 ## The cue that names each pattern
 

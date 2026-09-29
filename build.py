@@ -20,6 +20,17 @@ PUBLIC_OUT = os.path.join(ROOT, "docs", "index.html")
 
 # ---------------------------------------------------------------- front matter
 
+PRIVATE_BLOCK = re.compile(r"[ \t]*<!--private-->.*?<!--/private-->[ \t]*\n?", re.S)
+PUBLIC_BLOCK = re.compile(r"[ \t]*<!--public-->.*?<!--/public-->[ \t]*\n?", re.S)
+BLOCK_TAGS = re.compile(r"[ \t]*<!--/?(?:private|public)-->[ \t]*\n?")
+
+
+def for_audience(text, public):
+    """Drop the blocks meant for the other audience, then the markers."""
+    text = PUBLIC_BLOCK.sub("", text) if not public else PRIVATE_BLOCK.sub("", text)
+    return BLOCK_TAGS.sub("", text)
+
+
 def split_front_matter(text):
     if not text.startswith("---"):
         return {}, text
@@ -357,7 +368,7 @@ def split_session(text):
     return meta, "\n".join(lines[start:]).lstrip("\n")
 
 
-def load_topics():
+def load_topics(public=False):
     topics = []
     if not os.path.isdir(TOPICS_DIR):
         return topics
@@ -391,6 +402,7 @@ def load_topics():
         for name in names:
             with open(os.path.join(folder, name), encoding="utf-8") as fh:
                 raw = fh.read()
+            raw = for_audience(raw, public)
             meta, body = split_session(raw) if session_mode else split_front_matter(raw)
             cslug = re.sub(r"^\d+-", "", name[:-3])
             if cslug in seen:
@@ -440,8 +452,8 @@ def load_topics():
 
 # ------------------------------------------------------------------------ page
 
-def build(public=False):
-    topics = load_topics()
+def build(public=False, out=None):
+    topics = load_topics(public=public)
     if public:
         topics = [t for t in topics if not t.pop("private", False)]
     else:
@@ -454,7 +466,7 @@ def build(public=False):
     with open(os.path.join(ROOT, "template.html"), encoding="utf-8") as fh:
         template = fh.read()
     page = template.replace("__DATA__", data)
-    out = PUBLIC_OUT if public else OUT
+    out = out or (PUBLIC_OUT if public else OUT)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(page)
@@ -463,4 +475,8 @@ def build(public=False):
           % (os.path.relpath(out, ROOT), len(topics), chapters, len(page) / 1024))
 
 if __name__ == "__main__":
-    build(public="--public" in sys.argv)
+    args = sys.argv[1:]
+    target = None
+    if "--out" in args:
+        target = os.path.abspath(os.path.expanduser(args[args.index("--out") + 1]))
+    build(public="--public" in args, out=target)

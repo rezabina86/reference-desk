@@ -135,4 +135,28 @@ is marked private: those files quote an employment contract, a CV and a notice p
 is public. `.gitignore` keeps the private build and that topic's config out of git as well, so the
 only way they reach GitHub is by deliberately removing both guards.
 
-Publishing: push to `main`, and GitHub Pages serves `/docs` from that branch.
+Sentences that only make sense inside the daily programme are wrapped so the public build swaps
+them for a reader-facing line:
+
+```
+<!--private-->…comes back as a recall prompt.<!--/private--><!--public-->…worth reading up on.<!--/public-->
+```
+
+Publishing goes to reza-bina.com/notes, which is an Astro site whose `public/` folder is copied
+verbatim at build. One command does the whole thing:
+
+```bash
+./publish.sh             # build both, check for leaks, commit and push both repos
+./publish.sh --dry-run   # build and report what would be committed, change nothing
+```
+
+It runs the two builds plus `python3 build.py --public --out ../reza-bina.com/public/notes/index.html`,
+greps the public build for anything private and aborts if it finds any, writes a commit message naming
+the topics that changed, and pushes. It refuses to touch the site repo unless it is on `main`, since the
+only file it writes there is generated. `SITE_REPO=/path ./publish.sh` overrides the site location.
+
+`claude/publish-notes.md` is the same job as a Claude Code command: copy it to
+`~/.claude/commands/publish-notes.md` and run `/publish-notes` after a session. Claude Code has the SSH
+key, so that is where the push happens.
+
+`docs/` stays in this repo as a standalone copy if its own Pages site is ever wanted.

@@ -383,7 +383,7 @@ The public exercise this prompt comes from lists what the interviewer grades: cl
 | 11 | Keep decode off the main actor, explicitly | |
 | 12 | Land the recap inside 60 seconds | |
 
-12+ is a pass in a real round. Anything scored 0 goes in the progress log and comes back as a recall prompt.
+12+ is a pass in a real round.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero is worth more than the total: it names the thing to read about before the next one.<!--/public-->
 :::
 
 ::: 12 · The 60-second recap

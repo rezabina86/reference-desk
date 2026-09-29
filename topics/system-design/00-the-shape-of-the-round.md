@@ -36,7 +36,7 @@ candidate fails.
 2. At each phase boundary, move on whether or not you're finished. That discipline *is* the skill.
 3. When the 35 minutes are up, open the sections one at a time and mark each **clean**, **partial**
    or **missed**. Finish with the scorecard section.
-4. Everything marked missed goes in the progress log and comes back later as a recall prompt.
+<!--private-->4. Everything marked missed goes in the progress log and comes back later as a recall prompt.<!--/private--><!--public-->4. Keep the misses somewhere. A section you skip twice is a gap, not an oversight, and the second time is when it is worth reading up on.<!--/public-->
 
 ## What is actually graded
 

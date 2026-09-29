@@ -141,6 +141,9 @@ a:focus-visible,button:focus-visible,input:focus-visible{
 .card.next{border-style:dashed; background:none; box-shadow:none; opacity:.62}
 .card.next .n{color:var(--faint)}
 
+.rail-foot .rail-home{display:block; color:var(--muted); text-decoration:none; margin-bottom:4px}
+.rail-foot .rail-home:hover{color:var(--accent)}
+
 /* ---------------------------------------------------------------- shell */
 .shell{display:grid; grid-template-columns:270px minmax(0,1fr); min-height:100vh}
 @media (min-width:1180px){.shell:has(.outline:not(:empty)){grid-template-columns:270px minmax(0,1fr) 220px}}
@@ -476,7 +479,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     </div>
     <div class="find"><input id="find" type="search" placeholder="Filter chapters…" autocomplete="off"></div>
     <nav class="tree" id="tree"></nav>
-    <div class="rail-foot" id="foot"></div>
+    <div class="rail-foot"><a href="https://reza-bina.com" class="rail-home">reza-bina.com</a><span id="foot"></span></div>
   </aside>
   <main>
     <div class="topbar"><button class="burger" id="burger">Contents</button></div>
