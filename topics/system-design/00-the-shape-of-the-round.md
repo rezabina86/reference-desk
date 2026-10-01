@@ -23,9 +23,9 @@ to go deep on, and what they'd push on next.
 | 0:00–0:02 | The prompt | You repeat it back and say how you'll spend the time |
 | 0:02–0:07 | Clarify | You ask; they answer; you state your assumptions |
 | 0:07–0:12 | Scope | Out of scope **first**, then 3–5 features, then the non-functional ones that matter |
-| 0:12–0:24 | High level | The boxes, the flow, the contract, the types and why those types |
+| 0:12–0:24 | High level | Three layers, at most seven boxes, the flow, the contract |
 | 0:24–0:40 | Deep dives | They pick a component and push |
-| 0:40–0:45 | Follow-ups and recap | Rapid fire, then the whole design in 60 seconds |
+| 0:40–0:45 | Follow-ups and recap | Whatever they still want to probe, then the whole design in 60 seconds |
 
 About 30 working minutes. Running out of time before the deep dive is the most common way a strong
 candidate fails.
@@ -35,7 +35,8 @@ candidate fails.
 1. **Timer on, standing, out loud, sketching** on paper or an iPad. Nothing open in front of you.
 2. At each phase boundary, move on whether or not you're finished. That discipline *is* the skill.
 3. When the 35 minutes are up, open the sections one at a time and mark each **clean**, **partial**
-   or **missed**. Finish with the scorecard section.
+   or **missed**. Then work through the question bank: read each question, answer it out loud,
+   and only then open the answer. Finish with the scorecard section.
 <!--private-->4. Everything marked missed goes in the progress log and comes back later as a recall prompt.<!--/private--><!--public-->4. Keep the misses somewhere. A section you skip twice is a gap, not an oversight, and the second time is when it is worth reading up on.<!--/public-->
 
 ## What is actually graded
@@ -62,6 +63,29 @@ enough — here's when they stop being enough"* reads as senior. Building a pipe
 screen does not.
 
 **Saying what you don't know**, then reasoning about it anyway.
+
+## Keep the whiteboard simple
+
+A board with twenty boxes doesn't read as thorough. It reads as someone who can't tell which parts
+matter, and it eats the minutes the deep dives need. The rules every chapter here follows:
+
+- **Three layers for an app question.** *Presentation* (the view and the view model that owns the
+  screen's state), *domain* (plain models and the protocol the view model depends on), *data* (the
+  implementation that decides between network and disk). No use-case classes at this size: a
+  `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
+  A library question (an image loader, an analytics SDK) isn't an app, so it gets three rows of its
+  own instead: *API* (what callers touch), *core* (the coordinator), *I/O* (loaders, caches, codecs).
+- **At most about seven boxes.** One or two per layer. Anything reused from an earlier question is
+  one dashed box, not its insides.
+- **A box earns its place** only if you can say in one sentence what it owns that nothing else does.
+- **Draw one protocol seam, not every one.** Show interface and implementation as separate boxes
+  only at the boundary that defines the architecture: usually the repository, with the
+  implementation arrow pointing *up* into the domain. That arrow is dependency inversion on the
+  board. Then say it once: *"Everything else is behind a protocol too, for tests. I'm drawing the
+  one that matters."*
+- **Start simple, grow under pressure.** Every extra component (an outbox, a shared store, a
+  socket) waits until the interviewer pushes on that area. Adding it then, with the reason, scores
+  better than having drawn it at minute twelve.
 
 ## Components, and saying why those components
 
@@ -95,15 +119,18 @@ answer. Then, collapsed:
 
 1. The interviewer answers your clarifying questions
 2. Requirements and scope — what you should have said
-3. The design, on the whiteboard — a real diagram
-4. The types, and the reasons behind them (SOLID, out loud)
+3. The design, on the whiteboard — three layers, at most seven boxes, one seam drawn
+4. The layers, and the reasons behind them (SOLID, out loud)
 5. API and data model
 6–8. Deep dives, each opened by the line the interviewer would actually use
 9. Failure modes and 10×
-10. Rapid fire — the follow-ups
+10. Question bank — every area they can push on, grouped by the checklist above, each answer
+    hidden behind its question, and a follow-up chain per area, because real rounds drill down
+    rather than jump around
 11. Scorecard — mark yourself, 0 / 1 / 2
 12. The 60-second recap
 
 You did it right if all four are true: you named out-of-scope first, every choice carried a rejected
 alternative and a switch condition, you stayed client-side, and you could answer at least two
-follow-ups before opening them.
+follow-ups before opening them. The question bank is the real test of the last one: an area where you
+can't answer the first question out loud is the area to study next.
