@@ -469,6 +469,29 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 .tree .tp .kids a{display:grid}
 .tree .tl a .n{display:inline; color:var(--faint)}
 
+
+/* ------------------------------------------------------- mermaid boards */
+:root{
+  --b-pres:#E3EEFC; --b-pres-s:#3D74C4; --b-dom:#F1E6F7; --b-dom-s:#9248B0;
+  --b-data:#E2F3E8; --b-data-s:#2E8553; --b-net:#FCE9E2; --b-net-s:#C25230;
+  --b-reuse:#F1F1F4; --b-reuse-s:#8E93A0; --b-lane:#FFFFFF;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --b-pres:#1F2B3D; --b-pres-s:#6EA6EE; --b-dom:#2D2236; --b-dom-s:#C88BE0;
+    --b-data:#1C2E24; --b-data-s:#6CC795; --b-net:#36241F; --b-net-s:#FF8F75;
+    --b-reuse:#26262E; --b-reuse-s:#7A818D; --b-lane:#202026;
+  }
+}
+:root[data-theme="dark"]{
+  --b-pres:#1F2B3D; --b-pres-s:#6EA6EE; --b-dom:#2D2236; --b-dom-s:#C88BE0;
+  --b-data:#1C2E24; --b-data-s:#6CC795; --b-net:#36241F; --b-net-s:#FF8F75;
+  --b-reuse:#26262E; --b-reuse-s:#7A818D; --b-lane:#202026;
+}
+.board{margin:0 0 22px; padding:20px 16px; border:1px solid var(--rule); border-radius:10px;
+  background:var(--panel) radial-gradient(var(--rule) 1px, transparent 1.2px) 0 0/18px 18px; overflow-x:auto}
+.board-src{margin:0; font:12px/1.5 var(--mono); color:var(--muted); white-space:pre; background:none}
+.board-svg svg{display:block; margin:0 auto; max-width:100%; height:auto}
 </style>
 
 <div class="shell">
@@ -679,6 +702,66 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
       c.html + srcs + pager + '</article>';
     document.title = c.title + ' · The Reference Desk';
     paintOutline(c);
+    renderBoards();
+  }
+
+
+  /* ------------------------------------------------------- mermaid boards */
+  var mermaidLib = null;
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function boardClasses() {
+    function def(name, fill, stroke, extra) {
+      return 'classDef ' + name + ' fill:' + cssVar(fill) + ',stroke:' + cssVar(stroke) +
+             ',stroke-width:1.5px,color:' + cssVar('--ink') + (extra || '') + ';';
+    }
+    return [def('pres', '--b-pres', '--b-pres-s'), def('dom', '--b-dom', '--b-dom-s'),
+            def('data', '--b-data', '--b-data-s'), def('net', '--b-net', '--b-net-s'),
+            def('reuse', '--b-reuse', '--b-reuse-s', ',stroke-dasharray:5 4'),
+            def('focus', '--b-pres', '--b-pres-s', ',stroke-width:3px')].join('\n');
+  }
+  function renderBoards() {
+    var srcs = view.querySelectorAll('pre.board-src');
+    if (!srcs.length) return;
+    mermaidLib = mermaidLib || import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')
+      .then(function (m) { return m.default; });
+    mermaidLib.then(function (mermaid) {
+      mermaid.initialize({
+        startOnLoad: false, securityLevel: 'strict', theme: 'base',
+        fontFamily: "'IBM Plex Sans', -apple-system, sans-serif",
+        flowchart: { curve: 'basis', nodeSpacing: 36, rankSpacing: 46, padding: 14 },
+        sequence: { mirrorActors: false, messageAlign: 'center', actorFontSize: 15, messageFontSize: 15, noteFontSize: 14 },
+        themeVariables: {
+          fontSize: '15px', background: cssVar('--panel'), primaryColor: cssVar('--raised'),
+          primaryTextColor: cssVar('--ink'), primaryBorderColor: cssVar('--faint'),
+          lineColor: cssVar('--muted'), textColor: cssVar('--ink'), titleColor: cssVar('--ink'),
+          clusterBkg: cssVar('--b-lane'), clusterBorder: cssVar('--rule'),
+          edgeLabelBackground: cssVar('--panel'), actorBkg: cssVar('--raised'),
+          actorBorder: cssVar('--faint'), actorTextColor: cssVar('--ink'),
+          signalColor: cssVar('--muted'), signalTextColor: cssVar('--ink'),
+          noteBkgColor: cssVar('--accent-soft'), noteBorderColor: cssVar('--accent'),
+          noteTextColor: cssVar('--ink'), activationBkgColor: cssVar('--accent-soft'),
+          activationBorderColor: cssVar('--accent'), labelBoxBkgColor: cssVar('--raised'),
+          labelBoxBorderColor: cssVar('--faint'), loopTextColor: cssVar('--ink')
+        }
+      });
+      Array.prototype.forEach.call(srcs, function (pre, i) {
+        var text = pre.textContent;
+        if (/^\s*(---[\s\S]*?---\s*)?flowchart/.test(text)) text += '\n' + boardClasses();
+        mermaid.render('board-' + Date.now() + '-' + i, text).then(function (r) {
+          var host = pre.parentNode, old = host.querySelector('.board-svg');
+          if (old) old.remove();
+          var div = document.createElement('div');
+          div.className = 'board-svg';
+          div.innerHTML = r.svg;
+          host.appendChild(div);
+          pre.hidden = true;
+        }).catch(function () { pre.hidden = false; });
+      });
+    }).catch(function () { /* offline: the source stays visible */ });
+  }
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(renderBoards);
   }
 
   var spy = null;

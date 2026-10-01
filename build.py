@@ -185,6 +185,10 @@ def render_blocks(md):
                 i += 1
             i += 1
             src = "\n".join(buf)
+            if lang == "mermaid":
+                # Rendered in the browser by Mermaid (template.html); the source stays readable offline.
+                out.append('<div class="board"><pre class="board-src">%s</pre></div>' % html.escape(src))
+                continue
             if lang in ("diagram", "html"):
                 # Raw HTML, emitted untouched: the CSS diagram kit lives in template.html.
                 out.append(src)

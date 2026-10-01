@@ -23,7 +23,7 @@ to go deep on, and what they'd push on next.
 | 0:00–0:02 | The prompt | You repeat it back and say how you'll spend the time |
 | 0:02–0:07 | Clarify | You ask; they answer; you state your assumptions |
 | 0:07–0:12 | Scope | Out of scope **first**, then 3–5 features, then the non-functional ones that matter |
-| 0:12–0:24 | High level | Three layers, at most seven boxes, the flow, the contract |
+| 0:12–0:24 | High level | Say the idea · list the components · sketch them · explain each · trace one request |
 | 0:24–0:40 | Deep dives | They pick a component and push |
 | 0:40–0:45 | Follow-ups and recap | Whatever they still want to probe, then the whole design in 60 seconds |
 
@@ -64,6 +64,25 @@ screen does not.
 
 **Saying what you don't know**, then reasoning about it anyway.
 
+**Talking, not coding.** A design round doesn't ask you to write code. The furthest it goes is an
+interface: a protocol, a model's fields, an endpoint. Mechanisms (the load-more guard, request
+dedupe, an optimistic like) are explained as steps, in words, with a diagram when there's a race.
+So the chapters do the same: Swift appears only as interfaces, never as an implementation.
+
+## The high-level design, in the order you say it
+
+The twelve minutes of high-level design run in the same five steps every time. Each step makes the
+next one easy to follow, which is what the interviewer is grading.
+
+1. **Say the idea (1 min).** Four sentences in plain words, before any box. If they stop you here,
+   they already know the shape of the answer.
+2. **List what you need (2 min).** The components, in the order you'll draw them, one job each.
+   Write the list on the side of the board.
+3. **Sketch them (4 min).** Three frames, one card per item on the list, arrows last.
+4. **Explain each one (4 min).** Point at each card: what it owns, why it exists, the choice inside it
+   and the alternative you rejected. This is where "why MVVM?" gets answered.
+5. **Trace one request (1 min).** One real flow across the cards, so they see them work together.
+
 ## Keep the whiteboard simple
 
 A board with twenty boxes doesn't read as thorough. It reads as someone who can't tell which parts
@@ -73,16 +92,19 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
   screen's state), *domain* (plain models and the protocol the view model depends on), *data* (the
   implementation that decides between network and disk). No use-case classes at this size: a
   `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
-  A library question (an image loader, an analytics SDK) isn't an app, so it gets three rows of its
+  A library question (an image loader, an analytics SDK) isn't an app, so it gets three layers of its
   own instead: *API* (what callers touch), *core* (the coordinator), *I/O* (loaders, caches, codecs).
-- **At most about seven boxes.** One or two per layer. Anything reused from an earlier question is
-  one dashed box, not its insides.
-- **A box earns its place** only if you can say in one sentence what it owns that nothing else does.
-- **Draw one protocol seam, not every one.** Show interface and implementation as separate boxes
-  only at the boundary that defines the architecture: usually the repository, with the
-  implementation arrow pointing *up* into the domain. That arrow is dependency inversion on the
-  board. Then say it once: *"Everything else is behind a protocol too, for tests. I'm drawing the
-  one that matters."*
+- **About seven or eight cards**, at most three side by side. Something that lives inside another
+  component (a cache the coordinator owns) is written inside that card. Anything reused from an
+  earlier question is one dashed card, not its insides.
+- **One colour per layer**, the same in every chapter and on your own board: blue for presentation
+  or API, purple for domain or core, green for data or I/O, orange for anything that crosses the
+  network, grey and dashed for something reused.
+- **A card earns its place** only if you can say in one sentence what it owns that nothing else does.
+- **Draw one protocol seam, not every one.** Show interface and implementation as separate cards
+  only at the boundary that defines the architecture (usually the repository), with a dashed
+  "implemented by" line to the data layer. That card is dependency inversion on the board. Then say
+  it once: *"Everything else is behind a protocol too, for tests. I'm drawing the one that matters."*
 - **Start simple, grow under pressure.** Every extra component (an outbox, a shared store, a
   socket) waits until the interviewer pushes on that area. Adding it then, with the reason, scores
   better than having drawn it at minute twelve.
@@ -119,16 +141,19 @@ answer. Then, collapsed:
 
 1. The interviewer answers your clarifying questions
 2. Requirements and scope — what you should have said
-3. The design, on the whiteboard — three layers, at most seven boxes, one seam drawn
-4. The layers, and the reasons behind them (SOLID, out loud)
-5. API and data model
-6–8. Deep dives, each opened by the line the interviewer would actually use
-9. Failure modes and 10×
-10. Question bank — every area they can push on, grouped by the checklist above, each answer
+3. The idea, in 30 seconds — what you say before drawing anything
+4. What we need — the components, in drawing order, one job each
+5. The sketch — the diagram, and how to draw it on your own board step by step
+6. Each component, one at a time — what it owns, why, the choice inside it (SOLID, out loud)
+7. One request through the sketch — a sequence diagram of one real flow
+8. API and data model
+9–11. Deep dives, each opened by the line the interviewer would actually use
+12. Failure modes and 10×
+13. Question bank — every area they can push on, grouped by the checklist above, each answer
     hidden behind its question, and a follow-up chain per area, because real rounds drill down
     rather than jump around
-11. Scorecard — mark yourself, 0 / 1 / 2
-12. The 60-second recap
+14. Scorecard — mark yourself, 0 / 1 / 2
+15. The 60-second recap
 
 You did it right if all four are true: you named out-of-scope first, every choice carried a rejected
 alternative and a switch condition, you stayed client-side, and you could answer at least two

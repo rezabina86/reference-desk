@@ -27,8 +27,8 @@ Set a timer. Stand up. Sketch. Talk the whole time. **Do not open a section unti
 | 0:00–0:02 | The prompt | Repeat it back in one sentence and say how you'll use the time |
 | 0:02–0:07 | Clarify | Ask yours; then open section 1 and take its answers as the interviewer's |
 | 0:07–0:12 | Scope | Out of scope first, then 3–5 functional, then the non-functional ones that matter |
-| 0:12–0:24 | High level | Three layers, seven boxes, one flow, the contract |
-| 0:24–0:40 | Deep dives | The interviewer picks; sections 6–8 are the three they pick from |
+| 0:12–0:24 | High level | Say the idea (1 min) · list the components (2) · sketch them (4) · explain each (4) · trace one request (1) |
+| 0:24–0:40 | Deep dives | The interviewer picks; sections 9–11 are the three they pick from |
 | 0:40–0:45 | Follow-ups and recap | Whatever they still probe, then the 60-second summary; the question bank afterwards |
 
 ## What this question is really testing
@@ -89,65 +89,79 @@ Ask yours first. These are the answers you'd get, and the assumptions the rest o
 Then say the axis: *"Everything here trades how far ahead I load against memory, data and battery. Too little and the user waits; too much and we pay for posts nobody sees."*
 :::
 
-::: 3 · The design, on the whiteboard
-```diagram
-<figure class="dg">
-  <figcaption>Three layers, seven boxes, one seam drawn</figcaption>
+::: 3 · The idea, in 30 seconds — before you draw anything
+Say the whole design in plain words first, so the interviewer knows where you're going before the first box appears:
 
-  <div class="dg-row"><span class="dg-lane">Presentation</span>
-    <div class="dg-nodes">
-      <div class="dg-node"><b>FeedView</b><span>collection view · cells sized from the model</span></div>
-      <div class="dg-node accent"><b>FeedViewModel</b><span>@MainActor @Observable · items, phase, cursor</span></div>
-    </div>
-  </div>
+> *"The feed is a list that loads pages from the server with a cursor. One view model owns that list and decides when to load more. It gets posts from a repository, which hides whether they came from the network or from the copy we saved on disk. Each post carries its image's size, so cells know their height before the image arrives, and the pixels come from the image library we designed in question 1. Three layers: presentation, domain, data."*
 
-  <div class="dg-flow">depends on the protocol, never the implementation</div>
-
-  <div class="dg-row"><span class="dg-lane">Domain</span>
-    <div class="dg-nodes">
-      <div class="dg-node"><b>FeedItem</b><span>plain struct · image URL + width + height</span></div>
-      <div class="dg-node"><b>«protocol» FeedRepository</b><span>page(after:) · newCount(since:) · setLiked</span></div>
-    </div>
-  </div>
-
-  <div class="dg-flow up">implements</div>
-
-  <div class="dg-row"><span class="dg-lane">Data</span>
-    <div class="dg-nodes">
-      <div class="dg-node"><b>FeedRepositoryImpl</b><span>network first, disk on launch and offline</span></div>
-      <div class="dg-node warm"><b>FeedAPI</b><span>GET /feed?cursor= · PUT/DELETE like</span></div>
-      <div class="dg-node"><b>FeedStore</b><span>last ~200 posts + cursor, one file</span></div>
-    </div>
-  </div>
-
-  <div class="dg-row"><span class="dg-lane">Reused</span>
-    <div class="dg-nodes">
-      <div class="dg-node ghost"><b>ImagePipeline</b><span>question 1 · cells ask it for pixels</span></div>
-    </div>
-  </div>
-
-  <p class="dg-note">Models carry URLs and sizes; only cells ever hold pixels.</p>
-  <div class="dg-legend"><span>accent · owns concurrency</span><span>warm · crosses the network</span><span>dashed · reused from question 1</span></div>
-</figure>
-```
-
-Draw it top to bottom and say one sentence per layer:
-
-- **Presentation** owns what's on screen. The view renders an array; the view model owns that array, the loading phase and the cursor, and turns user intents (appear, near the end, refresh, like) into calls.
-- **Domain** is the vocabulary: `FeedItem` and the one protocol the view model talks to. No use-case classes: each one would only forward a call to the repository.
-- **Data** decides where posts come from. The repository reads the stored feed on launch, asks the API for pages, and rewrites the store after each successful first page.
-
-The arrow from data pointing *up* into domain is the dependency inversion, and it's the only seam worth drawing: *"Everything else is behind a protocol too, for tests. This one defines the architecture."* The image pipeline is question 1, drawn as one dashed box: cells use it directly, so the view model never touches a pixel.
-
-Then narrate one flow. On launch the view model asks the repository for the first page; the repository returns the stored feed at once and the network page behind it. Pages arrive as plain value models (id, author, caption, like state, image URL **plus its width and height**) and the view model merges them by id into one ordered array. Each cell knows its height before any image exists and asks the pipeline for exactly the pixel size it shows. Near the end, the view sends "near end" and the view model asks for the next page with the cursor it holds. A like changes the model at once and goes to the server behind it.
-
-**What isn't on the board yet, on purpose:** an outbox for offline likes, a shared post store for several screens, a socket for live posts. Each comes in only when the interviewer pushes on that area, with the reason (sections 8 and 9).
+That's it: four sentences. If they stop you here, you've already shown the shape of the answer. Everything after this is filling it in.
 :::
 
-::: 4 · The layers, and why each owns what it owns
-They will ask *"walk me through the layers"* and then *"why MVVM?"*. Answer with what each layer owns and what would make it change: the view changes with the design, the view model with the screen's behaviour, the repository with where data lives, the API with the server contract. Four reasons to change, so four places, and no more.
+::: 4 · What we need — the components, before the sketch
+List them out loud, in the order you'll draw them, with one job each. Writing this list on the side of the board first is what keeps the sketch tidy.
 
-**The view model owns the feed's state, and only the feed's state.**
+| # | Component | Layer | Its one job |
+|---|---|---|---|
+| 1 | **FeedView** | Presentation | Shows the list. Sizes each cell from the post, not from the image. |
+| 2 | **FeedViewModel** | Presentation | Owns what's on screen: the posts, the loading state, the cursor. Decides when to load more. |
+| 3 | **FeedItem** | Domain | One post as a plain value: author, caption, like state, image URL **and its width and height**. |
+| 4 | **FeedRepository** (protocol) | Domain | The list of things the view model may ask for: a page, the new-post count, set a like. |
+| 5 | **FeedRepositoryImpl** | Data | Decides where posts come from: disk on launch and offline, network otherwise. |
+| 6 | **FeedAPI** | Data | Talks to the server: pages by cursor, like and unlike. |
+| 7 | **FeedStore** | Data | Keeps the last ~200 posts on disk so the app opens with content. |
+| 8 | **ImagePipeline** | Reused | Question 1's library. Cells ask it for pixels; nothing else touches images. |
+
+Then say what's deliberately **not** on the list yet: an outbox for offline likes, a shared post store for several screens, a socket for live posts. *"I'll add those if we go there."*
+:::
+
+::: 5 · The sketch
+```mermaid
+flowchart TB
+  subgraph P["PRESENTATION"]
+    View["<b>1 · FeedView</b><br/>shows the list"] -- "appear · near end · refresh · like" --> VM["<b>2 · FeedViewModel</b><br/>posts · loading state · cursor"]
+  end
+  subgraph D["DOMAIN"]
+    Item["<b>3 · FeedItem</b><br/>plain struct · image size"]
+    Repo["«protocol»<br/><b>4 · FeedRepository</b>"]
+  end
+  subgraph DA["DATA"]
+    Impl["<b>5 · FeedRepositoryImpl</b><br/>network or disk?"]
+    API["<b>6 · FeedAPI</b><br/>GET /feed?cursor="]
+    Store["<b>7 · FeedStore</b><br/>last 200 posts"]
+  end
+  Pipe["<b>8 · ImagePipeline</b><br/>from question 1"]
+  VM -- "asks for pages" --> Repo
+  Repo -. "implemented by" .-> Impl
+  Impl --> API
+  Impl --> Store
+  View -. "pixels" .-> Pipe
+  class View,VM pres
+  class Item,Repo dom
+  class Impl,Store data
+  class API net
+  class Pipe reuse
+```
+
+**Drawing it on Miro, step by step** (about four minutes, talking the whole time):
+
+1. Three wide frames stacked top to bottom: **Presentation**, **Domain**, **Data**. Label them before putting anything in them.
+2. Fill them in the order of your list, one card per component, using one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image pipeline.
+3. Arrows last, and only four kinds: the view sends intents to the view model; the view model asks the repository protocol; the protocol is implemented by the data layer (dashed); the implementation uses the API and the store.
+4. Write «protocol» on the repository card. That one card is where dependency inversion shows: the view model only knows the protocol, and the data layer plugs in underneath it. *"Everything else is behind a protocol too, for tests. This is the one that defines the architecture."*
+
+Eight cards, three frames, five arrows. If your board has more than that at minute 24, you've drawn something the interviewer didn't ask for.
+:::
+
+::: 6 · Each component, one at a time
+Point at each card and say what it owns, why it exists, and the choice you made inside it. This is where *"why MVVM?"* and *"why these layers?"* get answered.
+
+### 1 · FeedView — shows the list, and nothing else
+
+It renders the array it's given and forwards taps and scroll position as intents. It never decides anything.
+
+**UIKit or SwiftUI for the scroll?** `UICollectionView` with a diffable data source, wrapped in `UIViewControllerRepresentable`. It recycles cells, gives you `prefetchDataSource`, and has had a decade of tuning for exactly this. SwiftUI `List` is also backed by a collection view and recycles; `LazyVStack` creates views lazily but is widely reported to keep views it has created, so memory grows with distance scrolled. Apple doesn't document either behaviour, which is itself a reason to pick the one whose reuse you control. *Switch condition:* simple cells on iOS 18, where `List` profiles clean on the oldest supported phone. Then all-SwiftUI is less code and the right call.
+
+### 2 · FeedViewModel — owns the screen's state
 
 ```swift
 @MainActor @Observable
@@ -168,18 +182,70 @@ final class FeedViewModel {
 }
 ```
 
-- **One `phase`, not five booleans.** `isLoading`, `isRefreshing`, `hasError`, `isAtEnd` as separate flags allow states that can't exist — loading *and* failed — and every view has to defend against them. An enum makes the impossible states unrepresentable, and it's the guard the pagination deep dive leans on.
-- **`@MainActor`, because the view reads it every frame.** All mutations happen on one actor, so check-then-set needs no lock. The network and the JSON decoding are not on it — the repository is `Sendable` and does that work elsewhere, returning finished values.
-- **`@Observable`, not `ObservableObject`.** With Observation a view re-renders only when a property it actually read changes. A cell reading one post's like count isn't invalidated because `phase` flipped. *Switch condition:* below iOS 17, `ObservableObject` with care over what's `@Published`.
+- **One `phase`, not five booleans.** Separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed. An enum makes them unrepresentable, and it's the guard the load-more deep dive leans on.
+- **`@MainActor`, because the view reads it every frame.** All changes happen on one actor, so "check, then set" needs no lock. Network and JSON decoding happen elsewhere and come back as finished values.
+- **`@Observable`, not `ObservableObject`.** A view re-renders only when a property it actually read changes. *Switch condition:* below iOS 17, `ObservableObject`, careful about what's `@Published`.
 
-**The model holds no pixels.** `FeedItem` is a `Sendable` struct of strings, ints and URLs — around a kilobyte. Ten thousand of them is about 10 MB, which is fine. A `UIImage` in the model would be 1–4 MB *each* once decoded; that's how feeds get killed. Pixels belong to cells, borrowed from the image pipeline's cache.
+**Why MVVM, said honestly.** The view model is what makes the feed testable without a view: give it a fake repository, call `onNearEnd()` twice, assert one request. *Rejected:* a single reducer store (TCA-style). It buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
 
-**Why MVVM here, said honestly.** The view model is the seam that makes the feed testable without a view: give it a fake repository, call `onNearEnd()` twice, assert one request. *Alternative rejected:* a single reducer store (TCA-style). It buys a strict event log and time-travel testing at the cost of a dependency and a learning curve for the team. *Switch condition:* if several screens share feed state — a profile grid and the home feed both showing the same post's like — move the post cache below the view models into a shared `@MainActor` store, so a like in one place is a like everywhere.
+### 3 · FeedItem — a post, as a plain value
 
-**UIKit or SwiftUI for the scroll itself?** `UICollectionView` with a diffable data source and cell registrations, wrapped in `UIViewControllerRepresentable`. It recycles cells, gives you `prefetchDataSource`, and has had a decade of tuning for exactly this. SwiftUI `List` is also backed by a collection view and recycles; `LazyVStack` creates views lazily but is widely reported to keep views it has created, so memory grows with distance scrolled — Apple doesn't document either behaviour, which is itself a reason to pick the one whose reuse you control. *Switch condition:* a moderate feed with simple cells, on iOS 18, where `List` or `LazyVStack` with `onScrollTargetVisibilityChange` profiles clean — then all-SwiftUI is less code and the right call. Say "I'd measure on the oldest supported device before committing."
+A `Sendable` struct of strings, numbers and URLs, about a kilobyte. Ten thousand of them is about 10 MB, which is fine. **It never holds a `UIImage`:** a decoded photo is 1–4 MB, and that's how feeds get killed. The image's width and height are in it, because they decide the cell's height.
+
+### 4 · FeedRepository — the protocol in the middle
+
+The only thing the view model knows about where data comes from. Three methods: a page after a cursor, how many newer posts exist, set a like. It's what a test replaces with a fake, and it's why the data layer can change (a database instead of a file, GraphQL instead of REST) without the view model noticing.
+
+**Why no use-case classes here?** Each one would just forward a call to the repository. *Switch condition:* real logic that belongs to neither the screen nor the data, such as combining two repositories.
+
+### 5 · FeedRepositoryImpl — network or disk?
+
+On launch it returns the stored feed at once, then the first network page behind it. After every successful first page it rewrites the store. It's also where JSON is decoded and dates are formatted, off the main actor, so the view model receives finished values.
+
+### 6 · FeedAPI — the server, by cursor
+
+Pages by an opaque cursor, likes as idempotent `PUT` and `DELETE`. The details are in the API section; the one line to say here is *"cursor, not offset, because new posts at the top would shift every page."*
+
+### 7 · FeedStore — the copy on disk
+
+The first ~200 posts and the cursor after them, one Codable file written atomically. *Rejected:* SwiftData or SQLite. They earn their place only when other screens query posts.
+
+### 8 · ImagePipeline — reused, not redesigned
+
+Cells ask it for exactly the pixel size they show; it downsamples, caches and prefetches. Say *"that's question 1"* and don't spend another minute on it. The point to make is the boundary: **the model carries URLs and sizes; only cells ever hold pixels.**
 :::
 
-::: 5 · API and data model
+::: 7 · One request through the sketch
+Now trace one real flow across the cards you drew, so the interviewer sees them working together. Use launch, then the first "load more":
+
+```mermaid
+sequenceDiagram
+  participant V as FeedView
+  participant VM as FeedViewModel
+  participant R as FeedRepository
+  participant S as FeedStore
+  participant A as FeedAPI
+  V->>VM: onAppear()
+  VM->>R: page(after: nil)
+  R->>S: read saved feed
+  S-->>R: saved posts
+  R-->>VM: 200 saved posts, shown at once
+  R->>A: GET /feed
+  A-->>R: page 1 + nextCursor
+  R->>S: save page 1
+  R-->>VM: page 1 replaces saved posts
+  Note over V,VM: user scrolls to ~5 posts from the end
+  V->>VM: onNearEnd()
+  VM->>R: page(after: cursor)
+  R->>A: GET /feed?cursor=…
+  A-->>R: page 2
+  R-->>VM: page 2, appended by id
+```
+
+In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Each cell sizes itself from the post's image dimensions and asks the image pipeline for pixels on its own.
+:::
+
+::: 8 · API and data model
 **The server contract — cursor pages.**
 
 ```
@@ -224,41 +290,44 @@ protocol FeedRepository: Sendable {          // the one seam on the board
 **On disk:** the first ~200 posts and the cursor that follows them, written after each successful first-page load. A Codable file written atomically is enough for one screen; SwiftData or SQLite earns its place only if other screens query posts. Say which you'd pick and why — both are defensible.
 :::
 
-::: 6 · Deep dive — "The user flings to the bottom. Walk me through loading more."
+::: 9 · Deep dive — "The user flings to the bottom. Walk me through loading more."
 **Decision: one trigger, one guard, one in-flight task — and a refresh that cancels it.**
 
 **The trigger.** Ask for the next page when the user is within about one screen — five to ten posts — of the end. In UIKit that's `willDisplay` for an index past `items.count - threshold`, or the prefetch data source; in SwiftUI, the visibility of a post near the end via `onScrollTargetVisibilityChange` (iOS 18) or `.onAppear` on a sentinel row. *Alternative rejected:* fetching when the last cell appears. On a fling the user hits the bottom before the response, and sees a spinner every page. *Switch condition:* on a constrained network, widen the threshold and shrink the page — the round trip is the cost, not the bytes.
 
 **The guard — the concurrency content of this question.**
 
-```swift
-func onNearEnd() async {
-    guard phase == .idle, let cursor else { return }   // check…
-    phase = .loadingMore                                // …and set, no await between
-    let generation = self.generation
+Explain it as what happens when "near the end" fires:
 
-    do {
-        let page = try await repository.page(after: cursor)
-        guard generation == self.generation else { return }   // a refresh happened meanwhile
-        append(page)
-        phase = page.nextCursor == nil ? .exhausted : .idle
-    } catch {
-        guard generation == self.generation else { return }   // the refresh owns phase now
-        phase = error is CancellationError ? .idle : .failed(FeedError(error))
-    }
-}
-```
+1. **If something is already loading, or there are no more pages, ignore it.**
+2. **Otherwise mark the state as "loading more" immediately**, with no waiting between the check and the mark, then ask the repository for the page after the cursor.
+3. **When the page comes back, first check that no refresh happened meanwhile** (the generation number, below). If one did, throw the page away. If not, add the new posts and go back to idle, or to "no more pages" when the server sent no next cursor.
+4. **If it fails**, show an inline retry row, unless it failed because it was cancelled, which just means the user refreshed.
 
-`willDisplay` fires for every cell past the threshold — five calls in one fling is normal. Because the view model is `@MainActor`, the check and the set run without an `await` between them, so they're atomic: the first call flips `phase` and the other four return. Put an `await` before the `phase = .loadingMore` line and you've reintroduced the double fetch — actor re-entrancy, the same bug as question 1's double miss, in a different coat.
+**Why step 2 says "immediately".** The trigger fires for every cell past the threshold, so five calls in one fling is normal. The view model lives on the main actor, so if nothing waits between checking the state and setting it, the first call wins and the other four see "already loading" and stop. Put any waiting between those two and two calls both get through: the same bug as question 1's double download, in a different coat.
 
 **Refresh races with load-more.** The user pulls to refresh while page 4 is in flight. Page 4 returns after the refresh has replaced the list with fresh page 1 — and gets appended to it, with a cursor from the old session. Two fixes, used together: the refresh **cancels** the load-more task, and a **generation counter** bumped on every refresh makes any response — or error — from an older generation drop itself without touching `phase`. Cancellation alone isn't enough, because it's cooperative — a response already decoded can still arrive.
+
+```mermaid
+sequenceDiagram
+  actor U as User
+  participant VM as FeedViewModel
+  participant R as FeedRepository
+  VM->>R: page 4 (generation 1)
+  U->>VM: pull to refresh
+  Note over VM: cancel page 4 · generation = 2
+  VM->>R: page 1 (generation 2)
+  R-->>VM: page 1 replaces the list
+  R-->>VM: page 4 arrives late (generation 1)
+  Note over VM: 1 ≠ 2, so it is dropped
+```
 
 **Merging.** Append by id, skipping ids already present. Ranked feeds occasionally return an item again across pages; a duplicate id in a diffable snapshot is a crash, not a glitch. Keep a `Set<PostID>` beside the array.
 
 **Prefetch the next images, not the next pages.** When page N+1 arrives, hand its first few image requests to the pipeline's prefetcher at low priority, with `allowsConstrainedNetworkAccess = false` so Low Data Mode skips them. Cancel prefetches for rows the user has flung past (`cancelPrefetchingForItemsAt`). That's what makes images appear already loaded, and it's question 1's API doing the work.
 :::
 
-::: 7 · Deep dive — "It stutters on an iPhone 12, and the list jumps. Why?"
+::: 10 · Deep dive — "It stutters on an iPhone 12, and the list jumps. Why?"
 **Each frame has 8–16 ms of main-thread time. Find what's spending it.** Start in Instruments — the Hangs and Animation Hitches instruments, plus `os_signpost` around cell configuration — not with guesses. The usual culprits, in the order they turn up:
 
 1. **Decoding full-size images on the main thread.** A 12-megapixel photo decodes to about 48 MB and takes tens of milliseconds. Fixed by question 1: downsample to the cell's pixel size, off the main actor, before the image reaches the view.
@@ -267,12 +336,12 @@ func onNearEnd() async {
 4. **Too much view per cell.** Nested stacks, shadows with no `shadowPath`, rounded-corner masks on images. Flatten the hierarchy; give layers explicit shadow paths.
 5. **Work in `cellForItemAt`.** Date formatting, string building, attributed text. Precompute in the model mapping on the repository side, so the cell assigns finished values.
 
-**Keeping the user's place stable.** Three rules: never insert above the visible rows unless the user asked (that's the "new posts" pill in section 8); know every row's height before it's inserted; and on refresh, if the user has scrolled, keep the old list on screen until they tap to jump to the top.
+**Keeping the user's place stable.** Three rules: never insert above the visible rows unless the user asked (that's the "new posts" pill in section 11); know every row's height before it's inserted; and on refresh, if the user has scrolled, keep the old list on screen until they tap to jump to the top.
 
 **Memory, however far they scroll.** Models are cheap; decoded images are not. Cells hold images only while visible, and the pipeline's memory cache has a byte budget, so memory is bounded by the cache, not by the scroll distance. *Alternative rejected:* trimming the model array as the user scrolls (windowing). It bounds memory that wasn't the problem and makes scroll-up need a second, backwards cursor. *Switch condition:* sessions of tens of thousands of posts with heavy models — then keep a window of pages and page backwards too.
 :::
 
-::: 8 · Deep dive — "New posts, and the like button."
+::: 11 · Deep dive — "New posts, and the like button."
 **New posts: tell, don't insert.**
 
 *Decision:* check `GET /feed/head?since=` when the app returns to the foreground and every couple of minutes while the feed is visible; if `newCount > 0`, show a "7 new posts" pill. Tapping it scrolls to the top and loads page 1. The content under the user's thumb never moves on its own.
@@ -281,22 +350,12 @@ func onNearEnd() async {
 
 **The like: optimistic, idempotent, last intent wins.**
 
-```swift
-func toggleLike(_ id: PostID) {
-    guard let index = index(of: id) else { return }
-    items[index].likedByMe.toggle()                    // UI changes now
-    items[index].likeCount += items[index].likedByMe ? 1 : -1
-    let wanted = items[index].likedByMe
+What happens on a tap, in order:
 
-    pendingLikes[id]?.cancel()                         // a newer tap supersedes
-    pendingLikes[id] = Task {
-        do { try await repository.setLiked(wanted, post: id) }
-        catch is CancellationError { return }          // superseded: the newer task owns the slot
-        catch { rollback(id, to: !wanted) }            // and a quiet toast
-        pendingLikes[id] = nil
-    }
-}
-```
+1. **Change the heart and the count on screen at once.** Don't wait for the server.
+2. **Send the new state** ("liked = true", not "toggle") to the server in the background.
+3. **If the user taps again before it lands**, cancel the older request and send the newest state. Only the last tap matters.
+4. **If the request fails**, put the heart back and show a quiet message.
 
 - **Rapid taps.** Like–unlike–like in a second sends one intent at a time per post, the newest cancelling the older. Because the request says "liked = true", not "toggle", even an older request that already left the device can't leave the post in the wrong state once the newest arrives — and if ordering matters on the server, a client timestamp or a sequence number per post settles it.
 - **Refresh overwrites the optimistic state.** Page 1 comes back from the server with `likedByMe: false` because the PUT hasn't landed yet, and the heart flickers off. Fix: while a like is pending for a post, the merge keeps the local value. Pending mutations are an **overlay** on server data, not a write into it.
@@ -305,7 +364,7 @@ func toggleLike(_ id: PostID) {
 *Alternative rejected:* waiting for the server before changing the heart. Correct, and it feels broken — 300 ms to react to a tap. *Switch condition:* actions with real cost — a purchase, a follow that notifies someone — wait for the server and show progress.
 :::
 
-::: 9 · Failure modes and 10×
+::: 12 · Failure modes and 10×
 - **Offline at launch.** Show the stored feed with "Last updated 2 h ago". Load-more at the end of stored content shows an inline retry row, not an error screen.
 - **First page fails.** With a stored feed: keep it and show a banner. Without one: a full-screen error with retry. Never replace good content with an error.
 - **Page N fails.** Inline retry row at the bottom; `phase = .failed`, and the next "near end" or a tap retries. One automatic retry with jittered backoff for timeouts and 5xx, none for 4xx.
@@ -323,7 +382,7 @@ func toggleLike(_ id: PostID) {
 - **Data:** the CDN width bucket and Low Data Mode carry it; the client's job is to ask for the smallest bucket that looks sharp.
 :::
 
-::: 10 · Question bank — everything they can push on
+::: 13 · Question bank — everything they can push on
 Grouped by the checklist from the first chapter. Read the question, answer it out loud, *then* open it. Each area ends with a follow-up chain, because a real interviewer doesn't change topic after your first answer; they go one level deeper.
 
 ### Clarify and scope
@@ -704,7 +763,7 @@ Almost nothing: load is the server's problem. The client's levers are page size,
 </details>
 :::
 
-::: 11 · Scorecard — mark yourself, 0 / 1 / 2
+::: 14 · Scorecard — mark yourself, 0 / 1 / 2
 The first five rows are the public exercise's grading criteria; the rest are specific to this question.
 
 | | Did you… | 0–2 |
@@ -720,12 +779,12 @@ The first five rows are the public exercise's grading criteria; the rest are spe
 | 9 | Guard load-more on the main actor, and handle refresh racing it | |
 | 10 | Keep pixels out of the model; reuse the image pipeline | |
 | 11 | Make likes optimistic and idempotent, and survive a refresh | |
-| 12 | Keep the board to three layers and about seven boxes, with one seam drawn | |
+| 12 | Say the idea, list the components, *then* sketch: three layers, about eight cards, one seam | |
 | 13 | Land the recap inside 60 seconds | |
 
 13+ is a pass in a real round.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero is worth more than the total: it names the thing to read about before the next one.<!--/public-->
 :::
 
-::: 12 · The 60-second recap
+::: 15 · The 60-second recap
 A photo feed is three clocks — the frame, the network and the user's thumb — and the design keeps the frame clock safe while the other two catch up. A main-actor view model owns one ordered array of small value models and a single phase enum. Pages come from the server by opaque cursor, so new posts never shift what's already loaded; the next page is requested a screen before the end, behind a guard that's atomic because nothing awaits between the check and the set, and a refresh cancels any page in flight and drops late answers by generation. Every post carries its image's width and height, so cells are sized before any pixel arrives and nothing jumps. Pixels never live in the model: cells ask the image pipeline from question 1 for the exact size they show, with prefetch a few rows ahead and off in Low Data Mode. New posts are announced with a pill, not inserted under the user's thumb. Likes change the screen at once, go to the server as idempotent PUT and DELETE, and stay on top of refreshed data until confirmed. The last feed is on disk, so the app opens with content even offline.
 :::

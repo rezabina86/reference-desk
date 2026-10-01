@@ -121,6 +121,41 @@ Classes: `dg` wrapper · `dg-row` + `dg-lane` + `dg-nodes` · `dg-node` with `ac
 `ghost` variants · `dg-flow` (`up`, `both`) for a labelled arrow · `dg-group` + `dg-group-label`
 for a module boundary · `dg-split` for parallel paths · `dg-note` · `dg-legend`.
 
+## Mermaid boards
+
+A fenced block tagged `mermaid` renders as a Mermaid diagram on a dotted "board" (system-design
+sketches and sequence diagrams). The page loads Mermaid from jsdelivr the first time a chapter has
+one; offline, the block's source text shows instead. Colours follow light and dark mode.
+
+Flowcharts get six class names, so a sketch never hardcodes a colour:
+
+| Class | Use for | Colour |
+|---|---|---|
+| `pres` | presentation layer / a library's API | blue |
+| `dom` | domain layer / a library's core | purple |
+| `data` | data layer / a library's I/O | green |
+| `net` | anything that crosses the network | orange |
+| `reuse` | a component reused from another question | grey, dashed |
+| `focus` | the one card a deep dive is about | thick blue border |
+
+```
+```mermaid
+flowchart TB
+  subgraph P["PRESENTATION"]
+    VM["<b>FeedViewModel</b><br/>posts · cursor"]
+  end
+  subgraph D["DOMAIN"]
+    Repo["«protocol»<br/><b>FeedRepository</b>"]
+  end
+  VM -- "asks for pages" --> Repo
+  class VM pres
+  class Repo dom
+```
+```
+
+Keep arrows pointing down the page (write a dependency-inversion edge as `Repo -. "implemented by"
+.-> Impl`; Mermaid has no reversed arrow, and an upward edge scrambles the layers), and keep rows to
+three cards so the sketch isn't scaled down.
 ## Publishing
 
 Two builds from the same sources:
