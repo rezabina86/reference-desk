@@ -137,10 +137,10 @@ Then say what's deliberately **not** on the list yet: an outbox for offline like
 ```mermaid
 flowchart TB
   subgraph P["PRESENTATION"]
-    View["<b>1 · Feed screen</b><br/>FeedView"] -- "scroll · refresh · like" --> VM["<b>2 · Feed view model</b><br/>FeedViewModel"]
+    View["<b>1 · Feed screen</b><br/>FeedView"] -- "user actions → posts" --> VM["<b>2 · Feed view model</b><br/>FeedViewModel"]
   end
   subgraph D["DOMAIN"]
-    Item["<b>3 · Post model</b><br/>FeedItem"]
+    Item["<b>3 · Post model</b><br/>FeedItem<br/>what the arrows carry"]
     Repo["<b>4 · Feed repository</b><br/>«protocol»"]
   end
   subgraph DA["DATA"]
@@ -149,11 +149,12 @@ flowchart TB
     Store["<b>7 · Local storage</b><br/>FeedStore"]
   end
   Pipe["<b>8 · Image loader</b><br/>from question 1"]
-  VM -- "asks for posts" --> Repo
-  Repo -. "implemented by" .-> Impl
-  Impl -- "network" --> API
-  Impl -- "disk" --> Store
-  View -. "pixels" .-> Pipe
+  VM -- "ask for posts → posts" --> Repo
+  Repo ~~~ Impl
+  Impl -. "implements" .-> Repo
+  Impl -- "requests → JSON" --> API
+  Impl -- "load · save posts" --> Store
+  View -- "photo URL + size → image" --> Pipe
   class View,VM pres
   class Item,Repo dom
   class Impl,Store data
@@ -163,12 +164,14 @@ flowchart TB
 
 Each card is **what it does** in bold, with the type name underneath. A newcomer to the board reads the bold line; you say the type name as you point at it.
 
+**How to read the arrows.** A solid arrow means *asks*: it points from the part that asks to the part that answers, which is also the direction of dependency. Its label reads **request → reply**, so the data coming back travels the other way along the same arrow. The dashed arrow means *implements*. Section 7 replays the same flow step by step.
+
 **Drawing it on Miro, step by step** (about four minutes, talking the whole time):
 
 1. Three wide frames stacked top to bottom: **Presentation**, **Domain**, **Data**. Label them before putting anything in them.
 2. Fill them in the order of your list, one card per component, one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image loader.
-3. Arrows last, and only four kinds: the screen sends what the user did to the view model; the view model asks the repository; the repository protocol is implemented in the data layer (dashed); the real repository uses the API client and local storage.
-4. Write «protocol» on the domain repository card. That card is where dependency inversion shows: the view model only knows the protocol, and the data layer plugs in underneath it. *"Everything else is behind a protocol too, for tests. This is the one that defines the architecture."*
+3. Arrows last, each pointing from the part that asks to the part that answers, labelled **request → reply**: the screen reports what the user did and gets posts to show; the view model asks the repository for posts; the real repository fetches pages from the API client and loads and saves posts in local storage; each row asks the image loader for its photo. Then one dashed arrow **up** from the real repository to the protocol, labelled "implements".
+4. Write «protocol» on the domain repository card. This is where dependency inversion shows: **both** arrows touching that card point *at* it. The view model depends on the protocol (from above), and the data layer depends on it too (from below, by implementing it). Nothing in the domain points down at the data layer, so the domain never depends on networking or storage. *"Everything else is behind a protocol too, for tests. This is the one that defines the architecture."*
 
 Eight cards, three frames, five arrows. Methods don't go on the board; they come up when the interviewer asks about a component, which is the next section.
 :::
@@ -362,21 +365,24 @@ sequenceDiagram
   VM->>R: savedFeed()
   R->>S: load()
   S-->>R: 200 saved posts
-  R-->>VM: shown at once
+  R-->>VM: saved posts
+  VM-->>V: show saved posts at once
   VM->>R: page(after: nil)
   R->>A: feed(cursor: nil)
   A-->>R: page 1 + next cursor
   R->>S: save(page 1)
-  R-->>VM: page 1 replaces saved posts
+  R-->>VM: page 1
+  VM-->>V: page 1 replaces the saved posts
   Note over V,VM: user scrolls to about 5 posts from the end
   V->>VM: onNearEnd()
   VM->>R: page(after: cursor)
   R->>A: feed(cursor: cursor)
   A-->>R: page 2
-  R-->>VM: page 2, appended by id
+  R-->>VM: page 2
+  VM-->>V: page 2 added below, duplicates skipped
 ```
 
-In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Every arrow is a method from the interfaces in section 6.
+In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Solid arrows are requests, each a method from the interfaces in section 6; dashed arrows are the replies, which is the data flowing back up to the screen.
 :::
 
 ::: 8 · The server contract

@@ -144,7 +144,7 @@ flowchart TB
     Call["<b>1 · Image view helpers</b><br/>setImage · LazyImage"]
   end
   subgraph C["CORE"]
-    Pipe["<b>2 · Image pipeline</b><br/>ImagePipeline (actor)<br/>contains card 3: <b>Memory cache</b>"]
+    Pipe["<b>2 · Image pipeline</b><br/>ImagePipeline (actor)<br/>checks and fills card 3: <b>Memory cache</b>"]
   end
   subgraph IO["I/O"]
     Disk["<b>4 · Disk cache</b><br/>ImageDiskCache"]
@@ -153,12 +153,14 @@ flowchart TB
   end
   Net["<b>6 · Network loader</b><br/>NetworkDataLoader"]
   File["<b>6 · File loader</b><br/>FileDataLoader"]
-  Call -- "URL + size" --> Pipe
-  Pipe -- "1 · saved bytes?" --> Disk
-  Pipe -- "2 · download" --> Loader
-  Pipe -- "3 · decode" --> Dec
-  Loader -. "implemented by" .-> Net
-  Loader -. "implemented by" .-> File
+  Call -- "URL + size → image" --> Pipe
+  Pipe -- "1 · read · save bytes" --> Disk
+  Pipe -- "2 · URL → bytes" --> Loader
+  Pipe -- "3 · bytes → image" --> Dec
+  Loader ~~~ Net
+  Loader ~~~ File
+  Net -. "implements" .-> Loader
+  File -. "implements" .-> Loader
   class Call pres
   class Pipe dom
   class Disk,Loader,Dec data
@@ -168,12 +170,14 @@ flowchart TB
 
 Each card is **what it does** in bold, with the type name underneath.
 
+**How to read the arrows.** A solid arrow means *asks*: it points from the part that asks to the part that answers, which is also the direction of dependency. Its label reads **request → reply**, so the data coming back travels the other way along the same arrow. The dashed arrow means *implements*. Section 7 replays the same flow step by step. The numbers are the order on a memory miss: look on disk (and save there after a download), download, decode.
+
 **Drawing it on Miro, step by step** (about four minutes, talking the whole time):
 
 1. Three wide frames stacked top to bottom: **API**, **Core**, **I/O**. Label them first.
 2. Fill them in the order of your list, one card per component: blue for what callers touch, purple for the core, green for I/O, orange for the network.
-3. Write the memory cache *inside* the pipeline card (the pipeline owns it and checks it first), then number the pipeline's three arrows as you draw them. That numbering *is* the algorithm on a memory miss: saved bytes on disk, then download, then decode.
-4. Write «protocol» on the data loader card and hang the two loaders under it with dashed lines. That's the one seam worth drawing: a new image source is a new card under it, never a change to the pipeline. *"The caches and the decoder are behind protocols too, for tests."*
+3. Write the memory cache *inside* the pipeline card (the pipeline owns it and checks it first), then number the pipeline's three arrows as you draw them, labelled **request → reply**. That numbering *is* the algorithm on a memory miss: bytes from disk if they're there, otherwise download them and save them to disk, then decode them into an image, which goes into the memory cache and back up to the view.
+4. Write «protocol» on the data loader card, put the two loaders under it, and draw a dashed "implements" arrow from each **up** to it. The pipeline depends on the protocol, and so do the loaders; the pipeline never points at a concrete loader. That's dependency inversion on the board. That's the one seam worth drawing: a new image source is a new card under it, never a change to the pipeline. *"The caches and the decoder are behind protocols too, for tests."*
 
 Seven cards, three frames, six arrows. Methods stay off the board; they come up when the interviewer asks about a component, which is the next section.
 :::
@@ -367,9 +371,10 @@ sequenceDiagram
   P->>M: store(image)
   P-->>A: image
   P-->>B: same image
+  Note over A,B: both rows show it
 ```
 
-In words: one download and one decode serve both rows. Every arrow is a method from the interfaces in section 6.
+In words: one download and one decode serve both rows. Solid arrows are requests, each a method from the interfaces in section 6; dashed arrows are the replies, the data flowing back: bytes up from disk or network, an image up from the decoder, and finally the image to both rows.
 :::
 
 ::: 8 · The server contract and the two keys

@@ -117,9 +117,18 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
   or API, purple for domain or core, green for data or I/O, orange for anything that crosses the
   network, grey and dashed for something reused.
 - **A card earns its place** only if you can say in one sentence what it owns that nothing else does.
+- **Arrows show who asks whom, and what comes back.** A solid arrow points from the part that asks to
+  the part that answers (also the direction of dependency) and is labelled **request → reply**
+  ("ask for posts → posts", "URL → bytes"), so the data flowing back is on the board too. Show
+  writes as well as reads ("load · save posts"). The one dashed arrow is "implements". Then the
+  sequence diagram (or, in the room, your one traced request) replays the same flow with the
+  replies drawn as their own arrows back up to the screen.
 - **Draw one protocol seam, not every one.** Show interface and implementation as separate cards
-  only at the boundary that defines the architecture (usually the repository), with a dashed
-  "implemented by" line to the data layer. That card is dependency inversion on the board. Then say
+  only at the boundary that defines the architecture (usually the repository). The
+  implementation gets a dashed **"implements" arrow pointing up** at the protocol, so both arrows
+  touching the protocol card point *at* it: the layer above uses it, the layer below implements it,
+  and nothing in the domain points down at the data layer. That's dependency inversion on the
+  board. (An arrow from the protocol *down* to the implementation would draw the opposite.) Then say
   it once: *"Everything else is behind a protocol too, for tests. I'm drawing the one that matters."*
 - **Start simple, grow under pressure.** Every extra component (an outbox, a shared store, a
   socket) waits until the interviewer pushes on that area. Adding it then, with the reason, scores

@@ -153,9 +153,18 @@ flowchart TB
 ```
 ```
 
-Keep arrows pointing down the page (write a dependency-inversion edge as `Repo -. "implemented by"
-.-> Impl`; Mermaid has no reversed arrow, and an upward edge scrambles the layers), and keep rows to
-three cards so the sketch isn't scaled down.
+Keep arrows pointing down the page, with one exception: the dependency-inversion arrow, which must
+point **up** from the implementation to the protocol. An upward edge on its own scrambles Mermaid's
+layer order, so pair it with an invisible link that keeps the protocol above:
+
+```
+  Repo ~~~ Impl
+  Impl -. "implements" .-> Repo
+```
+
+Label each solid arrow **request → reply** (it points from the part that asks to the part that
+answers), so the sketch shows data coming back as well as requests going down, and keep labels short
+(≈4 words) so the sketch isn't widened. Keep rows to three cards so the sketch isn't scaled down.
 ## Publishing
 
 Two builds from the same sources:
