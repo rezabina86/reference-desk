@@ -142,16 +142,23 @@ Flowcharts get six class names, so a sketch never hardcodes a colour:
 ```mermaid
 flowchart TB
   subgraph P["PRESENTATION"]
-    VM["<b>FeedViewModel</b><br/>posts · cursor"]
+    VM["`**Feed view model**
+FeedViewModel`"]
   end
   subgraph D["DOMAIN"]
-    Repo["«protocol»<br/><b>FeedRepository</b>"]
+    Repo["`**Feed repository**
+«protocol»`"]
   end
-  VM -- "asks for pages" --> Repo
+  VM -- "ask for posts → posts" --> Repo
   class VM pres
   class Repo dom
 ```
 ```
+
+Card labels are **Markdown strings** (backtick-quoted): `**bold**` for the role, a new line for each
+further line. The page renders labels as plain SVG text (`htmlLabels: false`), which the browser
+measures and draws the same way, so a label can't spill out of its box. Don't use `<b>`/`<br/>`
+HTML labels; they're measured as HTML and clipped or overflow in some browsers.
 
 Keep arrows pointing down the page, with one exception: the dependency-inversion arrow, which must
 point **up** from the implementation to the protocol. An upward edge on its own scrambles Mermaid's

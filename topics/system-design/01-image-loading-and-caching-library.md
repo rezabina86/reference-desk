@@ -141,18 +141,26 @@ And what's deliberately **not** on the list yet: prefetching, revalidation, Low 
 ```mermaid
 flowchart TB
   subgraph A["API"]
-    Call["<b>1 · Image view helpers</b><br/>setImage · LazyImage"]
+    Call["`**1 · Image view helpers**
+setImage · LazyImage`"]
   end
   subgraph C["CORE"]
-    Pipe["<b>2 · Image pipeline</b><br/>ImagePipeline (actor)<br/>checks and fills card 3: <b>Memory cache</b>"]
+    Pipe["`**2 · Image pipeline**
+ImagePipeline (actor)
+checks and fills card 3: **Memory cache**`"]
   end
   subgraph IO["I/O"]
-    Disk["<b>4 · Disk cache</b><br/>ImageDiskCache"]
-    Loader["<b>5 · Data loader</b><br/>«protocol»"]
-    Dec["<b>7 · Image decoder</b><br/>ImageDecoder"]
+    Disk["`**4 · Disk cache**
+ImageDiskCache`"]
+    Loader["`**5 · Data loader**
+«protocol»`"]
+    Dec["`**7 · Image decoder**
+ImageDecoder`"]
   end
-  Net["<b>6 · Network loader</b><br/>NetworkDataLoader"]
-  File["<b>6 · File loader</b><br/>FileDataLoader"]
+  Net["`**6 · Network loader**
+NetworkDataLoader`"]
+  File["`**6 · File loader**
+FileDataLoader`"]
   Call -- "URL + size → image" --> Pipe
   Pipe -- "1 · read · save bytes" --> Disk
   Pipe -- "2 · URL → bytes" --> Loader

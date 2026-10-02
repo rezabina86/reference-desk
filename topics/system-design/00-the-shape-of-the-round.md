@@ -106,6 +106,9 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
   screen's state), *domain* (plain models and the protocol the view model depends on), *data* (the
   implementation that decides between network and disk). No use-case classes at this size: a
   `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
+  **Keep the server's models apart from the app's:** the API client decodes into DTOs that mirror
+  the JSON, and the repository maps them to domain models (and the saved format to and from them).
+  The domain never sees the server's shape, so a server change touches one DTO and one mapping.
   A library question (an image loader, an analytics SDK) isn't an app, so it gets three layers of its
   own instead: *API* (what callers touch), *core* (the coordinator), *I/O* (loaders, caches, codecs).
 - **Each card: the role in bold, the type name underneath.** Someone who doesn't know Swift should

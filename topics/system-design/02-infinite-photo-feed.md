@@ -52,7 +52,8 @@ Plain definitions for the technical words this chapter uses. Read once; come bac
 - **Cursor** — a bookmark the server hands back with each page, meaning "you stopped here". The app sends it back to get the page after it.
 - **Layer** — a group of parts with the same kind of job. Here: *presentation* (what you see), *domain* (the plain description of the data and what may be asked for), *data* (where the data actually comes from).
 - **View model** — the part that holds a screen's current state and decisions, separate from the drawing of it.
-- **Model** — a plain description of one thing (a post), with no behaviour.
+- **Model** — a plain description of one thing (a post), with no behaviour. The *domain model* is the app's own version.
+- **DTO and mapping** — a *DTO* is a copy of the server's format, field for field; *mapping* translates it into the app's domain model, like converting a form from another office into your own.
 - **Protocol** — a written promise of what a part can do, without how. Any part that keeps the promise can stand in, including a fake one in a test.
 - **Repository** — the one place the app asks for data, which hides whether it came from the server or the phone.
 - **Cache** — a kept copy of something fetched before, so it's instant next time.
@@ -123,10 +124,10 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 |---|---|---|---|---|
 | 1 | **Feed screen** | `FeedView` | Presentation | The part of the app you see and scroll. Draws the posts; reports scrolls, pulls and taps. |
 | 2 | **Feed view model** | `FeedViewModel` | Presentation | The screen's brain: which posts are shown, whether it's loading, when to fetch more. |
-| 3 | **Post model** | `FeedItem` | Domain | A description of one post: who, the caption, the likes, and where the photo is and how big. |
+| 3 | **Post model** | `FeedItem` | Domain | The app's own description of one post: who, the caption, the likes, where the photo is and how big. |
 | 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | A written list of what the screen's brain may ask for, without saying how it's done. |
-| 5 | **Feed repository** (the real one) | `RemoteFeedRepository` | Data | Does what that list promises: answers from the copy on the phone or asks the server. |
-| 6 | **API client** | `FeedAPI` | Data | The messenger to the company's servers: fetches pages of posts, sends likes. |
+| 5 | **Feed repository** (the real one) | `RemoteFeedRepository` | Data | Does what that list promises: answers from the phone's copy or the server, and translates the server's format into the app's. |
+| 6 | **API client** | `FeedAPI` | Data | The messenger to the company's servers. Brings posts back in the server's own format. |
 | 7 | **Local storage** | `FeedStore` | Data | A notebook on the phone with the last 200 posts, so the app opens even without internet. |
 | 8 | **Image loader** | `ImagePipeline` | Reused | The photo library from question 1: fetches photos, shrinks them, remembers them. |
 
@@ -137,22 +138,33 @@ Then say what's deliberately **not** on the list yet: an outbox for offline like
 ```mermaid
 flowchart TB
   subgraph P["PRESENTATION"]
-    View["<b>1 · Feed screen</b><br/>FeedView"] -- "user actions → posts" --> VM["<b>2 · Feed view model</b><br/>FeedViewModel"]
+    View["`**1 · Feed screen**
+FeedView`"] -- "user actions → posts" --> VM["`**2 · Feed view model**
+FeedViewModel`"]
   end
   subgraph D["DOMAIN"]
-    Item["<b>3 · Post model</b><br/>FeedItem<br/>what the arrows carry"]
-    Repo["<b>4 · Feed repository</b><br/>«protocol»"]
+    Item["`**3 · Post model**
+FeedItem
+the app's own shape`"]
+    Repo["`**4 · Feed repository**
+«protocol»`"]
   end
   subgraph DA["DATA"]
-    Impl["<b>5 · Feed repository</b><br/>RemoteFeedRepository"]
-    API["<b>6 · API client</b><br/>FeedAPI"]
-    Store["<b>7 · Local storage</b><br/>FeedStore"]
+    Impl["`**5 · Feed repository**
+RemoteFeedRepository
+maps DTO → FeedItem`"]
+    API["`**6 · API client**
+FeedAPI
+returns DTOs`"]
+    Store["`**7 · Local storage**
+FeedStore`"]
   end
-  Pipe["<b>8 · Image loader</b><br/>from question 1"]
-  VM -- "ask for posts → posts" --> Repo
+  Pipe["`**8 · Image loader**
+from question 1`"]
+  VM -- "ask for posts → FeedItems" --> Repo
   Repo ~~~ Impl
   Impl -. "implements" .-> Repo
-  Impl -- "requests → JSON" --> API
+  Impl -- "requests → DTOs" --> API
   Impl -- "load · save posts" --> Store
   View -- "photo URL + size → image" --> Pipe
   class View,VM pres
@@ -284,32 +296,57 @@ protocol FeedRepository: Sendable {
 
 **In plain words:** the kitchen behind that menu. When asked for posts, it decides whether to answer from the copy kept on the phone or to ask the company's servers, and it refreshes the phone's copy when fresh posts arrive.
 
-**Owns:** the decision of where posts come from, and keeping the disk copy fresh.
+**Owns:** the decision of where posts come from, keeping the disk copy fresh, and **translating** between the server's format, the saved format and the app's `FeedItem`.
 
 **Interface:** it conforms to `FeedRepository` (above) and is built from the two things it coordinates: `init(api: FeedAPIType, store: FeedStoreType)`. Nothing else is public.
 
-**The choices inside it:** `savedFeed()` reads local storage; `page(after: nil)` fetches page 1 and, on success, rewrites the saved copy; later pages come from the network only. JSON decoding and date formatting happen here, off the main actor, so the view model receives finished values.
+**The choices inside it:**
+
+- **Where posts come from.** `savedFeed()` reads local storage; `page(after: nil)` fetches page 1 and, on success, rewrites the saved copy; later pages come from the network only.
+- **Mapping at the boundary.** The API client hands back `PostDTO`s, the server's shape; the repository turns each into a `FeedItem`, the app's shape, in one small function. That's where a string date becomes a `Date`, a missing optional gets a default, and a post that can't be shown (no image URL, say) is dropped and logged instead of crashing a screen. Saved posts are mapped the same way, from the store's own record. All of it runs off the main actor, so the view model receives finished values.
+- *Rejected:* decoding the JSON straight into `FeedItem`. One type for both looks simpler, until the server renames a field or makes one optional and every screen that uses posts has to change. *Switch condition:* a throwaway prototype, or an API you own and version together with the app.
 
 > **Under the hood.** The *repository pattern* puts one object between the app and all its data sources, so callers ask for "posts", never "posts from the network". It's also where you decide what counts as the truth: here the server is, and the disk is only a copy for opening fast and offline. (An app that edits data offline flips that, and the disk becomes the truth.)
+
+> **Under the hood.** A *DTO* (data transfer object) is a type that exists only to match the outside world's format, field for field: the server's JSON, or the shape you save on disk. The *domain model* is the app's own idea of the same thing, in the types the app wants. Keeping them separate means each changes for its own reason: the server team can rename `likes_count` and only the DTO and one mapping line change. The mapping lives in the data layer (here the repository), because the domain must not know the server exists — the same rule as dependency inversion, applied to data.
 
 ### 6 · API client (`FeedAPI`)
 
 **In plain words:** the messenger to the company's servers. It knows their addresses and the format messages must be in, sends the request, and brings back the answer. Nothing else in the app talks to the servers.
 
-**Owns:** the HTTP details: URLs, headers, auth, turning JSON into data.
+**Owns:** the HTTP details: URLs, headers, auth, and decoding the JSON into DTOs that mirror it exactly.
 
 **Interface:**
 
 ```swift
+/// The server's shape, field for field. Lives in the data layer; never reaches a screen.
+struct FeedPageDTO: Decodable, Sendable {
+    let items: [PostDTO]
+    let nextCursor: String?
+    let headToken: String
+}
+
+struct PostDTO: Decodable, Sendable {
+    let id: String
+    let author: AuthorDTO
+    let caption: String?
+    /// URL, width, height, placeholder colour
+    let image: ImageDTO?
+    let likeCount: Int
+    let likedByMe: Bool
+    /// ISO 8601 text; becomes a Date when mapped
+    let createdAt: String
+}
+
 protocol FeedAPIType: Sendable {
-    func feed(cursor: Cursor?, limit: Int) async throws -> FeedPageResponse
+    func feed(cursor: Cursor?, limit: Int) async throws -> FeedPageDTO
     func newCount(since token: HeadToken) async throws -> Int
     /// PUT or DELETE
     func setLiked(_ liked: Bool, post: PostID) async throws
 }
 ```
 
-**The choice inside it:** pages by **cursor**, likes as **idempotent** `PUT` and `DELETE`. The exact endpoints are in section 8.
+**The choices inside it:** pages by **cursor**, likes as **idempotent** `PUT` and `DELETE` (endpoints in section 8). It returns **DTOs, not `FeedItem`s**: the API client knows the server's format and nothing about the app's models, so it can be tested against recorded JSON on its own.
 
 > **Under the hood.** *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
 
@@ -332,7 +369,7 @@ protocol FeedStoreType: Sendable {
 }
 ```
 
-**The choice inside it:** one `Codable` file, written atomically. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
+**The choice inside it:** one `Codable` file, written atomically. `SavedFeed` is the store's own record (posts + cursor), mapped to and from `FeedItem` in the repository like the API's DTOs, so changing what's saved never touches the domain model. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
 
 > **Under the hood.** An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix. The file belongs in `Library/Caches`: it's a copy that can always be downloaded again, and the system may empty that folder when storage runs low, so the code treats a missing file as "first launch", never as an error.
 
@@ -369,7 +406,8 @@ sequenceDiagram
   VM-->>V: show saved posts at once
   VM->>R: page(after: nil)
   R->>A: feed(cursor: nil)
-  A-->>R: page 1 + next cursor
+  A-->>R: FeedPageDTO (page 1 + next cursor)
+  Note over R: map PostDTO → FeedItem
   R->>S: save(page 1)
   R-->>VM: page 1
   VM-->>V: page 1 replaces the saved posts
@@ -377,7 +415,8 @@ sequenceDiagram
   V->>VM: onNearEnd()
   VM->>R: page(after: cursor)
   R->>A: feed(cursor: cursor)
-  A-->>R: page 2
+  A-->>R: FeedPageDTO (page 2)
+  Note over R: map PostDTO → FeedItem
   R-->>VM: page 2
   VM-->>V: page 2 added below, duplicates skipped
 ```
@@ -563,6 +602,12 @@ At this size each one would just forward a call to the repository. I'd add one w
 <summary>"Why a repository and not the view model calling the API directly?"</summary>
 
 The view model shouldn't know whether a post came from the network or from disk. The repository owns that decision, and its protocol is what I swap for a fake in tests.
+</details>
+
+<details>
+<summary>"Would you decode the JSON straight into the model the UI uses?"</summary>
+
+No. The API client decodes into DTOs that mirror the server; the repository maps them to `FeedItem`. A renamed or newly optional server field then changes one DTO and one mapping line instead of every screen, and invalid posts are filtered once, at the boundary. For a prototype, or an API versioned with the app, one type is an acceptable shortcut.
 </details>
 
 <details>
