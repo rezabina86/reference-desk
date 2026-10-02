@@ -102,8 +102,9 @@ next one easy to follow, which is what the interviewer is grading.
 A board with twenty boxes doesn't read as thorough. It reads as someone who can't tell which parts
 matter, and it eats the minutes the deep dives need. The rules every chapter here follows:
 
-- **Three layers for an app question.** *Presentation* (the view and the view model that owns the
-  screen's state), *domain* (plain models and the protocol the view model depends on), *data* (the
+- **Three layers for an app question.** *Presentation* (a dumb view, and the view model that owns the
+  screen's state and hands the view **one view state**: a single `Equatable` struct describing
+  everything on screen, so the view only draws it and forwards user actions), *domain* (plain models and the protocol the view model depends on), *data* (the
   implementation that decides between network and disk). No use-case classes at this size: a
   `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
   **Keep the server's models apart from the app's:** the API client decodes into DTOs that mirror

@@ -52,6 +52,7 @@ Plain definitions for the technical words this chapter uses. Read once; come bac
 - **Cursor** — a bookmark the server hands back with each page, meaning "you stopped here". The app sends it back to get the page after it.
 - **Layer** — a group of parts with the same kind of job. Here: *presentation* (what you see), *domain* (the plain description of the data and what may be asked for), *data* (where the data actually comes from).
 - **View model** — the part that holds a screen's current state and decisions, separate from the drawing of it.
+- **View state** — one complete description of what a screen shows right now (every row's text, whether a spinner is visible), handed to the screen in a single piece, like a cue sheet.
 - **Model** — a plain description of one thing (a post), with no behaviour. The *domain model* is the app's own version.
 - **DTO and mapping** — a *DTO* is a copy of the server's format, field for field; *mapping* translates it into the app's domain model, like converting a form from another office into your own.
 - **Protocol** — a written promise of what a part can do, without how. Any part that keeps the promise can stand in, including a fake one in a test.
@@ -122,8 +123,8 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 
 | # | Component | Type name | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Feed screen** | `FeedView` | Presentation | The part of the app you see and scroll. Draws the posts; reports scrolls, pulls and taps. |
-| 2 | **Feed view model** | `FeedViewModel` | Presentation | The screen's brain: which posts are shown, whether it's loading, when to fetch more. |
+| 1 | **Feed screen** | `FeedView` | Presentation | The part of the app you see. Draws exactly the view state it's handed; reports scrolls, pulls and taps. |
+| 2 | **Feed view model** | `FeedViewModel` | Presentation | The screen's brain: turns posts and loading into one view state; decides when to fetch more. |
 | 3 | **Post model** | `FeedItem` | Domain | The app's own description of one post: who, the caption, the likes, where the photo is and how big. |
 | 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | A written list of what the screen's brain may ask for, without saying how it's done. |
 | 5 | **Feed repository** (the real one) | `RemoteFeedRepository` | Data | Does what that list promises: answers from the phone's copy or the server, and translates the server's format into the app's. |
@@ -139,7 +140,7 @@ Then say what's deliberately **not** on the list yet: an outbox for offline like
 flowchart TB
   subgraph P["PRESENTATION"]
     View["`**1 · Feed screen**
-FeedView`"] -- "user actions → posts" --> VM["`**2 · Feed view model**
+FeedView`"] -- "user actions → view state" --> VM["`**2 · Feed view model**
 FeedViewModel`"]
   end
   subgraph D["DOMAIN"]
@@ -182,7 +183,7 @@ Each card is **what it does** in bold, with the type name underneath. A newcomer
 
 1. Three wide frames stacked top to bottom: **Presentation**, **Domain**, **Data**. Label them before putting anything in them.
 2. Fill them in the order of your list, one card per component, one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image loader.
-3. Arrows last, each pointing from the part that asks to the part that answers, labelled **request → reply**: the screen reports what the user did and gets posts to show; the view model asks the repository for posts; the real repository fetches pages from the API client and loads and saves posts in local storage; each row asks the image loader for its photo. Then one dashed arrow **up** from the real repository to the protocol, labelled "implements".
+3. Arrows last, each pointing from the part that asks to the part that answers, labelled **request → reply**: the screen reports what the user did and gets back one view state to draw; the view model asks the repository for posts; the real repository fetches pages from the API client and loads and saves posts in local storage; each row asks the image loader for its photo. Then one dashed arrow **up** from the real repository to the protocol, labelled "implements".
 4. Write «protocol» on the domain repository card. This is where dependency inversion shows: **both** arrows touching that card point *at* it. The view model depends on the protocol (from above), and the data layer depends on it too (from below, by implementing it). Nothing in the domain points down at the data layer, so the domain never depends on networking or storage. *"Everything else is behind a protocol too, for tests. This is the one that defines the architecture."*
 
 Eight cards, three frames, five arrows. Methods don't go on the board; they come up when the interviewer asks about a component, which is the next section.
@@ -193,11 +194,11 @@ Point at each card and cover three things: **what it owns**, **its interface** (
 
 ### 1 · Feed screen (`FeedView`)
 
-**In plain words:** the part of the app you actually see and scroll. It draws the posts it's handed and tells the rest of the app what you did: scrolled near the bottom, pulled down to refresh, tapped a heart. Like a shop window: it shows things, it doesn't decide what's in stock.
+**In plain words:** the part of the app you actually see and scroll. It draws exactly what it's handed and tells the rest of the app what you did: scrolled near the bottom, pulled down to refresh, tapped a heart. Like a shop window dressed from a photo of how it should look: it doesn't decide anything, it just arranges what the photo shows.
 
-**Owns:** nothing. It renders the posts it's given and reports what the user did.
+**Owns:** nothing. It's **dumb on purpose**: no formatting, no "if the list is empty show…", no decisions.
 
-**Interface:** it's created with a view model, reads three things from it (`items`, `phase`, `newerAvailable`), and calls four (`onAppear`, `onNearEnd`, `refresh`, `toggleLike`). No other dependency: if the screen needs to know something, the view model exposes it.
+**Interface:** it's created with a view model, reads **one** thing from it, `viewState`, and calls four (`onAppear`, `onNearEnd`, `refresh`, `toggleLike`). Everything it draws is in that one value; if the screen needs to know something, it goes into the view state.
 
 **The choice inside it:** `UICollectionView` with a diffable data source, wrapped in `UIViewControllerRepresentable`, because it recycles rows, has a prefetch callback, and has been tuned for this for a decade. *Rejected:* SwiftUI `LazyVStack`, which creates rows lazily but is widely reported to keep them, so memory grows with how far you scroll. *Switch condition:* simple rows on iOS 18, where `List` profiles clean on the oldest supported phone.
 
@@ -207,23 +208,42 @@ Point at each card and cover three things: **what it owns**, **its interface** (
 
 ### 2 · Feed view model (`FeedViewModel`)
 
-**In plain words:** the screen's brain. It keeps the list of posts currently shown, knows whether something is loading or failed, and decides when it's time to fetch the next batch. The screen only ever asks it "what should I show now?"
+**In plain words:** the screen's brain. It keeps the posts, knows whether something is loading or failed, and decides when to fetch the next batch. Then it writes **one complete description of the screen**, the *view state*, like a stage manager handing the crew a single cue sheet: what every row says, whether to show a spinner, an error or the "new posts" pill. The screen only ever reads that sheet.
 
-**Owns:** everything the screen shows: the posts, the loading state, whether newer posts exist, and the cursor for the next page.
+**Owns:** the screen's state (the posts, the loading phase, the cursor) and the job of turning it into the view state.
 
 **Interface:**
 
 ```swift
+/// Everything the screen shows, as one value. The screen draws this and nothing else.
+struct FeedViewState: Equatable {
+    /// One per post, already formatted for display
+    let rows: [PostRowState]
+    /// Loading, content, loading more, empty, error with its message, end of feed
+    let status: Status
+    /// "7 new posts", or nil to hide the pill
+    let newPostsBanner: String?
+}
+
+/// One row, ready to draw: no dates to format, no counts to pluralise.
+struct PostRowState: Equatable, Identifiable {
+    let id: PostID
+    let authorName: String
+    let caption: String
+    let image: ImageRequest
+    /// Width ÷ height, so the row is sized before the photo arrives
+    let aspectRatio: Double
+    /// Already formatted, e.g. "412 likes"
+    let likeCountText: String
+    let isLiked: Bool
+}
+
 @MainActor @Observable
 final class FeedViewModel {
     init(repository: FeedRepository)
 
-    /// What the list shows
-    private(set) var items: [FeedItem]
-    /// Idle, loading first / more, refreshing, failed, no more pages
-    private(set) var phase: Phase
-    /// Drives the "new posts" pill
-    private(set) var newerAvailable: Bool
+    /// The one thing the screen reads, rebuilt from the private state on every change
+    var viewState: FeedViewState { get }
 
     /// Saved posts, then page 1
     func onAppear() async
@@ -238,13 +258,14 @@ final class FeedViewModel {
 
 **The choices inside it:**
 
-- **One `phase`, not five booleans.** Separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed at once. One value with six cases can't.
+- **One view state, not a handful of properties.** The screen gets a single `FeedViewState` instead of reading `items`, `phase` and `newerAvailable` and combining them itself. That keeps the view dumb (every decision, every bit of formatting, lives in the view model) and makes the whole screen testable as one value: call `onNearEnd()`, then check `viewState` equals the expected struct. *Rejected:* exposing the raw properties, which is less code but moves "what does loading-while-empty look like?" into the view, where it can't be unit-tested.
+- **Private state, derived view state.** Inside, the view model keeps the posts, the cursor and **one `phase`, not five booleans** (separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed). `viewState` is computed from them, never stored and updated separately, so the two can't drift apart.
 - **On the main actor**, because the screen reads it every frame. Every change happens in one place, so "is it already loading? if not, start" needs no lock.
-- **Why MVVM.** The view model is what makes the feed testable without a screen: give it a fake repository, call `onNearEnd()` twice, check one request went out. *Rejected:* a single reducer store (TCA-style), which buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
+- **Why MVVM.** The view model is what makes the feed testable without a screen: give it a fake repository, call `onNearEnd()` twice, check one request went out and the view state shows "loading more". *Rejected:* a single reducer store (TCA-style), which buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
 
-> **Under the hood.** *In plain words:* the screen redraws only the parts whose information changed, like a scoreboard that flips one digit instead of repainting the whole board.
+> **Under the hood.** *In plain words:* the screen is a copy machine for the cue sheet: hand it a new sheet and it redraws to match. Because the sheet is one value that can be compared, the screen can tell exactly which rows changed and redraw only those.
 >
-> *The detail:* `@Observable` (iOS 17) makes SwiftUI track exactly which properties a view *read* while drawing, and redraw that view only when one of those changes. A row that reads one post's like count isn't redrawn when `phase` flips. The older `ObservableObject` redraws every listener on any `@Published` change. `@MainActor` means "all of this runs on the main thread", enforced by the compiler, so the UI never reads half-updated state.
+> *The detail:* `FeedViewState` and `PostRowState` are `Equatable` value types. The list applies `rows` as a diffable snapshot, and rows whose state didn't change are left alone (`reconfigureItems` only for the ones that did), so one like doesn't redraw the feed. With `@Observable` (iOS 17), SwiftUI tracks that the screen read `viewState` and redraws when it changes; the older `ObservableObject` redrew on any `@Published` change. `@MainActor` means "all of this runs on the main thread", enforced by the compiler, so the screen never reads a half-updated state.
 
 ### 3 · Post model (`FeedItem`)
 
@@ -419,14 +440,14 @@ sequenceDiagram
   R->>S: load()
   S-->>R: 200 saved posts
   R-->>VM: saved posts
-  VM-->>V: show saved posts at once
+  VM-->>V: view state: saved posts, at once
   VM->>R: page(after: nil)
   R->>A: feed(cursor: nil)
   A-->>R: FeedPageDTO (page 1 + next cursor)
   Note over R: map PostDTO → FeedItem
   R->>S: save(page 1)
   R-->>VM: page 1
-  VM-->>V: page 1 replaces the saved posts
+  VM-->>V: view state: page 1 replaces saved posts
   Note over V,VM: user scrolls to about 5 posts from the end
   V->>VM: onNearEnd()
   VM->>R: page(after: cursor)
@@ -434,7 +455,7 @@ sequenceDiagram
   A-->>R: FeedPageDTO (page 2)
   Note over R: map PostDTO → FeedItem
   R-->>VM: page 2
-  VM-->>V: page 2 added below, duplicates skipped
+  VM-->>V: view state: page 2 added, duplicates skipped
 ```
 
 In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Solid arrows are requests, each a method from the interfaces in section 6; dashed arrows are the replies, which is the data flowing back up to the screen.
@@ -599,13 +620,19 @@ Cursor pages with a main-actor guard, cells sized from the payload, and the imag
 <details>
 <summary>"Walk me through the layers."</summary>
 
-Presentation: the view and a view model that owns the items, the phase and the cursor. Domain: the `FeedItem` model and the `FeedRepository` protocol. Data: the repository implementation over the API and a disk store. Each changes for a different reason, which is why they're separate.
+Presentation: a dumb view that draws one `FeedViewState`, and a view model that owns the posts, the phase and the cursor and turns them into that view state. Domain: the `FeedItem` model and the `FeedRepository` protocol. Data: the repository implementation over the API and a disk store. Each changes for a different reason, which is why they're separate.
 </details>
 
 <details>
 <summary>"Why MVVM and not MVC, VIPER or TCA?"</summary>
 
 The view model is the seam that lets me test the feed's behaviour with no view: a fake repository, call "near end" twice, assert one request. MVC puts that logic in a view controller I can't test easily. VIPER adds a router, presenter and interactor for one screen. TCA buys a strict event log at the cost of a dependency and a learning curve; I'd switch to it if several screens shared complex state.
+</details>
+
+<details>
+<summary>"What does the view model expose to the view?"</summary>
+
+One `FeedViewState` struct: the rows already formatted for display, a status (loading, content, empty, error, end of feed) and the new-posts banner text. The view draws it and forwards user actions; it makes no decisions. Tests assert the whole state as one value, and because it's `Equatable` the list redraws only rows that changed.
 </details>
 
 <details>
@@ -967,5 +994,5 @@ The first five rows are the public exercise's grading criteria; the rest are spe
 :::
 
 ::: 15 · The 60-second recap
-A photo feed is three clocks — the frame, the network and the user's thumb — and the design keeps the frame clock safe while the other two catch up. A main-actor view model owns one ordered array of small value models and a single phase enum. Pages come from the server by opaque cursor, so new posts never shift what's already loaded; the next page is requested a screen before the end, behind a guard that's atomic because nothing awaits between the check and the set, and a refresh cancels any page in flight and drops late answers by generation. Every post carries its image's width and height, so cells are sized before any pixel arrives and nothing jumps. Pixels never live in the model: cells ask the image pipeline from question 1 for the exact size they show, with prefetch a few rows ahead and off in Low Data Mode. New posts are announced with a pill, not inserted under the user's thumb. Likes change the screen at once, go to the server as idempotent PUT and DELETE, and stay on top of refreshed data until confirmed. The last feed is on disk, so the app opens with content even offline.
+A photo feed is three clocks — the frame, the network and the user's thumb — and the design keeps the frame clock safe while the other two catch up. A main-actor view model owns one ordered array of small value models and a single phase enum, and hands a dumb screen one view state to draw. Pages come from the server by opaque cursor, so new posts never shift what's already loaded; the next page is requested a screen before the end, behind a guard that's atomic because nothing awaits between the check and the set, and a refresh cancels any page in flight and drops late answers by generation. Every post carries its image's width and height, so cells are sized before any pixel arrives and nothing jumps. Pixels never live in the model: cells ask the image pipeline from question 1 for the exact size they show, with prefetch a few rows ahead and off in Low Data Mode. New posts are announced with a pill, not inserted under the user's thumb. Likes change the screen at once, go to the server as idempotent PUT and DELETE, and stay on top of refreshed data until confirmed. The last feed is on disk, so the app opens with content even offline.
 :::
