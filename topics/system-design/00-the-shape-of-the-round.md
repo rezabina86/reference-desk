@@ -18,7 +18,7 @@ offset, what a decoded image costs), so the answer makes sense even the first ti
 They're written to be readable by someone who doesn't code, too: each chapter opens with a **Words
 used in this chapter** glossary, the component table describes every part in plain words, and
 every component starts with an **In plain words** line and an everyday comparison before any
-technical detail.
+technical detail. Every *Under the hood* note does the same: plain words first, then *the detail*.
 
 So every question here is written to be **performed, not read**. The prompt is at the top; the
 whole answer is behind collapsed sections, in the order a real round unfolds — including the

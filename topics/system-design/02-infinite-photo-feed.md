@@ -201,7 +201,9 @@ Point at each card and cover three things: **what it owns**, **its interface** (
 
 **The choice inside it:** `UICollectionView` with a diffable data source, wrapped in `UIViewControllerRepresentable`, because it recycles rows, has a prefetch callback, and has been tuned for this for a decade. *Rejected:* SwiftUI `LazyVStack`, which creates rows lazily but is widely reported to keep them, so memory grows with how far you scroll. *Switch condition:* simple rows on iOS 18, where `List` profiles clean on the oldest supported phone.
 
-> **Under the hood.** A collection view keeps only the rows on screen plus a few spare; when a row scrolls off, it's *reused* for the one scrolling on. That's why a row must never assume what it showed before, and why images are requested per row and cancelled on reuse. A *diffable data source* takes a list of IDs, works out what was inserted, removed or moved, and animates only that. It needs every ID to be unique, which is why duplicate posts must be filtered out (a duplicate crashes, rather than glitching).
+> **Under the hood.** *In plain words:* the list doesn't build a row for every post. It keeps about a screenful of rows and repaints them as you scroll, like a waiter reusing the same few plates. So a row must never assume what it showed a moment ago.
+>
+> *The detail:* A collection view keeps only the rows on screen plus a few spare; when a row scrolls off, it's *reused* for the one scrolling on. That's why a row must never assume what it showed before, and why images are requested per row and cancelled on reuse. A *diffable data source* takes a list of IDs, works out what was inserted, removed or moved, and animates only that. It needs every ID to be unique, which is why duplicate posts must be filtered out (a duplicate crashes, rather than glitching).
 
 ### 2 · Feed view model (`FeedViewModel`)
 
@@ -240,7 +242,9 @@ final class FeedViewModel {
 - **On the main actor**, because the screen reads it every frame. Every change happens in one place, so "is it already loading? if not, start" needs no lock.
 - **Why MVVM.** The view model is what makes the feed testable without a screen: give it a fake repository, call `onNearEnd()` twice, check one request went out. *Rejected:* a single reducer store (TCA-style), which buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
 
-> **Under the hood.** `@Observable` (iOS 17) makes SwiftUI track exactly which properties a view *read* while drawing, and redraw that view only when one of those changes. A row that reads one post's like count isn't redrawn when `phase` flips. The older `ObservableObject` redraws every listener on any `@Published` change. `@MainActor` means "all of this runs on the main thread", enforced by the compiler, so the UI never reads half-updated state.
+> **Under the hood.** *In plain words:* the screen redraws only the parts whose information changed, like a scoreboard that flips one digit instead of repainting the whole board.
+>
+> *The detail:* `@Observable` (iOS 17) makes SwiftUI track exactly which properties a view *read* while drawing, and redraw that view only when one of those changes. A row that reads one post's like count isn't redrawn when `phase` flips. The older `ObservableObject` redraws every listener on any `@Published` change. `@MainActor` means "all of this runs on the main thread", enforced by the compiler, so the UI never reads half-updated state.
 
 ### 3 · Post model (`FeedItem`)
 
@@ -265,7 +269,9 @@ struct FeedItem: Identifiable, Hashable, Sendable {
 
 **The choice inside it:** **no `UIImage` in the model.** The image's width and height are in it, because they decide the row's height before any pixel arrives.
 
-> **Under the hood.** A post as data is about a kilobyte, so ten thousand of them is about 10 MB. A decoded photo is width × height × 4 bytes: a 12-megapixel photo is about 48 MB. Put images in the model and the model's memory grows with every post scrolled past; leave them to the image loader, whose cache has a fixed budget, and memory stays flat. `Sendable` means the struct can safely be handed from a background task to the main actor, which is how a page travels from the network to the screen.
+> **Under the hood.** *In plain words:* a post's text is tiny, but its photo, once unpacked for the screen, is thousands of times bigger. So each post carries only the photo's address and size, and the photos themselves live in one place with a size limit.
+>
+> *The detail:* A post as data is about a kilobyte, so ten thousand of them is about 10 MB. A decoded photo is width × height × 4 bytes: a 12-megapixel photo is about 48 MB. Put images in the model and the model's memory grows with every post scrolled past; leave them to the image loader, whose cache has a fixed budget, and memory stays flat. `Sendable` means the struct can safely be handed from a background task to the main actor, which is how a page travels from the network to the screen.
 
 ### 4 · Feed repository, the protocol (`FeedRepository`)
 
@@ -290,7 +296,9 @@ protocol FeedRepository: Sendable {
 
 **The choice inside it:** this is the one protocol drawn on the board. The view model depends on it, never on the real repository, so a test can swap in a fake, and the data layer can change (a database instead of a file, GraphQL instead of REST) without the view model noticing. *Rejected:* use-case classes between the two (`LoadNextPageUseCase`…); each would only forward a call. *Switch condition:* real logic that belongs to neither the screen nor the data, such as combining two repositories.
 
-> **Under the hood.** This is *dependency inversion*: the higher layer (presentation) defines what it needs as a protocol in the domain, and the lower layer (data) conforms to it. The arrow of dependency points *up* from data to domain, so the screen's code never imports anything about networking. In practice it's what makes the view model unit-testable.
+> **Under the hood.** *In plain words:* think of a restaurant. Card 4 is the **menu**: it lists what the screen can order (saved posts, the next page, a like) and says nothing about cooking. Card 5 is the **kitchen** that makes each order, from the server or from the phone's notebook. The dashed arrow pointing **up** is the kitchen promising to cook what's on the menu: the kitchen adapts to the menu, never the other way round. The screen only ever reads the menu, so you can swap the kitchen (a test kitchen with fake posts, a different server, a database) and the screen never notices, as long as the new kitchen serves what's on the menu. In one line: *the screen depends on a promise, not on whoever keeps it, and whoever keeps it depends on the same promise.*
+>
+> *The detail:* This is *dependency inversion*: the higher layer (presentation) defines what it needs as a protocol in the domain, and the lower layer (data) conforms to it. The arrow of dependency points *up* from data to domain, so the screen's code never imports anything about networking. In practice it's what makes the view model unit-testable.
 
 ### 5 · Feed repository, the real one (`RemoteFeedRepository`)
 
@@ -306,9 +314,13 @@ protocol FeedRepository: Sendable {
 - **Mapping at the boundary.** The API client hands back `PostDTO`s, the server's shape; the repository turns each into a `FeedItem`, the app's shape, in one small function. That's where a string date becomes a `Date`, a missing optional gets a default, and a post that can't be shown (no image URL, say) is dropped and logged instead of crashing a screen. Saved posts are mapped the same way, from the store's own record. All of it runs off the main actor, so the view model receives finished values.
 - *Rejected:* decoding the JSON straight into `FeedItem`. One type for both looks simpler, until the server renames a field or makes one optional and every screen that uses posts has to change. *Switch condition:* a throwaway prototype, or an API you own and version together with the app.
 
-> **Under the hood.** The *repository pattern* puts one object between the app and all its data sources, so callers ask for "posts", never "posts from the network". It's also where you decide what counts as the truth: here the server is, and the disk is only a copy for opening fast and offline. (An app that edits data offline flips that, and the disk becomes the truth.)
+> **Under the hood.** *In plain words:* the repository is the single counter you ask for posts. Behind the counter, someone decides whether they come from the notebook on the phone or from the server; you never have to know.
+>
+> *The detail:* The *repository pattern* puts one object between the app and all its data sources, so callers ask for "posts", never "posts from the network". It's also where you decide what counts as the truth: here the server is, and the disk is only a copy for opening fast and offline. (An app that edits data offline flips that, and the disk becomes the truth.)
 
-> **Under the hood.** A *DTO* (data transfer object) is a type that exists only to match the outside world's format, field for field: the server's JSON, or the shape you save on disk. The *domain model* is the app's own idea of the same thing, in the types the app wants. Keeping them separate means each changes for its own reason: the server team can rename `likes_count` and only the DTO and one mapping line change. The mapping lives in the data layer (here the repository), because the domain must not know the server exists — the same rule as dependency inversion, applied to data.
+> **Under the hood.** *In plain words:* the server sends posts on its own form, and the app uses its own form. The repository copies one onto the other. When the server changes its form, only that copying step changes, not every screen that shows a post.
+>
+> *The detail:* A *DTO* (data transfer object) is a type that exists only to match the outside world's format, field for field: the server's JSON, or the shape you save on disk. The *domain model* is the app's own idea of the same thing, in the types the app wants. Keeping them separate means each changes for its own reason: the server team can rename `likes_count` and only the DTO and one mapping line change. The mapping lives in the data layer (here the repository), because the domain must not know the server exists — the same rule as dependency inversion, applied to data.
 
 ### 6 · API client (`FeedAPI`)
 
@@ -348,7 +360,9 @@ protocol FeedAPIType: Sendable {
 
 **The choices inside it:** pages by **cursor**, likes as **idempotent** `PUT` and `DELETE` (endpoints in section 8). It returns **DTOs, not `FeedItem`s**: the API client knows the server's format and nothing about the app's models, so it can be tested against recorded JSON on its own.
 
-> **Under the hood.** *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
+> **Under the hood.** *In plain words:* asking for "the 20 posts after this one" works like a bookmark. Asking for "posts 41 to 60" breaks as soon as new posts arrive at the top and push everything down, so you see some twice.
+>
+> *The detail:* *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
 
 ### 7 · Local storage (`FeedStore`)
 
@@ -371,7 +385,9 @@ protocol FeedStoreType: Sendable {
 
 **The choice inside it:** one `Codable` file, written atomically. `SavedFeed` is the store's own record (posts + cursor), mapped to and from `FeedItem` in the repository like the API's DTOs, so changing what's saved never touches the domain model. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
 
-> **Under the hood.** An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix. The file belongs in `Library/Caches`: it's a copy that can always be downloaded again, and the system may empty that folder when storage runs low, so the code treats a missing file as "first launch", never as an error.
+> **Under the hood.** *In plain words:* the app writes the new copy beside the old one and swaps them in a single move, so a crash halfway through never leaves a half-written notebook.
+>
+> *The detail:* An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix. The file belongs in `Library/Caches`: it's a copy that can always be downloaded again, and the system may empty that folder when storage runs low, so the code treats a missing file as "first launch", never as an error.
 
 ### 8 · Image loader (`ImagePipeline`, from question 1)
 

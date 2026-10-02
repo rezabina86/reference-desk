@@ -202,7 +202,8 @@ struct ImageRequest: Hashable, Sendable {
     let targetPixelSize: CGSize?
     /// Visible rows high, prefetch low
     let priority: Priority
-    let allowsConstrainedNetwork: Bool // false for prefetch, so Low Data Mode skips it
+    /// False for prefetch, so Low Data Mode skips it
+    let allowsConstrainedNetwork: Bool
 }
 ```
 
@@ -228,7 +229,9 @@ struct LazyImage: View {
 
 **The choice inside it:** both are thin. `setImage` reads the memory cache straight away, so a cached image appears in the same frame with no flicker, and remembers its request so a reused row can cancel it. When a load finishes, it checks the result is for the row's *current* request before showing it. That check stops the classic wrong-image-in-a-reused-row bug.
 
-> **Under the hood.** Cancelling in Swift concurrency is *cooperative*: cancelling a task only sets a flag, and the work stops at its next check. So a result can still arrive after you cancelled, which is why the "is this still my request?" check is needed on top of cancelling. SwiftUI's `.task(id:)` gives you both for free: it cancels the old task and starts a new one whenever the id changes.
+> **Under the hood.** *In plain words:* calling off a job only leaves the worker a note saying "stop"; the worker may finish before reading it. So the screen also checks that the picture it receives is still the one it wants.
+>
+> *The detail:* Cancelling in Swift concurrency is *cooperative*: cancelling a task only sets a flag, and the work stops at its next check. So a result can still arrive after you cancelled, which is why the "is this still my request?" check is needed on top of cancelling. SwiftUI's `.task(id:)` gives you both for free: it cancels the old task and starts a new one whenever the id changes.
 
 ### 2 · Image pipeline (`ImagePipeline`)
 
@@ -253,7 +256,9 @@ protocol ImagePrefetchingType: Sendable {
 
 **The choices inside it:** it's an **actor** that does bookkeeping only, never decoding, or every decode in the app would queue behind it. Prefetching is a **separate protocol**, so a detail screen showing one image doesn't depend on it. The core call is `async throws`, so cancelling comes free with the calling task, and non-UI code (share, export) and tests use the same path.
 
-> **Under the hood.** An *actor* is an object that runs one piece of its code at a time, so its data can't be changed by two threads at once. The catch is *re-entrancy*: whenever the actor waits (an `await`), other callers may run. So "check the table, wait for a download, then write the table" is not safe: two callers can both check before either writes. The fix, recording the running load *before* waiting, is deep dive 9.
+> **Under the hood.** *In plain words:* an actor is like a desk clerk who serves one person at a time, so two people never scribble on the same form at once. But while the clerk is on hold on a phone call, the next person in line may step up, so the clerk writes "already being handled" on the board *before* picking up the phone.
+>
+> *The detail:* An *actor* is an object that runs one piece of its code at a time, so its data can't be changed by two threads at once. The catch is *re-entrancy*: whenever the actor waits (an `await`), other callers may run. So "check the table, wait for a download, then write the table" is not safe: two callers can both check before either writes. The fix, recording the running load *before* waiting, is deep dive 9.
 
 ### 3 · Memory cache (`ImageMemoryCache`, inside the pipeline)
 
@@ -267,7 +272,8 @@ protocol ImagePrefetchingType: Sendable {
 protocol ImageMemoryCacheType: Sendable {
     /// Fast, safe to call from the main thread
     func image(for key: ImageKey) -> UIImage?
-    func store(_ image: UIImage, for key: ImageKey) // cost = the image's bytes
+    /// Cost = the image's bytes
+    func store(_ image: UIImage, for key: ImageKey)
     /// On memory warning
     func removeAll()
 }
@@ -275,7 +281,9 @@ protocol ImageMemoryCacheType: Sendable {
 
 **The choice inside it:** a least-recently-used cache with a **byte budget**, keyed by URL **plus pixel size**. *Rejected:* `NSCache`, a fine answer for one image screen, but its eviction order is undocumented and you can't remove one URL at every size. *Switch condition:* one screen, no purging by URL.
 
-> **Under the hood.** *LRU* (least recently used): when the cache is full, throw out what was used longest ago. It's built from a dictionary (find by key) plus a linked list ordered by use (find the oldest), so both are instant. The budget is in **bytes**, not item count, because one full-screen image can cost as much as a hundred thumbnails.
+> **Under the hood.** *In plain words:* a shelf with a fixed size: when it's full, the item nobody has touched for the longest goes first.
+>
+> *The detail:* *LRU* (least recently used): when the cache is full, throw out what was used longest ago. It's built from a dictionary (find by key) plus a linked list ordered by use (find the oldest), so both are instant. The budget is in **bytes**, not item count, because one full-screen image can cost as much as a hundred thumbnails.
 
 ### 4 · Disk cache (`ImageDiskCache`)
 
@@ -296,7 +304,9 @@ protocol ImageDiskCacheType: Sendable {
 
 **The choice inside it:** compressed bytes, keyed by **URL alone**, in `Library/Caches`. *Rejected:* `URLCache`, which obeys the server's cache headers, so `max-age=300` would mean "offline after five minutes".
 
-> **Under the hood.** Compressed bytes (JPEG, HEIC) are 10–50 times smaller than the decoded image, and decoding is fast next to downloading, so disk stores bytes and memory stores images. Files are named by a hash of the URL (so any URL makes a safe file name) and written *atomically*: to a temporary file, then renamed, so a crash never leaves half an image.
+> **Under the hood.** *In plain words:* pictures are kept on the phone in their small, packed form and unpacked only when shown, like clothes kept vacuum-packed in a drawer and shaken out when you wear them.
+>
+> *The detail:* Compressed bytes (JPEG, HEIC) are 10–50 times smaller than the decoded image, and decoding is fast next to downloading, so disk stores bytes and memory stores images. Files are named by a hash of the URL (so any URL makes a safe file name) and written *atomically*: to a temporary file, then renamed, so a crash never leaves half an image.
 
 ### 5 · Data loader, the protocol (`DataLoader`)
 
@@ -314,7 +324,13 @@ protocol DataLoader: Sendable {
 
 **The choice inside it:** it's the one protocol drawn on the board, because it's where the library grows. A new source (the Photos library, test fixtures) is a new conformance, never a `switch` inside the pipeline.
 
-> **Under the hood.** A protocol's contract is more than its signature. Every loader must also **stop when cancelled**, **never return half the bytes**, and be **safe to call from several tasks at once**. A loader that ignores cancellation still compiles, but breaks every caller that relies on it: that's the *Liskov substitution principle* in practice. Write the promises in the protocol's comment, and run the same tests against every loader.
+> **Under the hood.** *In plain words:* this card is **dependency inversion**. Think of a dispatcher hiring delivery drivers. The dispatcher (the pipeline) writes one **job description**, "given an address, bring back the file", and hires only against that. The drivers (the network and file loaders) each promise to fit the description; that's the dashed arrow pointing **up** at it. The dispatcher never needs to know which driver turned up, so you can add a new driver (the Photos library, a test driver with fake files) without changing the dispatcher at all. In one line: *the dispatcher depends on a job description, not on any particular driver, and every driver depends on the same description.*
+>
+> *The detail:* the pipeline (core) holds a `DataLoader`, never a `NetworkDataLoader`; the concrete loaders are created once when the library is set up and handed in. The dependency arrows all point at the protocol, so the core never imports networking or file code, and a test can pass a loader whose response it controls.
+
+> **Under the hood.** *In plain words:* every worker hired for the same job must behave the same way (stop when told, never hand over half a file) or the people relying on them get surprises.
+>
+> *The detail:* A protocol's contract is more than its signature. Every loader must also **stop when cancelled**, **never return half the bytes**, and be **safe to call from several tasks at once**. A loader that ignores cancellation still compiles, but breaks every caller that relies on it: that's the *Liskov substitution principle* in practice. Write the promises in the protocol's comment, and run the same tests against every loader.
 
 ### 6 · Network and file loaders (`NetworkDataLoader`, `FileDataLoader`)
 
@@ -326,7 +342,9 @@ protocol DataLoader: Sendable {
 
 **The choice inside it:** the network loader asks the CDN for a resized image (`?w=`), rounding the width up to a few buckets (160, 320, 640, 1280) so neighbouring sizes share one cached copy.
 
-> **Under the hood.** A *CDN* is a network of servers that keep copies of files close to users. One that can resize on request means the phone downloads a 640-pixel image instead of a 4000-pixel original: less data, less memory, less decoding. Rounding widths into buckets keeps the number of distinct copies small, so they're more likely to be cached.
+> **Under the hood.** *In plain words:* a chain of nearby warehouses that keep copies of each picture and can cut it down to size before sending it, so the phone downloads less.
+>
+> *The detail:* A *CDN* is a network of servers that keep copies of files close to users. One that can resize on request means the phone downloads a 640-pixel image instead of a 4000-pixel original: less data, less memory, less decoding. Rounding widths into buckets keeps the number of distinct copies small, so they're more likely to be cached.
 
 ### 7 · Image decoder (`ImageDecoder`)
 
@@ -344,7 +362,9 @@ protocol ImageDecoderType: Sendable {
 
 **The choice inside it:** decode **directly at the display size** with ImageIO, off the main thread, and decode immediately rather than at first draw. Details in deep dive 10.
 
-> **Under the hood.** A decoded image costs **width × height × 4 bytes** (one byte each for red, green, blue, transparency), whatever the file size. A 4032 × 3024 photo is a 2 MB JPEG but 49 MB decoded; at 300 × 300 pixels it's 0.36 MB. Shrinking during decoding means the large version never exists in memory.
+> **Under the hood.** *In plain words:* a packed photo might be 2 MB, but unpacked into dots for the screen it's about 49 MB. Shrinking it while unpacking means the big version never exists on the phone.
+>
+> *The detail:* A decoded image costs **width × height × 4 bytes** (one byte each for red, green, blue, transparency), whatever the file size. A 4032 × 3024 photo is a 2 MB JPEG but 49 MB decoded; at 300 × 300 pixels it's 0.36 MB. Shrinking during decoding means the large version never exists in memory.
 
 ### Why these seven, and not one ImageManager
 
