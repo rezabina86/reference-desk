@@ -728,7 +728,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
       mermaid.initialize({
         startOnLoad: false, securityLevel: 'strict', theme: 'base',
         fontFamily: "'IBM Plex Sans', -apple-system, sans-serif",
-        flowchart: { curve: 'basis', nodeSpacing: 36, rankSpacing: 46, padding: 14 },
+        flowchart: { curve: 'basis', nodeSpacing: 36, rankSpacing: 46, padding: 14, wrappingWidth: 320 },
         sequence: { mirrorActors: false, messageAlign: 'center', actorFontSize: 15, messageFontSize: 15, noteFontSize: 14 },
         themeVariables: {
           fontSize: '15px', background: cssVar('--panel'), primaryColor: cssVar('--raised'),
@@ -753,6 +753,14 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
           var div = document.createElement('div');
           div.className = 'board-svg';
           div.innerHTML = r.svg;
+          // Frame labels top-left, like a Miro frame, so arrows entering from above don't cross them.
+          Array.prototype.forEach.call(div.querySelectorAll('g.cluster'), function (c) {
+            var rect = c.querySelector('rect'), label = c.querySelector('.cluster-label');
+            if (!rect || !label) return;
+            var m = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)\s*\)/.exec(label.getAttribute('transform') || '');
+            if (!m) return;
+            label.setAttribute('transform', 'translate(' + (parseFloat(rect.getAttribute('x')) + 10) + ', ' + m[2] + ')');
+          });
           host.appendChild(div);
           pre.hidden = true;
         }).catch(function () { pre.hidden = false; });

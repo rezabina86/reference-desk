@@ -98,18 +98,18 @@ That's it: four sentences. If they stop you here, you've already shown the shape
 :::
 
 ::: 4 · What we need — the components, before the sketch
-List them out loud, in the order you'll draw them, with one job each. Writing this list on the side of the board first is what keeps the sketch tidy.
+List them out loud, in the order you'll draw them. Name each by **what it does**, not by its class name: the interviewer should understand the board without knowing Swift. The type name is a detail you mention while explaining it.
 
-| # | Component | Layer | Its one job |
-|---|---|---|---|
-| 1 | **FeedView** | Presentation | Shows the list. Sizes each cell from the post, not from the image. |
-| 2 | **FeedViewModel** | Presentation | Owns what's on screen: the posts, the loading state, the cursor. Decides when to load more. |
-| 3 | **FeedItem** | Domain | One post as a plain value: author, caption, like state, image URL **and its width and height**. |
-| 4 | **FeedRepository** (protocol) | Domain | The list of things the view model may ask for: a page, the new-post count, set a like. |
-| 5 | **FeedRepositoryImpl** | Data | Decides where posts come from: disk on launch and offline, network otherwise. |
-| 6 | **FeedAPI** | Data | Talks to the server: pages by cursor, like and unlike. |
-| 7 | **FeedStore** | Data | Keeps the last ~200 posts on disk so the app opens with content. |
-| 8 | **ImagePipeline** | Reused | Question 1's library. Cells ask it for pixels; nothing else touches images. |
+| # | Component | Type name | Layer | Its one job |
+|---|---|---|---|---|
+| 1 | **Feed screen** | `FeedView` | Presentation | Shows the list of posts. Sizes each row from the post, not from the image. |
+| 2 | **Feed view model** | `FeedViewModel` | Presentation | Owns what's on screen: the posts, the loading state, the cursor. Decides when to load more. |
+| 3 | **Post model** | `FeedItem` | Domain | One post as plain data: author, caption, like state, image URL **and its size**. |
+| 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | The list of things the view model may ask for: saved posts, a page, new-post count, a like. |
+| 5 | **Feed repository** (the real one) | `RemoteFeedRepository` | Data | Decides where posts come from (disk or network) and keeps the disk copy fresh. |
+| 6 | **API client** | `FeedAPI` | Data | Talks to the server: pages by cursor, like and unlike. |
+| 7 | **Local storage** | `FeedStore` | Data | Keeps the last ~200 posts on disk so the app opens with content. |
+| 8 | **Image loader** | `ImagePipeline` | Reused | Question 1's library. Rows ask it for pixels; nothing else touches images. |
 
 Then say what's deliberately **not** on the list yet: an outbox for offline likes, a shared post store for several screens, a socket for live posts. *"I'll add those if we go there."*
 :::
@@ -118,22 +118,22 @@ Then say what's deliberately **not** on the list yet: an outbox for offline like
 ```mermaid
 flowchart TB
   subgraph P["PRESENTATION"]
-    View["<b>1 · FeedView</b><br/>shows the list"] -- "appear · near end · refresh · like" --> VM["<b>2 · FeedViewModel</b><br/>posts · loading state · cursor"]
+    View["<b>1 · Feed screen</b><br/>FeedView"] -- "scroll · refresh · like" --> VM["<b>2 · Feed view model</b><br/>FeedViewModel"]
   end
   subgraph D["DOMAIN"]
-    Item["<b>3 · FeedItem</b><br/>plain struct · image size"]
-    Repo["«protocol»<br/><b>4 · FeedRepository</b>"]
+    Item["<b>3 · Post model</b><br/>FeedItem"]
+    Repo["<b>4 · Feed repository</b><br/>«protocol»"]
   end
   subgraph DA["DATA"]
-    Impl["<b>5 · FeedRepositoryImpl</b><br/>network or disk?"]
-    API["<b>6 · FeedAPI</b><br/>GET /feed?cursor="]
-    Store["<b>7 · FeedStore</b><br/>last 200 posts"]
+    Impl["<b>5 · Feed repository</b><br/>RemoteFeedRepository"]
+    API["<b>6 · API client</b><br/>FeedAPI"]
+    Store["<b>7 · Local storage</b><br/>FeedStore"]
   end
-  Pipe["<b>8 · ImagePipeline</b><br/>from question 1"]
-  VM -- "asks for pages" --> Repo
+  Pipe["<b>8 · Image loader</b><br/>from question 1"]
+  VM -- "asks for posts" --> Repo
   Repo -. "implemented by" .-> Impl
-  Impl --> API
-  Impl --> Store
+  Impl -- "network" --> API
+  Impl -- "disk" --> Store
   View -. "pixels" .-> Pipe
   class View,VM pres
   class Item,Repo dom
@@ -142,77 +142,175 @@ flowchart TB
   class Pipe reuse
 ```
 
+Each card is **what it does** in bold, with the type name underneath. A newcomer to the board reads the bold line; you say the type name as you point at it.
+
 **Drawing it on Miro, step by step** (about four minutes, talking the whole time):
 
 1. Three wide frames stacked top to bottom: **Presentation**, **Domain**, **Data**. Label them before putting anything in them.
-2. Fill them in the order of your list, one card per component, using one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image pipeline.
-3. Arrows last, and only four kinds: the view sends intents to the view model; the view model asks the repository protocol; the protocol is implemented by the data layer (dashed); the implementation uses the API and the store.
-4. Write «protocol» on the repository card. That one card is where dependency inversion shows: the view model only knows the protocol, and the data layer plugs in underneath it. *"Everything else is behind a protocol too, for tests. This is the one that defines the architecture."*
+2. Fill them in the order of your list, one card per component, one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image loader.
+3. Arrows last, and only four kinds: the screen sends what the user did to the view model; the view model asks the repository; the repository protocol is implemented in the data layer (dashed); the real repository uses the API client and local storage.
+4. Write «protocol» on the domain repository card. That card is where dependency inversion shows: the view model only knows the protocol, and the data layer plugs in underneath it. *"Everything else is behind a protocol too, for tests. This is the one that defines the architecture."*
 
-Eight cards, three frames, five arrows. If your board has more than that at minute 24, you've drawn something the interviewer didn't ask for.
+Eight cards, three frames, five arrows. Methods don't go on the board; they come up when the interviewer asks about a component, which is the next section.
 :::
 
-::: 6 · Each component, one at a time
-Point at each card and say what it owns, why it exists, and the choice you made inside it. This is where *"why MVVM?"* and *"why these layers?"* get answered.
+::: 6 · Each component: its job, its interface, the choice inside it
+Point at each card and cover three things: **what it owns**, **its interface** (what others can call or read, which is what an interviewer means by "what does this expose?"), and **the choice you made inside it**. The *Under the hood* notes are for learning; you won't recite them in the room, but they're what lets you answer the follow-up.
 
-### 1 · FeedView — shows the list, and nothing else
+### 1 · Feed screen (`FeedView`)
 
-It renders the array it's given and forwards taps and scroll position as intents. It never decides anything.
+**Owns:** nothing. It renders the posts it's given and reports what the user did.
 
-**UIKit or SwiftUI for the scroll?** `UICollectionView` with a diffable data source, wrapped in `UIViewControllerRepresentable`. It recycles cells, gives you `prefetchDataSource`, and has had a decade of tuning for exactly this. SwiftUI `List` is also backed by a collection view and recycles; `LazyVStack` creates views lazily but is widely reported to keep views it has created, so memory grows with distance scrolled. Apple doesn't document either behaviour, which is itself a reason to pick the one whose reuse you control. *Switch condition:* simple cells on iOS 18, where `List` profiles clean on the oldest supported phone. Then all-SwiftUI is less code and the right call.
+**Interface:** it's created with a view model, reads three things from it (`items`, `phase`, `newerAvailable`), and calls four (`onAppear`, `onNearEnd`, `refresh`, `toggleLike`). No other dependency: if the screen needs to know something, the view model exposes it.
 
-### 2 · FeedViewModel — owns the screen's state
+**The choice inside it:** `UICollectionView` with a diffable data source, wrapped in `UIViewControllerRepresentable`, because it recycles rows, has a prefetch callback, and has been tuned for this for a decade. *Rejected:* SwiftUI `LazyVStack`, which creates rows lazily but is widely reported to keep them, so memory grows with how far you scroll. *Switch condition:* simple rows on iOS 18, where `List` profiles clean on the oldest supported phone.
+
+> **Under the hood.** A collection view keeps only the rows on screen plus a few spare; when a row scrolls off, it's *reused* for the one scrolling on. That's why a row must never assume what it showed before, and why images are requested per row and cancelled on reuse. A *diffable data source* takes a list of IDs, works out what was inserted, removed or moved, and animates only that. It needs every ID to be unique, which is why duplicate posts must be filtered out (a duplicate crashes, rather than glitching).
+
+### 2 · Feed view model (`FeedViewModel`)
+
+**Owns:** everything the screen shows: the posts, the loading state, whether newer posts exist, and the cursor for the next page.
+
+**Interface:**
 
 ```swift
 @MainActor @Observable
 final class FeedViewModel {
-    private(set) var items: [FeedItem] = []
-    private(set) var phase: Phase = .idle
-    private(set) var newerAvailable = false
+    init(repository: FeedRepository)
 
-    enum Phase: Equatable {
-        case idle, loadingFirst, loadingMore, refreshing
-        case failed(FeedError), exhausted
-    }
+    /// What the list shows
+    private(set) var items: [FeedItem]
+    /// Idle, loading first / more, refreshing, failed, no more pages
+    private(set) var phase: Phase
+    /// Drives the "new posts" pill
+    private(set) var newerAvailable: Bool
 
+    /// Saved posts, then page 1
     func onAppear() async
-    func onNearEnd() async          // the only pagination trigger
+    /// The only way the next page loads
+    func onNearEnd() async
+    /// Pull to refresh
     func refresh() async
+    /// Optimistic, see deep dive 11
     func toggleLike(_ id: PostID)
 }
 ```
 
-- **One `phase`, not five booleans.** Separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed. An enum makes them unrepresentable, and it's the guard the load-more deep dive leans on.
-- **`@MainActor`, because the view reads it every frame.** All changes happen on one actor, so "check, then set" needs no lock. Network and JSON decoding happen elsewhere and come back as finished values.
-- **`@Observable`, not `ObservableObject`.** A view re-renders only when a property it actually read changes. *Switch condition:* below iOS 17, `ObservableObject`, careful about what's `@Published`.
+**The choices inside it:**
 
-**Why MVVM, said honestly.** The view model is what makes the feed testable without a view: give it a fake repository, call `onNearEnd()` twice, assert one request. *Rejected:* a single reducer store (TCA-style). It buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
+- **One `phase`, not five booleans.** Separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed at once. One value with six cases can't.
+- **On the main actor**, because the screen reads it every frame. Every change happens in one place, so "is it already loading? if not, start" needs no lock.
+- **Why MVVM.** The view model is what makes the feed testable without a screen: give it a fake repository, call `onNearEnd()` twice, check one request went out. *Rejected:* a single reducer store (TCA-style), which buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
 
-### 3 · FeedItem — a post, as a plain value
+> **Under the hood.** `@Observable` (iOS 17) makes SwiftUI track exactly which properties a view *read* while drawing, and redraw that view only when one of those changes. A row that reads one post's like count isn't redrawn when `phase` flips. The older `ObservableObject` redraws every listener on any `@Published` change. `@MainActor` means "all of this runs on the main thread", enforced by the compiler, so the UI never reads half-updated state.
 
-A `Sendable` struct of strings, numbers and URLs, about a kilobyte. Ten thousand of them is about 10 MB, which is fine. **It never holds a `UIImage`:** a decoded photo is 1–4 MB, and that's how feeds get killed. The image's width and height are in it, because they decide the cell's height.
+### 3 · Post model (`FeedItem`)
 
-### 4 · FeedRepository — the protocol in the middle
+**Owns:** one post's data. No behaviour.
 
-The only thing the view model knows about where data comes from. Three methods: a page after a cursor, how many newer posts exist, set a like. It's what a test replaces with a fake, and it's why the data layer can change (a database instead of a file, GraphQL instead of REST) without the view model noticing.
+**Interface:**
 
-**Why no use-case classes here?** Each one would just forward a call to the repository. *Switch condition:* real logic that belongs to neither the screen nor the data, such as combining two repositories.
+```swift
+struct FeedItem: Identifiable, Hashable, Sendable {
+    let id: PostID
+    /// Name, avatar URL
+    let author: Author
+    let caption: String
+    /// URL, pixel width, pixel height, placeholder colour
+    let image: ImageRef
+    var likeCount: Int
+    var likedByMe: Bool
+}
+```
 
-### 5 · FeedRepositoryImpl — network or disk?
+**The choice inside it:** **no `UIImage` in the model.** The image's width and height are in it, because they decide the row's height before any pixel arrives.
 
-On launch it returns the stored feed at once, then the first network page behind it. After every successful first page it rewrites the store. It's also where JSON is decoded and dates are formatted, off the main actor, so the view model receives finished values.
+> **Under the hood.** A post as data is about a kilobyte, so ten thousand of them is about 10 MB. A decoded photo is width × height × 4 bytes: a 12-megapixel photo is about 48 MB. Put images in the model and the model's memory grows with every post scrolled past; leave them to the image loader, whose cache has a fixed budget, and memory stays flat. `Sendable` means the struct can safely be handed from a background task to the main actor, which is how a page travels from the network to the screen.
 
-### 6 · FeedAPI — the server, by cursor
+### 4 · Feed repository, the protocol (`FeedRepository`)
 
-Pages by an opaque cursor, likes as idempotent `PUT` and `DELETE`. The details are in the API section; the one line to say here is *"cursor, not offset, because new posts at the top would shift every page."*
+**Owns:** nothing. It's a list of promises the data layer makes to the view model.
 
-### 7 · FeedStore — the copy on disk
+**Interface:**
 
-The first ~200 posts and the cursor after them, one Codable file written atomically. *Rejected:* SwiftData or SQLite. They earn their place only when other screens query posts.
+```swift
+protocol FeedRepository: Sendable {
+    /// What we stored last time, instantly
+    func savedFeed() async -> [FeedItem]
+    /// Posts + next cursor (nil = no more)
+    func page(after cursor: Cursor?) async throws -> FeedPage
+    /// For the "new posts" pill
+    func newCount(since token: HeadToken) async throws -> Int
+    /// Like / unlike
+    func setLiked(_ liked: Bool, post: PostID) async throws
+}
+```
 
-### 8 · ImagePipeline — reused, not redesigned
+**The choice inside it:** this is the one protocol drawn on the board. The view model depends on it, never on the real repository, so a test can swap in a fake, and the data layer can change (a database instead of a file, GraphQL instead of REST) without the view model noticing. *Rejected:* use-case classes between the two (`LoadNextPageUseCase`…); each would only forward a call. *Switch condition:* real logic that belongs to neither the screen nor the data, such as combining two repositories.
 
-Cells ask it for exactly the pixel size they show; it downsamples, caches and prefetches. Say *"that's question 1"* and don't spend another minute on it. The point to make is the boundary: **the model carries URLs and sizes; only cells ever hold pixels.**
+> **Under the hood.** This is *dependency inversion*: the higher layer (presentation) defines what it needs as a protocol in the domain, and the lower layer (data) conforms to it. The arrow of dependency points *up* from data to domain, so the screen's code never imports anything about networking. In practice it's what makes the view model unit-testable.
+
+### 5 · Feed repository, the real one (`RemoteFeedRepository`)
+
+**Owns:** the decision of where posts come from, and keeping the disk copy fresh.
+
+**Interface:** it conforms to `FeedRepository` (above) and is built from the two things it coordinates: `init(api: FeedAPIType, store: FeedStoreType)`. Nothing else is public.
+
+**The choices inside it:** `savedFeed()` reads local storage; `page(after: nil)` fetches page 1 and, on success, rewrites the saved copy; later pages come from the network only. JSON decoding and date formatting happen here, off the main actor, so the view model receives finished values.
+
+> **Under the hood.** The *repository pattern* puts one object between the app and all its data sources, so callers ask for "posts", never "posts from the network". It's also where you decide what counts as the truth: here the server is, and the disk is only a copy for opening fast and offline. (An app that edits data offline flips that, and the disk becomes the truth.)
+
+### 6 · API client (`FeedAPI`)
+
+**Owns:** the HTTP details: URLs, headers, auth, turning JSON into data.
+
+**Interface:**
+
+```swift
+protocol FeedAPIType: Sendable {
+    func feed(cursor: Cursor?, limit: Int) async throws -> FeedPageResponse
+    func newCount(since token: HeadToken) async throws -> Int
+    /// PUT or DELETE
+    func setLiked(_ liked: Bool, post: PostID) async throws
+}
+```
+
+**The choice inside it:** pages by **cursor**, likes as **idempotent** `PUT` and `DELETE`. The exact endpoints are in section 8.
+
+> **Under the hood.** *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
+
+### 7 · Local storage (`FeedStore`)
+
+**Owns:** the last ~200 posts and the cursor after them, on disk.
+
+**Interface:**
+
+```swift
+protocol FeedStoreType: Sendable {
+    /// Posts + cursor, or nil on first launch
+    func load() async -> SavedFeed?
+    /// After each successful page 1
+    func save(_ feed: SavedFeed) async
+    /// On logout
+    func clear() async
+}
+```
+
+**The choice inside it:** one `Codable` file, written atomically. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
+
+> **Under the hood.** An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix. The file belongs in `Library/Caches`: it's a copy that can always be downloaded again, and the system may empty that folder when storage runs low, so the code treats a missing file as "first launch", never as an error.
+
+### 8 · Image loader (`ImagePipeline`, from question 1)
+
+**Owns:** everything about pixels: downloading, shrinking to the row's size, caching.
+
+**Interface** (the part this feed uses): `image(for: ImageRequest) async throws -> UIImage`, plus `prefetch(_:)` and `cancelPrefetch(_:)` for the rows about to appear. An `ImageRequest` is a URL plus the pixel size the row will show.
+
+**The choice:** reuse it, don't redesign it. Say *"that's question 1"* and move on. The boundary is the point: **the model carries URLs and sizes; only rows ever hold pixels.**
+
+### Why these eight, and not fewer
+
+Each changes for a different reason: the screen with the design, the view model with the screen's behaviour, the repository with where data lives, the API client with the server, local storage with the storage format. One "FeedManager" would change for all of them. *"I split where the reasons to change differ, not per noun."*
 :::
 
 ::: 7 · One request through the sketch
@@ -220,33 +318,34 @@ Now trace one real flow across the cards you drew, so the interviewer sees them 
 
 ```mermaid
 sequenceDiagram
-  participant V as FeedView
-  participant VM as FeedViewModel
-  participant R as FeedRepository
-  participant S as FeedStore
-  participant A as FeedAPI
+  participant V as Feed screen
+  participant VM as Feed view model
+  participant R as Feed repository
+  participant S as Local storage
+  participant A as API client
   V->>VM: onAppear()
+  VM->>R: savedFeed()
+  R->>S: load()
+  S-->>R: 200 saved posts
+  R-->>VM: shown at once
   VM->>R: page(after: nil)
-  R->>S: read saved feed
-  S-->>R: saved posts
-  R-->>VM: 200 saved posts, shown at once
-  R->>A: GET /feed
-  A-->>R: page 1 + nextCursor
-  R->>S: save page 1
+  R->>A: feed(cursor: nil)
+  A-->>R: page 1 + next cursor
+  R->>S: save(page 1)
   R-->>VM: page 1 replaces saved posts
-  Note over V,VM: user scrolls to ~5 posts from the end
+  Note over V,VM: user scrolls to about 5 posts from the end
   V->>VM: onNearEnd()
   VM->>R: page(after: cursor)
-  R->>A: GET /feed?cursor=…
+  R->>A: feed(cursor: cursor)
   A-->>R: page 2
   R-->>VM: page 2, appended by id
 ```
 
-In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Each cell sizes itself from the post's image dimensions and asks the image pipeline for pixels on its own.
+In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Every arrow is a method from the interfaces in section 6.
 :::
 
-::: 8 · API and data model
-**The server contract — cursor pages.**
+::: 8 · The server contract
+The interface between the app and the backend. This is the API every mobile design round asks for.
 
 ```
 GET /v1/feed?cursor={opaque}&limit=20
@@ -264,30 +363,10 @@ PUT    /v1/posts/{id}/like              → 204   (idempotent)
 DELETE /v1/posts/{id}/like              → 204   (idempotent)
 ```
 
-- **Cursor, not offset — the reason in one sentence:** with `?page=3`, five new posts at the top shift everything down, so page 3 repeats five posts you've seen; with a cursor, the server answers "the next 20 after *this one*", and insertions above it change nothing. Deletions don't open gaps either. The cursor is **opaque** — the client never parses it, so the server can change ranking without a client release.
-- **Width and height in the payload.** The cell sizes itself from the aspect ratio before the image exists, so nothing jumps when it arrives. The placeholder colour (or a BlurHash string) fills that box meanwhile. If the server can't provide dimensions, that's the first thing to ask for — it's cheaper than any client workaround.
-- **Like as PUT and DELETE, never "toggle".** "Set liked = true" sent twice is still liked. "Toggle" sent twice by a retry is unliked. Idempotent writes make retries and offline replays safe.
-
-**Local model.**
-
-```swift
-struct FeedItem: Identifiable, Hashable, Sendable {
-    let id: PostID
-    let author: Author
-    let caption: String
-    let image: ImageRef          // url, pixel width, height, placeholder
-    var likeCount: Int
-    var likedByMe: Bool
-}
-
-protocol FeedRepository: Sendable {          // the one seam on the board
-    func page(after cursor: Cursor?) async throws -> FeedPage
-    func newCount(since token: HeadToken) async throws -> Int
-    func setLiked(_ liked: Bool, post: PostID) async throws
-}
-```
-
-**On disk:** the first ~200 posts and the cursor that follows them, written after each successful first-page load. A Codable file written atomically is enough for one screen; SwiftData or SQLite earns its place only if other screens query posts. Say which you'd pick and why — both are defensible.
+- **Cursor, not offset.** With `?page=3`, five new posts at the top shift everything down, so page 3 repeats five you've seen; a cursor asks for "the next 20 after *this one*", and insertions above it change nothing. The cursor is **opaque**: the client never parses it, so the server can change ranking without an app release.
+- **Width and height in the payload.** The row sizes itself from the aspect ratio before the image exists, so nothing jumps when it arrives; the placeholder colour fills the box meanwhile. If the server can't provide dimensions, ask for them first. It's cheaper than any client workaround.
+- **Like as PUT and DELETE, never "toggle".** Retries and offline replays are then safe.
+- **`headToken`** pins what "newest" meant when the session started, so "how many are new?" has a stable answer.
 :::
 
 ::: 9 · Deep dive — "The user flings to the bottom. Walk me through loading more."

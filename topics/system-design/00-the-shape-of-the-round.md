@@ -5,11 +5,16 @@ minutes: 6
 sources:
 - weeeBox · Mobile System Design (the public exercise set and its grading criteria) | https://github.com/weeeBox/mobile-system-design
 - System Design Handbook · Mobile system design interview | https://www.systemdesignhandbook.com/guides/mobile-system-design-interview/
+- ByteByteGo · A framework for mobile system design interviews | https://bytebytego.com/courses/mobile-system-design-interview/a-framework-for-mobile-sd-interviews
 ---
 
 At senior level this is usually the round that decides the outcome, and it is the one where knowing
 the material and passing come apart most often. What's graded is how you run 45 minutes, out loud,
 while someone interrupts you.
+
+The chapters are also meant to be **learned from**, not only rehearsed: every component comes with
+an *Under the hood* note explaining the concept behind it (what an actor is, why a cursor beats an
+offset, what a decoded image costs), so the answer makes sense even the first time through.
 
 So every question here is written to be **performed, not read**. The prompt is at the top; the
 whole answer is behind collapsed sections, in the order a real round unfolds — including the
@@ -77,10 +82,15 @@ next one easy to follow, which is what the interviewer is grading.
 1. **Say the idea (1 min).** Four sentences in plain words, before any box. If they stop you here,
    they already know the shape of the answer.
 2. **List what you need (2 min).** The components, in the order you'll draw them, one job each.
+   Name each by **what it does** ("feed repository", "image loader", "local storage"), not by its
+   class name; the public guides interviewers use name components by role for the same reason.
    Write the list on the side of the board.
 3. **Sketch them (4 min).** Three frames, one card per item on the list, arrows last.
-4. **Explain each one (4 min).** Point at each card: what it owns, why it exists, the choice inside it
-   and the alternative you rejected. This is where "why MVVM?" gets answered.
+4. **Explain each one (4 min).** Point at each card: what it owns, **its interface** (what others can
+   call or read), the choice inside it and the alternative you rejected. This is where "why MVVM?"
+   gets answered. Methods never go on the board itself; the public frameworks keep the diagram at
+   the level of roles and bring interfaces in when a component is discussed, and the
+   client↔server API and data models are always asked for.
 5. **Trace one request (1 min).** One real flow across the cards, so they see them work together.
 
 ## Keep the whiteboard simple
@@ -94,6 +104,8 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
   `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
   A library question (an image loader, an analytics SDK) isn't an app, so it gets three layers of its
   own instead: *API* (what callers touch), *core* (the coordinator), *I/O* (loaders, caches, codecs).
+- **Each card: the role in bold, the type name underneath.** Someone who doesn't know Swift should
+  still be able to read the board.
 - **About seven or eight cards**, at most three side by side. Something that lives inside another
   component (a cache the coordinator owns) is written inside that card. Anything reused from an
   earlier question is one dashed card, not its insides.
@@ -142,11 +154,12 @@ answer. Then, collapsed:
 1. The interviewer answers your clarifying questions
 2. Requirements and scope — what you should have said
 3. The idea, in 30 seconds — what you say before drawing anything
-4. What we need — the components, in drawing order, one job each
+4. What we need — the components, in drawing order: role, type name, layer, one job
 5. The sketch — the diagram, and how to draw it on your own board step by step
-6. Each component, one at a time — what it owns, why, the choice inside it (SOLID, out loud)
-7. One request through the sketch — a sequence diagram of one real flow
-8. API and data model
+6. Each component — what it owns, **its interface**, the choice inside it, and an *Under the hood*
+   note that teaches the concept
+7. One request through the sketch — a sequence diagram whose every arrow is a method from section 6
+8. The server contract — endpoints and payloads
 9–11. Deep dives, each opened by the line the interviewer would actually use
 12. Failure modes and 10×
 13. Question bank — every area they can push on, grouped by the checklist above, each answer
