@@ -45,6 +45,24 @@ It looks like a question about caching. It isn't, quite.
 
 **Traps:** drifting into CDN and backend design; describing a cache with no eviction; forgetting cancellation entirely; naming Kingfisher's features instead of designing; decoding on the main actor without noticing.
 
+::: Words used in this chapter
+Plain definitions for the technical words this chapter uses. Read once; come back when a word stops you.
+
+- **URL** — the web address of a picture.
+- **Library** — reusable code other parts of the app call; here, the code that loads every picture in the app.
+- **Pixel** — one coloured dot on the screen. A picture's size in pixels is how many dots wide and tall it is.
+- **Decode** — a picture arrives compressed (a JPEG or HEIC file); decoding unpacks it into pixels the screen can draw. Unpacked, it's many times bigger: width × height × 4 bytes.
+- **Memory vs disk** — *memory* is the phone's fast, small working space, emptied when the app closes; *disk* is its slower, larger storage that survives.
+- **Cache** — a kept copy of something fetched before, so it's instant next time. *Eviction* is throwing old entries out when it's full.
+- **CDN** — a network of servers that keep copies of files close to users; this one can also resize a picture before sending it.
+- **Main thread** — the single lane that draws the screen. Slow work there (like decoding) freezes scrolling, so it's done elsewhere.
+- **Actor** — a part that handles one request at a time, so two requests can never trample the same data.
+- **Protocol** — a written promise of what a part can do, without how. Anything that keeps the promise can be plugged in.
+- **Cancel** — stopping work nobody needs any more, such as a download for a row that scrolled away.
+- **Prefetch** — fetching pictures just before they come into view, so they're already there.
+- **Offline** — no internet connection.
+:::
+
 ::: 1 · The interviewer answers your clarifying questions
 Ask yours first. These are the answers you'd get, and the assumptions the rest of this chapter runs on.
 
@@ -108,13 +126,13 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 
 | # | Component | Type name | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Image view helpers** | `setImage` · `LazyImage` | API | What a `UIImageView` or SwiftUI view calls. Cancels its request when the row is reused. |
-| 2 | **Image pipeline** | `ImagePipeline` | Core | The coordinator: check memory, join a load already running, or start one. |
-| 3 | **Memory cache** | `ImageMemoryCache` | Core | Ready-to-draw images, by URL **and** size, within a memory budget. Owned by the pipeline. |
-| 4 | **Disk cache** | `ImageDiskCache` | I/O | Downloaded bytes, by URL alone, so images still show offline. |
-| 5 | **Data loader** (protocol) | `DataLoader` | I/O | "Give me the bytes for this URL", whatever the source. |
-| 6 | **Network and file loaders** | `NetworkDataLoader` · `FileDataLoader` | Sources | The two ways bytes arrive: the CDN, or a file on disk or in the app. |
-| 7 | **Image decoder** | `ImageDecoder` | I/O | Turns bytes into an image at the display size, off the main thread. |
+| 1 | **Image view helpers** | `setImage` · `LazyImage` | API | The one line a screen calls to say "show this picture here". Calls it off if the row scrolls away. |
+| 2 | **Image pipeline** | `ImagePipeline` | Core | The dispatcher: is the picture ready, is someone already fetching it, or send someone. |
+| 3 | **Memory cache** | `ImageMemoryCache` | Core | A small, fast shelf of ready-to-show pictures in the phone's memory. Lives inside the dispatcher. |
+| 4 | **Disk cache** | `ImageDiskCache` | I/O | A bigger, slower drawer of downloaded files on the phone, so seen pictures show offline. |
+| 5 | **Data loader** (protocol) | `DataLoader` | I/O | The job description "get the file at this address", written once for every source. |
+| 6 | **Network and file loaders** | `NetworkDataLoader` · `FileDataLoader` | Sources | The two workers who do that job: one downloads from the internet, one reads from the phone. |
+| 7 | **Image decoder** | `ImageDecoder` | I/O | Unpacks the downloaded file into a picture the screen can draw, at the size it's shown. |
 
 And what's deliberately **not** on the list yet: prefetching, revalidation, Low Data Mode, the disk index. *"I'll add those if we go there."*
 :::
@@ -126,7 +144,7 @@ flowchart TB
     Call["<b>1 · Image view helpers</b><br/>setImage · LazyImage"]
   end
   subgraph C["CORE"]
-    Pipe["<b>2 · Image pipeline</b><br/>ImagePipeline (actor)<br/>holds <b>3 · Memory cache</b>"]
+    Pipe["<b>2 · Image pipeline</b><br/>ImagePipeline (actor)<br/>contains card 3: <b>Memory cache</b>"]
   end
   subgraph IO["I/O"]
     Disk["<b>4 · Disk cache</b><br/>ImageDiskCache"]
@@ -178,6 +196,8 @@ struct ImageRequest: Hashable, Sendable {
 
 ### 1 · Image view helpers (`setImage`, `LazyImage`)
 
+**In plain words:** the single line a screen calls to say "show the picture at this address, at this size, here". If the row it was for scrolls away before the picture arrives, it calls the job off so no time is wasted.
+
 **Owns:** the link between one view and its current request.
 
 **Interface:**
@@ -199,6 +219,8 @@ struct LazyImage: View {
 > **Under the hood.** Cancelling in Swift concurrency is *cooperative*: cancelling a task only sets a flag, and the work stops at its next check. So a result can still arrive after you cancelled, which is why the "is this still my request?" check is needed on top of cancelling. SwiftUI's `.task(id:)` gives you both for free: it cancels the old task and starts a new one whenever the id changes.
 
 ### 2 · Image pipeline (`ImagePipeline`)
+
+**In plain words:** the dispatcher every request goes through. It checks whether the picture is already on the ready shelf, whether someone is already fetching that same picture (then it simply waits for them), and otherwise sends someone to get it.
 
 **Owns:** the coordination: which images are cached, which are loading, who is waiting for each.
 
@@ -223,6 +245,8 @@ protocol ImagePrefetchingType: Sendable {
 
 ### 3 · Memory cache (`ImageMemoryCache`, inside the pipeline)
 
+**In plain words:** a small, fast shelf of pictures ready to show, kept in the phone's working memory. It has a fixed size; when it's full, the picture unused the longest is thrown out to make room.
+
 **Owns:** decoded, ready-to-draw images.
 
 **Interface:**
@@ -243,6 +267,8 @@ protocol ImageMemoryCacheType: Sendable {
 
 ### 4 · Disk cache (`ImageDiskCache`)
 
+**In plain words:** a bigger but slower drawer on the phone's storage that keeps the downloaded files themselves. Pictures you've seen before come from here instead of the internet, which is also how they still appear offline.
+
 **Owns:** downloaded, still-compressed bytes on disk.
 
 **Interface:**
@@ -262,6 +288,8 @@ protocol ImageDiskCacheType: Sendable {
 
 ### 5 · Data loader, the protocol (`DataLoader`)
 
+**In plain words:** a job description: "given an address, bring back the file". It's written once, so anything that can do that job (the internet, the phone's own storage, a test) can be plugged in.
+
 **Owns:** nothing. It's the promise every source makes.
 
 **Interface:**
@@ -278,6 +306,8 @@ protocol DataLoader: Sendable {
 
 ### 6 · Network and file loaders (`NetworkDataLoader`, `FileDataLoader`)
 
+**In plain words:** the two workers who do that job: one downloads files from the internet, the other reads files already on the phone or packed inside the app.
+
 **Owns:** one source each.
 
 **Interface:** both conform to `DataLoader`; nothing else is public. They differ only in what they're built from: `NetworkDataLoader(session: URLSession)`, `FileDataLoader(fileManager: FileManager)`.
@@ -287,6 +317,8 @@ protocol DataLoader: Sendable {
 > **Under the hood.** A *CDN* is a network of servers that keep copies of files close to users. One that can resize on request means the phone downloads a 640-pixel image instead of a 4000-pixel original: less data, less memory, less decoding. Rounding widths into buckets keeps the number of distinct copies small, so they're more likely to be cached.
 
 ### 7 · Image decoder (`ImageDecoder`)
+
+**In plain words:** a downloaded picture is a compressed file, like a zipped folder. The decoder unpacks it into the grid of coloured dots the screen draws, and shrinks it to the size it will be shown while doing so.
 
 **Owns:** turning compressed bytes into a drawable image.
 

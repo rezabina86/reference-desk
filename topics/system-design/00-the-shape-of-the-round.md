@@ -15,6 +15,10 @@ while someone interrupts you.
 The chapters are also meant to be **learned from**, not only rehearsed: every component comes with
 an *Under the hood* note explaining the concept behind it (what an actor is, why a cursor beats an
 offset, what a decoded image costs), so the answer makes sense even the first time through.
+They're written to be readable by someone who doesn't code, too: each chapter opens with a **Words
+used in this chapter** glossary, the component table describes every part in plain words, and
+every component starts with an **In plain words** line and an everyday comparison before any
+technical detail.
 
 So every question here is written to be **performed, not read**. The prompt is at the top; the
 whole answer is behind collapsed sections, in the order a real round unfolds — including the
@@ -149,15 +153,15 @@ feature flags, testing and rollout — one sentence each is enough for the last 
 ## How each chapter is laid out
 
 Visible: the prompt, the clock, and **what the question is really testing** — the framing, not the
-answer. Then, collapsed:
+answer. Then, collapsed: a **Words used in this chapter** glossary, and the answer:
 
 1. The interviewer answers your clarifying questions
 2. Requirements and scope — what you should have said
 3. The idea, in 30 seconds — what you say before drawing anything
 4. What we need — the components, in drawing order: role, type name, layer, one job
 5. The sketch — the diagram, and how to draw it on your own board step by step
-6. Each component — what it owns, **its interface**, the choice inside it, and an *Under the hood*
-   note that teaches the concept
+6. Each component — **in plain words** first, then what it owns, **its interface**, the choice inside
+   it, and an *Under the hood* note that teaches the concept
 7. One request through the sketch — a sequence diagram whose every arrow is a method from section 6
 8. The server contract — endpoints and payloads
 9–11. Deep dives, each opened by the line the interviewer would actually use

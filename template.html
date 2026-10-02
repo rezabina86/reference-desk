@@ -492,6 +492,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
   background:var(--panel) radial-gradient(var(--rule) 1px, transparent 1.2px) 0 0/18px 18px; overflow-x:auto}
 .board-src{margin:0; font:12px/1.5 var(--mono); color:var(--muted); white-space:pre; background:none}
 .board-svg svg{display:block; margin:0 auto; max-width:100%; height:auto}
+.board-svg foreignObject{overflow:visible}
 </style>
 
 <div class="shell">
@@ -724,10 +725,18 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     if (!srcs.length) return;
     mermaidLib = mermaidLib || import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')
       .then(function (m) { return m.default; });
-    mermaidLib.then(function (mermaid) {
+    // Mermaid sizes every box by measuring its label. Measure with the real web font, or the box is
+    // sized for the fallback face and the label is clipped once Plex Sans arrives.
+    var fontsReady = document.fonts && document.fonts.load
+      ? Promise.all(['400 15px "IBM Plex Sans"', '600 15px "IBM Plex Sans"'].map(function (f) {
+          return document.fonts.load(f);
+        })).then(function () { return document.fonts.ready; }).catch(function () {})
+      : Promise.resolve();
+    Promise.all([mermaidLib, fontsReady]).then(function (r) { return r[0]; }).then(function (mermaid) {
       mermaid.initialize({
         startOnLoad: false, securityLevel: 'strict', theme: 'base',
         fontFamily: "'IBM Plex Sans', -apple-system, sans-serif",
+        themeCSS: 'b, strong { font-weight: 600; }',
         flowchart: { curve: 'basis', nodeSpacing: 36, rankSpacing: 46, padding: 14, wrappingWidth: 320 },
         sequence: { mirrorActors: false, messageAlign: 'center', actorFontSize: 15, messageFontSize: 15, noteFontSize: 14 },
         themeVariables: {

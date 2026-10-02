@@ -43,6 +43,25 @@ It looks like a question about lists. It is a question about **three clocks runn
 
 **Traps:** offset pagination; inserting new posts at the top while the user is reading; holding `UIImage`s in the model; a like button that flickers back when the feed refreshes; designing the ranking algorithm.
 
+::: Words used in this chapter
+Plain definitions for the technical words this chapter uses. Read once; come back when a word stops you.
+
+- **App, server, API** — the *app* runs on the phone; the *server* is the company's computer that stores every post; the *API* is the agreed set of requests the app may send it (like the forms a counter clerk accepts).
+- **Endpoint** — one specific request the API accepts, such as "give me the next posts".
+- **Feed, page** — the *feed* is the endless list of posts; it arrives in *pages* of about 20 at a time, so the app never downloads everything at once.
+- **Cursor** — a bookmark the server hands back with each page, meaning "you stopped here". The app sends it back to get the page after it.
+- **Layer** — a group of parts with the same kind of job. Here: *presentation* (what you see), *domain* (the plain description of the data and what may be asked for), *data* (where the data actually comes from).
+- **View model** — the part that holds a screen's current state and decisions, separate from the drawing of it.
+- **Model** — a plain description of one thing (a post), with no behaviour.
+- **Protocol** — a written promise of what a part can do, without how. Any part that keeps the promise can stand in, including a fake one in a test.
+- **Repository** — the one place the app asks for data, which hides whether it came from the server or the phone.
+- **Cache** — a kept copy of something fetched before, so it's instant next time.
+- **Main thread / main actor** — the single lane that draws the screen. Slow work there freezes scrolling, so it's kept short.
+- **Optimistic update** — showing the result of a tap (the red heart) immediately, before the server confirms, and undoing it if the server says no.
+- **Idempotent** — a request that has the same effect sent once or twice ("set liked to yes"), so repeating it after a network blip is safe.
+- **Decode, pixel** — a photo arrives compressed (a JPEG); *decoding* unpacks it into the grid of coloured dots (*pixels*) the screen draws. Unpacked, it's many times bigger.
+:::
+
 ::: 1 · The interviewer answers your clarifying questions
 Ask yours first. These are the answers you'd get, and the assumptions the rest of this chapter runs on.
 
@@ -102,14 +121,14 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 
 | # | Component | Type name | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Feed screen** | `FeedView` | Presentation | Shows the list of posts. Sizes each row from the post, not from the image. |
-| 2 | **Feed view model** | `FeedViewModel` | Presentation | Owns what's on screen: the posts, the loading state, the cursor. Decides when to load more. |
-| 3 | **Post model** | `FeedItem` | Domain | One post as plain data: author, caption, like state, image URL **and its size**. |
-| 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | The list of things the view model may ask for: saved posts, a page, new-post count, a like. |
-| 5 | **Feed repository** (the real one) | `RemoteFeedRepository` | Data | Decides where posts come from (disk or network) and keeps the disk copy fresh. |
-| 6 | **API client** | `FeedAPI` | Data | Talks to the server: pages by cursor, like and unlike. |
-| 7 | **Local storage** | `FeedStore` | Data | Keeps the last ~200 posts on disk so the app opens with content. |
-| 8 | **Image loader** | `ImagePipeline` | Reused | Question 1's library. Rows ask it for pixels; nothing else touches images. |
+| 1 | **Feed screen** | `FeedView` | Presentation | The part of the app you see and scroll. Draws the posts; reports scrolls, pulls and taps. |
+| 2 | **Feed view model** | `FeedViewModel` | Presentation | The screen's brain: which posts are shown, whether it's loading, when to fetch more. |
+| 3 | **Post model** | `FeedItem` | Domain | A description of one post: who, the caption, the likes, and where the photo is and how big. |
+| 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | A written list of what the screen's brain may ask for, without saying how it's done. |
+| 5 | **Feed repository** (the real one) | `RemoteFeedRepository` | Data | Does what that list promises: answers from the copy on the phone or asks the server. |
+| 6 | **API client** | `FeedAPI` | Data | The messenger to the company's servers: fetches pages of posts, sends likes. |
+| 7 | **Local storage** | `FeedStore` | Data | A notebook on the phone with the last 200 posts, so the app opens even without internet. |
+| 8 | **Image loader** | `ImagePipeline` | Reused | The photo library from question 1: fetches photos, shrinks them, remembers them. |
 
 Then say what's deliberately **not** on the list yet: an outbox for offline likes, a shared post store for several screens, a socket for live posts. *"I'll add those if we go there."*
 :::
@@ -159,6 +178,8 @@ Point at each card and cover three things: **what it owns**, **its interface** (
 
 ### 1 · Feed screen (`FeedView`)
 
+**In plain words:** the part of the app you actually see and scroll. It draws the posts it's handed and tells the rest of the app what you did: scrolled near the bottom, pulled down to refresh, tapped a heart. Like a shop window: it shows things, it doesn't decide what's in stock.
+
 **Owns:** nothing. It renders the posts it's given and reports what the user did.
 
 **Interface:** it's created with a view model, reads three things from it (`items`, `phase`, `newerAvailable`), and calls four (`onAppear`, `onNearEnd`, `refresh`, `toggleLike`). No other dependency: if the screen needs to know something, the view model exposes it.
@@ -168,6 +189,8 @@ Point at each card and cover three things: **what it owns**, **its interface** (
 > **Under the hood.** A collection view keeps only the rows on screen plus a few spare; when a row scrolls off, it's *reused* for the one scrolling on. That's why a row must never assume what it showed before, and why images are requested per row and cancelled on reuse. A *diffable data source* takes a list of IDs, works out what was inserted, removed or moved, and animates only that. It needs every ID to be unique, which is why duplicate posts must be filtered out (a duplicate crashes, rather than glitching).
 
 ### 2 · Feed view model (`FeedViewModel`)
+
+**In plain words:** the screen's brain. It keeps the list of posts currently shown, knows whether something is loading or failed, and decides when it's time to fetch the next batch. The screen only ever asks it "what should I show now?"
 
 **Owns:** everything the screen shows: the posts, the loading state, whether newer posts exist, and the cursor for the next page.
 
@@ -206,6 +229,8 @@ final class FeedViewModel {
 
 ### 3 · Post model (`FeedItem`)
 
+**In plain words:** a description of one post, like an index card: who posted it, the caption, the number of likes, whether you liked it, and the address of the photo with its width and height. The card says *where* the photo is, never holds the photo itself.
+
 **Owns:** one post's data. No behaviour.
 
 **Interface:**
@@ -228,6 +253,8 @@ struct FeedItem: Identifiable, Hashable, Sendable {
 > **Under the hood.** A post as data is about a kilobyte, so ten thousand of them is about 10 MB. A decoded photo is width × height × 4 bytes: a 12-megapixel photo is about 48 MB. Put images in the model and the model's memory grows with every post scrolled past; leave them to the image loader, whose cache has a fixed budget, and memory stays flat. `Sendable` means the struct can safely be handed from a background task to the main actor, which is how a page travels from the network to the screen.
 
 ### 4 · Feed repository, the protocol (`FeedRepository`)
+
+**In plain words:** a written menu of what the screen's brain is allowed to ask for: the posts saved on the phone, the next page, how many new posts there are, and "like this". It lists what you can order, not how the kitchen cooks it, so the kitchen can change without the menu changing.
 
 **Owns:** nothing. It's a list of promises the data layer makes to the view model.
 
@@ -252,6 +279,8 @@ protocol FeedRepository: Sendable {
 
 ### 5 · Feed repository, the real one (`RemoteFeedRepository`)
 
+**In plain words:** the kitchen behind that menu. When asked for posts, it decides whether to answer from the copy kept on the phone or to ask the company's servers, and it refreshes the phone's copy when fresh posts arrive.
+
 **Owns:** the decision of where posts come from, and keeping the disk copy fresh.
 
 **Interface:** it conforms to `FeedRepository` (above) and is built from the two things it coordinates: `init(api: FeedAPIType, store: FeedStoreType)`. Nothing else is public.
@@ -261,6 +290,8 @@ protocol FeedRepository: Sendable {
 > **Under the hood.** The *repository pattern* puts one object between the app and all its data sources, so callers ask for "posts", never "posts from the network". It's also where you decide what counts as the truth: here the server is, and the disk is only a copy for opening fast and offline. (An app that edits data offline flips that, and the disk becomes the truth.)
 
 ### 6 · API client (`FeedAPI`)
+
+**In plain words:** the messenger to the company's servers. It knows their addresses and the format messages must be in, sends the request, and brings back the answer. Nothing else in the app talks to the servers.
 
 **Owns:** the HTTP details: URLs, headers, auth, turning JSON into data.
 
@@ -280,6 +311,8 @@ protocol FeedAPIType: Sendable {
 > **Under the hood.** *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
 
 ### 7 · Local storage (`FeedStore`)
+
+**In plain words:** a notebook on the phone holding the last 200 or so posts you saw, so when you open the app on a train with no signal there's still something on screen.
 
 **Owns:** the last ~200 posts and the cursor after them, on disk.
 
@@ -301,6 +334,8 @@ protocol FeedStoreType: Sendable {
 > **Under the hood.** An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix. The file belongs in `Library/Caches`: it's a copy that can always be downloaded again, and the system may empty that folder when storage runs low, so the code treats a missing file as "first launch", never as an error.
 
 ### 8 · Image loader (`ImagePipeline`, from question 1)
+
+**In plain words:** the photo library designed in question 1. Each row on screen asks it for its photo at the size it's shown; it downloads it, shrinks it to fit and remembers it for next time.
 
 **Owns:** everything about pixels: downloading, shrinking to the row's size, caching.
 
