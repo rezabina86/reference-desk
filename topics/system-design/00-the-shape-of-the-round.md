@@ -32,7 +32,7 @@ to go deep on, and what they'd push on next.
 | 0:00–0:02 | The prompt | You repeat it back and say how you'll spend the time |
 | 0:02–0:07 | Clarify | You ask; they answer; you state your assumptions |
 | 0:07–0:12 | Scope | Out of scope **first**, then 3–5 features, then the non-functional ones that matter |
-| 0:12–0:24 | High level | Say the idea · list the components · sketch them · explain each · trace one request |
+| 0:12–0:24 | High level | Say the idea · list the components · sketch them · explain each · trace the key flows |
 | 0:24–0:40 | Deep dives | They pick a component and push |
 | 0:40–0:45 | Follow-ups and recap | Whatever they still want to probe, then the whole design in 60 seconds |
 
@@ -95,7 +95,8 @@ next one easy to follow, which is what the interviewer is grading.
    gets answered. Methods never go on the board itself; the public frameworks keep the diagram at
    the level of roles and bring interfaces in when a component is discussed, and the
    client↔server API and data models are always asked for.
-5. **Trace one request (1 min).** One real flow across the cards, so they see them work together.
+5. **Trace the key flows (1–2 min).** The main read flow and each important write flow (open the
+   feed; like a post) across the cards, so they see them work together.
 
 ## Keep the whiteboard simple
 
@@ -105,8 +106,14 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
 - **Three layers for an app question.** *Presentation* (a dumb view, and the view model that owns the
   screen's state and hands the view **one view state**: a single `Equatable` struct describing
   everything on screen, so the view only draws it and forwards user actions), *domain* (plain models and the protocol the view model depends on), *data* (the
-  implementation that decides between network and disk). No use-case classes at this size: a
+  implementation that decides between network and disk).
+  **Use cases only where they coordinate:** a use case earns a card when a job spans several sources
+  or carries a business rule owned by neither screen nor data (liking a post: record it, send it,
+  confirm or undo, newest tap wins). A job that's one repository call gets none: a
   `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
+  **When the screen's model has several sources** (server pages, the saved copy, the user's own
+  pending actions), the repository is a **composite** that maps each and merges them into one
+  domain model, with pending actions laid over server data until confirmed.
   **Keep the server's models apart from the app's:** the API client decodes into DTOs that mirror
   the JSON, and the repository maps them to domain models (and the saved format to and from them).
   The domain never sees the server's shape, so a server change touches one DTO and one mapping.
@@ -134,6 +141,10 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
   and nothing in the domain points down at the data layer. That's dependency inversion on the
   board. (An arrow from the protocol *down* to the implementation would draw the opposite.) Then say
   it once: *"Everything else is behind a protocol too, for tests. I'm drawing the one that matters."*
+- **A second screen showing the same data is a pushed topic.** Then: one shared observable store
+  every screen reads (change it once, every screen redraws), and a change bus ("refetch, this is
+  stale") only for events where a fresh fetch is the right answer. Neither belongs on the first
+  sketch.
 - **Start simple, grow under pressure.** Every extra component (an outbox, a shared store, a
   socket) waits until the interviewer pushes on that area. Adding it then, with the reason, scores
   better than having drawn it at minute twelve.
@@ -175,7 +186,8 @@ answer. Then, collapsed: a **Words used in this chapter** glossary, and the answ
 5. The sketch — the diagram, and how to draw it on your own board step by step
 6. Each component — **in plain words** first, then what it owns, **its interface**, the choice inside
    it, and an *Under the hood* note that teaches the concept
-7. One request through the sketch — a sequence diagram whose every arrow is a method from section 6
+7. Key flows through the sketch — one sequence diagram per main read or write flow, every arrow a
+   method from section 6
 8. The server contract — endpoints and payloads
 9–11. Deep dives, each opened by the line the interviewer would actually use
 12. Failure modes and 10×

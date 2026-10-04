@@ -55,6 +55,8 @@ Plain definitions for the technical words this chapter uses. Read once; come bac
 - **Outbox** — the list of messages written on the phone but not yet accepted by the server, kept on disk so they survive the app being closed.
 - **Cursor (sync bookmark)** — a marker the server hands back meaning "you've seen everything up to here"; after a reconnect the app asks for everything after it.
 - **Source of truth** — the one place the screen reads from. Here: the database on the phone.
+- **Composite** — one repository that gathers pieces from several sources (confirmed messages, the outbox, read receipts) and hands back one finished conversation.
+- **Use case** — one complete job the app does, written down once. It gets its own part only when the job has several steps across sources or a rule of its own; sending here doesn't, so there isn't one.
 - **Layer** — a group of parts with the same kind of job: *presentation* (what you see), *domain* (the plain description of the data and what may be asked for), *data* (where the data actually comes from).
 - **View state** — one complete description of what a screen shows right now, handed to the screen in a single piece.
 - **Protocol** — a written promise of what a part can do, without how. Anything that keeps the promise can stand in, including a fake one in a test.
@@ -114,7 +116,7 @@ Then say the axis: *"Everything here trades immediacy against correctness. The s
 ::: 3 · The idea, in 30 seconds — before you draw anything
 Say the whole design in plain words first:
 
-> *"The screen always reads from a database on the phone, so a conversation opens instantly, even offline. When you send, the message is saved there first and shown straight away as 'sending', then goes to the server with an ID the phone chose, so a retry can never create a duplicate. While the app is open, a live connection brings new messages in; after any gap, the app asks the server for everything since its last bookmark. The server's sequence numbers, not the phone's clock, decide the order. Three layers: presentation, domain, data."*
+> *"The screen always reads from a database on the phone, so a conversation opens instantly, even offline. When you send, the message is saved there first and shown straight away as 'sending', then goes to the server with an ID the phone chose, so a retry can never create a duplicate. A repository combines everything (confirmed messages, the ones still waiting to go, read receipts) into one conversation. While the app is open, a live connection brings new messages in; after any gap, the app asks the server for everything since its last bookmark. The server's sequence numbers, not the phone's clock, decide the order. Three layers: presentation, domain, data."*
 
 Then the axis, in one sentence: *"show a fast guess, then reconcile it with the server's truth."*
 :::
@@ -128,7 +130,7 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 | 2 | **Conversation view model** | `ConversationViewModel` | Presentation | The screen's brain: turns messages and connection status into one view state. |
 | 3 | **Message model** | `Message` | Domain | The app's own description of one message: who, what, when, its order and its status. |
 | 4 | **Messages repository** (protocol) | `MessageRepository` | Domain | The list of what the screen may ask for: watch messages, send, retry, load older, mark read. |
-| 5 | **Messages repository** (the real one) | `SyncingMessageRepository` | Data | Keeps the phone's database in step with the server and translates the server's format. |
+| 5 | **Messages repository** (the real one) | `SyncingMessageRepository` | Data | Combines confirmed messages, your unsent ones and receipts into one conversation; keeps the phone in step with the server. |
 | 6 | **Local database** | `MessageStore` | Data | Every message on the phone, the outbox of unsent ones, and the sync bookmark. |
 | 7 | **Live connection** | `ChatSocket` | Data | The open line to the server that brings new messages in while the app is open. |
 | 8 | **API client** | `ChatAPI` | Data | Ordinary requests: send a message, fetch older history, catch up after a gap. |
@@ -154,7 +156,7 @@ the app's own shape`"]
   subgraph DA["DATA"]
     Impl["`**5 · Messages repository**
 SyncingMessageRepository
-maps DTO → Message`"]
+merges sources → Message`"]
     Store["`**6 · Local database**
 MessageStore
 messages · outbox · bookmark`"]
@@ -330,14 +332,15 @@ protocol MessageRepository: Sendable {
 
 ### 5 · Messages repository, the real one (`SyncingMessageRepository`)
 
-**In plain words:** the kitchen behind that menu. It writes every new message to the phone's database first, sends the unsent ones in order, puts whatever arrives from the server into the database, and translates the server's format into the app's. The screen sees all of it through the database.
+**In plain words:** the kitchen behind that menu, and a **composite**: one conversation on screen is put together from several places — messages the server has confirmed, your own messages still waiting in the outbox, and read receipts saying how far the other side has read. It writes every new message to the phone's database first, sends the unsent ones in order, puts whatever arrives from the server into the database, and translates the server's format into the app's. The screen sees all of it through the database.
 
-**Owns:** keeping the local database in step with the server: draining the outbox, merging incoming messages, catching up after a gap, and mapping DTOs to `Message`.
+**Owns:** combining the sources into one `Message` list, keeping the local database in step with the server (draining the outbox, merging incoming messages, catching up after a gap), and mapping DTOs to `Message`.
 
 **Interface:** it conforms to `MessageRepository` (above) and is built from the three things it coordinates: `init(store: MessageStoreType, socket: ChatSocketType, api: ChatAPIType)`. Nothing else is public.
 
 **The choices inside it:**
 
+- **Several sources, one model.** A message's status is computed from more than one place: *sending* or *failed* from the outbox, *sent* once the server returned a sequence number, *delivered* and *read* from receipt events ("read up to 419" marks every earlier message of mine as read). The repository combines them into the single `status` the screen shows, so no screen ever looks at the outbox or the receipts itself.
 - **Database first, always.** `send` writes the message (status *sending*) and an outbox entry in one database write, then returns. The screen updates from the database; the network work happens after.
 - **One sender, in order.** A single loop sends outbox entries oldest first, one at a time, so messages from one person can't overtake each other. It starts when the app launches, when the network comes back, and after each send.
 - **Merge by ID.** Everything arriving (a send's reply, a live event, a catch-up page) is saved by message ID: if it exists, it's updated; if not, it's added. That's what makes a message delivered twice show once.
@@ -345,7 +348,7 @@ protocol MessageRepository: Sendable {
 
 > **Under the hood.** *In plain words:* the database is the single noticeboard everyone reads; the network is just one of the people pinning notes on it. Because the screen only reads the board, it doesn't matter whether a message came from you, the live line or a catch-up: it appears the same way.
 >
-> *The detail:* this is "single source of truth" with the local store as the read model and the server as the authority on order. Writes are *at-least-once* (the outbox retries until the server confirms) and the server is *idempotent* on the client ID, so the overall effect is exactly-once. DTOs stay in the data layer, so a renamed server field changes one DTO and one mapping line.
+> *The detail:* this is the *repository pattern* in its *composite* form (several sources, one domain model) combined with a "single source of truth": the local store is the read model and the server is the authority on order. Writes are *at-least-once* (the outbox retries until the server confirms) and the server is *idempotent* on the client ID, so the overall effect is exactly-once. DTOs stay in the data layer, so a renamed server field changes one DTO and one mapping line.
 
 ### 6 · Local database (`MessageStore`)
 
@@ -438,10 +441,45 @@ protocol ChatAPIType: Sendable {
 ### Why these eight, and not fewer
 
 Each changes for a different reason: the screen with the design, the view model with the screen's behaviour, the repository with the sync rules, the database with storage, the live connection with the transport, the API client with the server's endpoints. One "ChatManager" would change for all of them. *"I split where the reasons to change differ, not per noun."*
+
+**And why there's no use case.** A use case earns a card when a job coordinates several sources or holds a business rule that belongs to neither the screen nor the data layer. Here, sending is one repository call: the outbox, ordering and retries are the sync engine's job, which is data-layer work. A `SendMessageUseCase` would only forward the call, so the board stays at eight cards. *Switch condition:* sending a photo, which coordinates an upload and a message and decides what happens if one succeeds and the other fails; that job gets a use case.
 :::
 
-::: 7 · One request through the sketch
-Trace one real flow across the cards: you send a message, then a reply arrives on the live connection.
+::: 7 · Key flows through the sketch
+Trace the two main flows across the cards you drew, each in its own sketch: sending, and receiving.
+
+**Flow 1 — sending a message.**
+
+```mermaid
+sequenceDiagram
+  participant V as Conversation screen
+  participant VM as Conversation view model
+  participant R as Messages repository
+  participant DB as Local database
+  participant A as API client
+  V->>VM: send()
+  VM->>R: send("On my way", in: chat)
+  R->>DB: save(message: sending, + outbox)
+  DB-->>R: conversation changed
+  R-->>VM: messages
+  VM-->>V: view state: bubble "Sending…"
+  R->>A: send(clientMessageId, text)
+  alt server accepted
+    A-->>R: MessageDTO (sequence 418)
+    Note over R: map MessageDTO → Message
+    R->>DB: save(sent, sequence 418, outbox cleared)
+    DB-->>R: conversation changed
+    R-->>VM: messages
+    VM-->>V: view state: bubble sent
+  else no network or timeout
+    A-->>R: error
+    Note over R: stays in the outbox, retried with backoff, same client ID
+  end
+```
+
+In words: your message is on screen before the network is touched; the server's reply only upgrades it to "sent", and a failure leaves it safely in the outbox.
+
+**Flow 2 — receiving: live, and after a gap.**
 
 ```mermaid
 sequenceDiagram
@@ -451,28 +489,25 @@ sequenceDiagram
   participant DB as Local database
   participant A as API client
   participant S as Live connection
-  V->>VM: send()
-  VM->>R: send("On my way", in: chat)
-  R->>DB: save(message: sending, + outbox)
-  DB-->>R: conversation changed
-  R-->>VM: messages
-  VM-->>V: view state: bubble "Sending…"
-  R->>A: send(clientMessageId, text)
-  A-->>R: MessageDTO (sequence 418)
-  Note over R: map MessageDTO → Message
-  R->>DB: save(sent, sequence 418, outbox cleared)
-  DB-->>R: conversation changed
-  R-->>VM: messages
-  VM-->>V: view state: bubble sent
   S-->>R: event: Sam's reply (sequence 419)
   Note over R: map DTO → Message, merge by id
   R->>DB: save(Sam's message)
   DB-->>R: conversation changed
   R-->>VM: messages
   VM-->>V: view state: Sam's bubble appears
+  Note over S: connection drops in a tunnel, then returns
+  S-->>R: state: connected again
+  R->>A: catchUp(after: bookmark)
+  A-->>R: 3 missed messages + new bookmark
+  R->>DB: save(3 messages, bookmark) in one transaction
+  DB-->>R: conversation changed
+  R-->>VM: messages
+  VM-->>V: view state: missed messages appear in order
 ```
 
-In words: your message is on screen before the network is touched; the server's reply only upgrades it to "sent"; and Sam's reply comes in by a different route but reaches the screen the same way, through the database. Solid arrows are requests, each a method from section 6; dashed arrows are the replies, the data flowing back up to the screen.
+In words: a live message and a caught-up one take different routes in but reach the screen the same way, through the database. Solid arrows are requests, each a method from section 6; dashed arrows are the replies, the data flowing back up to the screen.
+
+**The second screen is free here.** The conversation list shows the same messages (the last one, the unread count). In the feed, a second screen needed a shared post store; here the local database *already is* that shared store: both screens read it and redraw when it changes. The only "everyone start over" event, the kind a change bus is for, is signing out, which deletes the database.
 :::
 
 ::: 8 · The server contract
@@ -646,15 +681,21 @@ The view model makes the conversation testable with a fake repository and no scr
 </details>
 
 <details>
-<summary>"Why no use cases?"</summary>
+<summary>"Why no SendMessageUseCase?"</summary>
 
-Each would forward one call to the repository. I'd add one for real logic owned by neither screen nor data, such as "send a message with an attachment" that coordinates an upload and a send.
+A use case earns its place when a job coordinates several sources or holds a rule that belongs to neither the screen nor the data layer. Sending is one repository call; the outbox and retries are the sync engine's data-layer work, so the use case would only forward it. Sending a photo, which coordinates an upload and a message, would get one.
 </details>
 
 <details>
 <summary>"Show me where dependency inversion is."</summary>
 
 The view model depends on the `MessageRepository` protocol in the domain; the real repository in the data layer implements it, so the arrow points up. Nothing in the domain imports networking or the database.
+</details>
+
+<details>
+<summary>"Where does a message's status come from?"</summary>
+
+Several sources, combined in the repository: the outbox gives sending or failed, the server's reply gives sent with a sequence number, receipt events give delivered and read. The screen only ever sees the one status on the `Message`.
 </details>
 
 <details>
@@ -972,12 +1013,13 @@ The first five rows are the public exercise's grading criteria; the rest are spe
 | 9 | Save first and send from a persistent outbox | |
 | 10 | Make the local database the screen's only source | |
 | 11 | Catch up from a bookmark after every reconnect | |
-| 12 | Say the idea, list the components, *then* sketch: three layers, about eight cards, one seam | |
-| 13 | Land the recap inside 60 seconds | |
+| 12 | Combine outbox, server messages and receipts into one status; say why there's no use case | |
+| 13 | Say the idea, list the components, *then* sketch: three layers, about eight cards, one seam | |
+| 14 | Land the recap inside 60 seconds | |
 
-13+ is a pass in a real round.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero is worth more than the total: it names the thing to read about before the next one.<!--/public-->
+14+ is a pass in a real round.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero is worth more than the total: it names the thing to read about before the next one.<!--/public-->
 :::
 
 ::: 15 · The 60-second recap
-A chat client has to stay correct while the network comes and goes. The screen always reads from a database on the phone, so conversations open instantly and work offline. Sending saves the message there first, shows it as "sending", and an outbox sends it in order with an ID the phone chose, so retries after a timeout or a crash can never create a duplicate. The server gives every accepted message a per-conversation sequence number, and that number, not any phone's clock, is the order on every device. While the app is open, a WebSocket brings new messages and receipts in; but correctness comes from a bookmark: after any reconnect the app asks for everything since it, and saves messages and the new bookmark in one transaction. Everything arriving is merged by ID, so duplicates disappear, and a jump in sequence numbers triggers a catch-up. Push notifications only nudge. A dumb screen draws one view state built by a view model that watches the database; the view model depends on a repository protocol that the syncing repository implements, mapping the server's DTOs into the app's messages at the boundary.
+A chat client has to stay correct while the network comes and goes. The screen always reads from a database on the phone, so conversations open instantly and work offline. Sending saves the message there first, shows it as "sending", and an outbox sends it in order with an ID the phone chose, so retries after a timeout or a crash can never create a duplicate. The server gives every accepted message a per-conversation sequence number, and that number, not any phone's clock, is the order on every device. While the app is open, a WebSocket brings new messages and receipts in; but correctness comes from a bookmark: after any reconnect the app asks for everything since it, and saves messages and the new bookmark in one transaction. Everything arriving is merged by ID, so duplicates disappear, and a jump in sequence numbers triggers a catch-up. Push notifications only nudge. A message's status is one value combined from the outbox, the server's reply and receipts. A dumb screen draws one view state built by a view model that watches the database; the view model depends on a repository protocol that the syncing repository implements, mapping the server's DTOs into the app's messages at the boundary.
 :::

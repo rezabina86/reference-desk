@@ -371,8 +371,10 @@ protocol ImageDecoderType: Sendable {
 Each changes for a different reason: the loader with the transport, the decoder with the format, the caches with the eviction policy, the pipeline with the coordination rules. One `ImageManager` would be touched by all of them. *"I split where the reasons to change differ, not per noun."*
 :::
 
-::: 7 · One request through the sketch
-Trace one request across the cards, the case where two rows want the same avatar at once:
+::: 7 · Key flows through the sketch
+Trace the two main flows across the cards, each in its own sketch.
+
+**Flow 1 — two rows want the same avatar at once.**
 
 ```mermaid
 sequenceDiagram
@@ -403,6 +405,30 @@ sequenceDiagram
 ```
 
 In words: one download and one decode serve both rows. Solid arrows are requests, each a method from the interfaces in section 6; dashed arrows are the replies, the data flowing back: bytes up from disk or network, an image up from the decoder, and finally the image to both rows.
+
+**Flow 2 — a row scrolls away before its image arrives.**
+
+```mermaid
+sequenceDiagram
+  participant A as Row A
+  participant B as Row B
+  participant P as Image pipeline
+  participant L as Data loader
+  A->>P: image(for: url, 160 px)
+  B->>P: image(for: url, 160 px)
+  Note over P: one load, 2 rows waiting
+  P->>L: data(for: url)
+  Note over A: user flings, and row A is reused for another post
+  A->>P: cancel
+  Note over P: 1 row still waiting, so the load continues
+  L-->>P: bytes
+  P-->>B: image
+  A->>P: image(for: other url, 160 px)
+```
+
+In words: cancelling only takes the row off the waiting list. The shared load stops only when nobody is waiting, and the reused row simply asks for its new picture; when its old image would have arrived, the "is this still my request?" check discards it.
+
+*No use case and no composite here, and that's correct:* this is a library with no domain model built from several sources and no app logic, so neither pattern applies. They appear in the app questions (the feed's like use case and composite repository).
 :::
 
 ::: 8 · The server contract and the two keys
