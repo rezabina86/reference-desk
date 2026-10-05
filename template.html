@@ -492,6 +492,9 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
   background:var(--panel) radial-gradient(var(--rule) 1px, transparent 1.2px) 0 0/18px 18px; overflow-x:auto}
 .board-src{margin:0; font:12px/1.5 var(--mono); color:var(--muted); white-space:pre; background:none}
 .board-svg svg{display:block; margin:0 auto; max-width:100%; height:auto}
+/* Sequence diagrams keep their natural size and the board scrolls sideways: shrinking a
+   seven-participant flow to fit makes its text unreadable. */
+.board-svg svg[aria-roledescription="sequence"]{max-width:none}
 .board-svg foreignObject{overflow:visible}
 </style>
 
@@ -739,7 +742,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
         themeCSS: 'b, strong { font-weight: 600; }',
         htmlLabels: false,
         flowchart: { htmlLabels: false, curve: 'basis', nodeSpacing: 36, rankSpacing: 46, padding: 14, wrappingWidth: 400 },
-        sequence: { mirrorActors: false, messageAlign: 'center', actorFontSize: 15, messageFontSize: 15, noteFontSize: 14 },
+        sequence: { useMaxWidth: false, mirrorActors: false, messageAlign: 'center', actorFontSize: 15, messageFontSize: 15, noteFontSize: 14 },
         themeVariables: {
           fontSize: '15px', background: cssVar('--panel'), primaryColor: cssVar('--raised'),
           primaryTextColor: cssVar('--ink'), primaryBorderColor: cssVar('--faint'),

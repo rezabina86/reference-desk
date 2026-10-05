@@ -126,15 +126,18 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 
 | # | Component | Type name | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Feed screen** | `FeedView` | Presentation | The part of the app you see. Draws exactly the view state it's handed; reports scrolls, pulls and taps. |
-| 2 | **Feed view model** | `FeedViewModel` | Presentation | The screen's brain: turns posts and loading into one view state; decides when to fetch more. |
-| 3 | **Post model** | `FeedItem` | Domain | The app's own description of one post: who, the caption, the likes, where the photo is and how big. |
-| 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | A written list of what may be asked for, without saying how it's done. |
-| 5 | **Like post use case** | `LikePostUseCase` | Domain | Handles one like from tap to confirmation: show it now, send it, confirm or undo. |
-| 6 | **Feed repository** (the real one) | `CompositeFeedRepository` | Data | Combines the server's pages, the saved copy and pending likes into one post list. |
-| 7 | **API client** | `FeedAPI` | Data | The messenger to the company's servers. Brings posts back in the server's own format. |
-| 8 | **Local storage** | `FeedStore` | Data | A notebook on the phone: the last 200 posts and the likes not yet confirmed. |
-| 9 | **Image loader** | `ImagePipeline` | Reused | The photo library from question 1: fetches photos, shrinks them, remembers them. |
+| 1 | **Feed screen** | `FeedView` | Presentation | Shows the feed exactly as the view state describes. |
+| 2 | **Feed view model** | `FeedViewModel` | Presentation | Decides what the screen shows next, event by event. |
+| 3 | **Post model** | `FeedItem` | Domain | Describes one post. |
+| 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | Lists what can be asked for, without saying how. |
+| 5 | **Like post use case** | `LikePostUseCase` | Domain | Gets a like accepted by the server, or reports that it wasn't. |
+| 6 | **Feed repository** (the real one) | `CompositeFeedRepository` | Data | Assembles posts from their sources. |
+| 7 | **API client** | `FeedAPI` | Data | Talks to the server. |
+| 8 | **Saved feed** | `FeedCache` | Data | Keeps the last 200 posts on the phone. |
+| 9 | **Pending likes** | `PendingLikeStore` | Data | Remembers likes the server hasn't confirmed yet. |
+| 10 | **Image loader** | `ImagePipeline` | Reused | Delivers each photo at the size its row needs. |
+
+Each line is **one job: one reason to change**. Helpers that serve a single card (formatting rows, translating the server's format, laying pending likes over posts) are its *parts inside*, described in section 6 but not drawn.
 
 Then say what's deliberately **not** on the list yet: a shared post store for when a second screen shows the same posts (deep dive 11), and a live socket for new posts. *"I'll add those if we go there."*
 :::
@@ -163,11 +166,12 @@ merges 3 sources → FeedItem`"]
     API["`**7 · API client**
 FeedAPI
 returns DTOs`"]
-    Store["`**8 · Local storage**
-FeedStore
-saved posts · pending likes`"]
+    Cache["`**8 · Saved feed**
+FeedCache`"]
+    Pending["`**9 · Pending likes**
+PendingLikeStore`"]
   end
-  Pipe["`**9 · Image loader**
+  Pipe["`**10 · Image loader**
 from question 1`"]
   VM -- "ask for posts → FeedItems" --> Repo
   VM -- "like → confirmed or reverted" --> Like
@@ -175,11 +179,12 @@ from question 1`"]
   Repo ~~~ Impl
   Impl -. "implements" .-> Repo
   Impl -- "requests → DTOs" --> API
-  Impl -- "load · save → records" --> Store
+  Impl -- "load · save → saved posts" --> Cache
+  Impl -- "read · write → intents" --> Pending
   View -- "photo URL + size → image" --> Pipe
   class View,VM pres
   class Item,Repo,Like dom
-  class Impl,Store data
+  class Impl,Cache,Pending data
   class API net
   class Pipe reuse
 ```
@@ -191,15 +196,15 @@ Each card is **what it does** in bold, with the type name underneath. A newcomer
 **Drawing it on Miro, step by step** (about four minutes, talking the whole time):
 
 1. Three wide frames stacked top to bottom: **Presentation**, **Domain**, **Data**. Label them before putting anything in them.
-2. Fill them in the order of your list, one card per component, one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image loader.
-3. Arrows last, each pointing from the part that asks to the part that answers, labelled **request → reply**: the screen reports what the user did and gets one view state back; the view model asks the repository for posts and hands likes to the like use case; the use case records and sends the like through the repository; the real repository fetches pages from the API client and loads and saves records in local storage; each row asks the image loader for its photo. Then one dashed arrow **up** from the real repository to the protocol, labelled "implements".
+2. Fill them in the order of your list, one card per component (each with one job), one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image loader.
+3. Arrows last, each pointing from the part that asks to the part that answers, labelled **request → reply**: the screen reports what the user did and gets one view state back; the view model asks the repository for posts and hands likes to the like use case; the use case records and sends the like through the repository; the real repository fetches pages from the API client, loads and saves the saved feed, and reads and writes pending likes; each row asks the image loader for its photo. Then one dashed arrow **up** from the real repository to the protocol, labelled "implements".
 4. Write «protocol» on the domain repository card. Every arrow touching it points *at* it: the view model and the like use case use it from above, the real repository implements it from below. Nothing in the domain points down at the data layer, so the domain never depends on networking or storage. That's dependency inversion on the board.
 
-Nine cards, three frames, eight arrows. Say two things while pointing: **"this repository is a composite: one post model out of three sources"**, and **"liking gets a use case because it coordinates several steps and a rule; loading doesn't, because it's one call."**
+Ten cards, three frames, nine arrows. Say two things while pointing: **"this repository is a composite: one post model out of three sources"**, and **"liking gets a use case because it coordinates several steps and a rule; loading doesn't, because it's one call."**
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
-Point at each card and cover three things: **what it owns**, **its interface** (what others can call or read, which is what an interviewer means by "what does this expose?"), and **the choice you made inside it**. The *Under the hood* notes are for learning; you won't recite them in the room, but they're what lets you answer the follow-up.
+Point at each card and cover three things: **what it owns**, **its interface** (what others can call or read, which is what an interviewer means by "what does this expose?"), and **the choice you made inside it**. Every card has **one job, meaning one reason to change**; where a job needs a helper nobody else uses, the helper is listed as a *part inside* with its own single job. The *Under the hood* notes are for learning; you won't recite them in the room, but they're what lets you answer the follow-up.
 
 ### 1 · Feed screen (`FeedView`)
 
@@ -219,7 +224,7 @@ Point at each card and cover three things: **what it owns**, **its interface** (
 
 **In plain words:** the screen's brain. It keeps the posts, knows whether something is loading or failed, and decides when to fetch the next batch. Then it writes **one complete description of the screen**, the *view state*, like a stage manager handing the crew a single cue sheet: what every row says, whether to show a spinner, an error or the "new posts" pill. The screen only ever reads that sheet.
 
-**Owns:** the screen's state (the posts, the loading phase, the cursor) and the job of turning it into the view state.
+**Owns:** the screen's state (the posts, the loading phase, the cursor) and what happens when the user acts.
 
 **Interface:**
 
@@ -249,7 +254,7 @@ struct PostRowState: Equatable, Identifiable {
 
 @MainActor @Observable
 final class FeedViewModel {
-    init(repository: FeedRepository, likePost: LikePostUseCaseType)
+    init(repository: FeedRepository, likePost: LikePostUseCaseType, mapper: FeedViewStateMapper)
 
     /// The one thing the screen reads, rebuilt from the private state on every change
     var viewState: FeedViewState { get }
@@ -267,7 +272,8 @@ final class FeedViewModel {
 
 **The choices inside it:**
 
-- **One view state, not a handful of properties.** The screen gets a single `FeedViewState` instead of reading `items`, `phase` and `newerAvailable` and combining them itself. That keeps the view dumb (every decision, every bit of formatting, lives in the view model) and makes the whole screen testable as one value: call `onNearEnd()`, then check `viewState` equals the expected struct. *Rejected:* exposing the raw properties, which is less code but moves "what does loading-while-empty look like?" into the view, where it can't be unit-tested.
+- **One view state, not a handful of properties.** The screen gets a single `FeedViewState` instead of reading `items`, `phase` and `newerAvailable` and combining them itself. That keeps the view dumb and makes the whole screen testable as one value: call `onNearEnd()`, then check `viewState` equals the expected struct.
+- **Part inside: the view-state mapper (`FeedViewStateMapper`).** Its one job is formatting: posts and the phase in, a `FeedViewState` out ("412 likes", the right status, the banner text). It's a pure function with no collaborators, so it's tested directly with plain values, and the view model's job stays "hold the state and react to the user". A copy change ("412 likes" → "412 ♥") touches the mapper, never the view model's logic. *Rejected:* exposing the raw properties, which is less code but moves "what does loading-while-empty look like?" into the view, where it can't be unit-tested.
 - **Private state, derived view state.** Inside, the view model keeps the posts, the cursor and **one `phase`, not five booleans** (separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed). `viewState` is computed from them, never stored and updated separately, so the two can't drift apart.
 - **On the main actor**, because the screen reads it every frame. Every change happens in one place, so "is it already loading? if not, start" needs no lock.
 - **Why MVVM.** The view model is what makes the feed testable without a screen: give it a fake repository, call `onNearEnd()` twice, check one request went out and the view state shows "loading more". *Rejected:* a single reducer store (TCA-style), which buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
@@ -334,9 +340,9 @@ protocol FeedRepository: Sendable {
 
 ### 5 · Like post use case (`LikePostUseCase`)
 
-**In plain words:** the person at the counter who handles a like from start to finish. They note down what you want straight away, so the heart stays red even if the feed refreshes; then they tell the server; if the server says no, they cross the note out and let you know. If you tap again before they're done, only your last tap counts.
+**In plain words:** the person whose one job is getting your like accepted by the server. The screen has already turned the heart red; this person makes it stick: they write your wish on a sticky note (so a refresh can't lose it), pass it to the server, and then either throw the note away (accepted) or report back that it was refused. If you tap again before they're done, only your last tap counts.
 
-**Owns:** one like's whole lifecycle, and the rules around it: the newest tap wins, a refusal is undone, a like made offline is kept and sent later.
+**Owns:** settling a like with the server: the rules for that (the newest tap wins, a refusal is reported, a like made offline is kept and sent later). Changing the heart on screen is the view model's job, not this one's.
 
 **Interface:**
 
@@ -364,16 +370,17 @@ It's built from the repository protocol: `init(repository: FeedRepository)`.
 
 ### 6 · Feed repository, the real one (`CompositeFeedRepository`)
 
-**In plain words:** the kitchen behind that menu, and a **composite**: what the screen shows as one post is put together from three places. Fresh posts from the server, the copy saved on the phone, and the notes about likes that haven't reached the server yet. The kitchen reads each, translates each into the app's own shape, and lays the pending likes on top, so you always see your own latest tap.
+**In plain words:** the kitchen behind that menu, and a **composite**: what the screen shows as one post is put together from three places: fresh posts from the server, the copy saved on the phone, and the likes that haven't reached the server yet. Its one job is assembling posts from those sources; two helpers in the kitchen do the translating and the laying-on-top.
 
-**Owns:** the decision of where posts come from, keeping the disk copy fresh, **combining** the three sources into one `FeedItem`, and **translating** between each source's format and the app's.
+**Owns:** assembling posts from their sources: which source answers which request, and when the saved copy is refreshed.
 
-**Interface:** it conforms to `FeedRepository` (above) and is built from the two things it reads: `init(api: FeedAPIType, store: FeedStoreType)`. Nothing else is public.
+**Interface:** it conforms to `FeedRepository` (above) and is built from the three sources it reads and its two parts: `init(api: FeedAPIType, cache: FeedCacheType, pendingLikes: PendingLikeStoreType, mapper: PostMapper, overlay: PendingLikeOverlay)`. Nothing else is public.
 
 **The choices inside it:**
 
-- **Three sources, one model.** `savedFeed()` reads the saved copy; `page(after:)` fetches from the server (and after a successful page 1, rewrites the saved copy); both then **lay the pending likes over the result**: for any post with an intent, `likedByMe` becomes the intent and the count moves by one. That's why a refresh that returns `likedByMe: false` (the server hasn't seen the like yet) can't make the heart flicker off.
-- **Mapping at the boundary.** The API client hands back `PostDTO`s, the server's shape; the saved copy has its own record; the repository turns each into a `FeedItem` in one small function per source. That's where a string date becomes a `Date`, a missing optional gets a default, and a post that can't be shown (no image URL, say) is dropped and logged instead of crashing a screen. All of it runs off the main actor, so callers receive finished values.
+- **Three sources, one model.** `savedFeed()` reads the saved feed; `page(after:)` fetches from the server (and after a successful page 1, rewrites the saved feed); both results go through the two parts below before they're returned. `setLikeIntent` and `sendLike` pass straight to pending likes and the API client.
+- **Part inside: the pending-like overlay (`PendingLikeOverlay`).** Its one job: posts and the current intents in, posts with `likedByMe` set to the intent and the count moved by one out. Pure, tested directly. That's why a refresh that returns `likedByMe: false` (the server hasn't seen the like yet) can't make the heart flicker off.
+- **Part inside: the post mapper (`PostMapper`).** Its one job is translating: `PostDTO` (the server's shape) or the saved feed's record in, `FeedItem` out. That's where a string date becomes a `Date`, a missing optional gets a default, and a post that can't be shown (no image URL, say) is dropped and logged instead of crashing a screen. All of it runs off the main actor, so callers receive finished values.
 - *Rejected:* decoding the JSON straight into `FeedItem`. One type for both looks simpler, until the server renames a field or makes one optional and every screen that uses posts has to change. *Rejected:* letting the view model merge pending likes itself; then every screen showing posts would need the same merge. *Switch condition:* a throwaway prototype, or an API you own and version together with the app.
 
 > **Under the hood.** *In plain words:* the repository is the single counter you ask for posts. Behind the counter, someone gathers the pieces from several shelves (the server, the phone's notebook, the sticky notes of likes in progress) and hands you one finished post. You never see the shelves.
@@ -426,36 +433,55 @@ protocol FeedAPIType: Sendable {
 >
 > *The detail:* *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
 
-### 8 · Local storage (`FeedStore`)
+### 8 · Saved feed (`FeedCache`)
 
-**In plain words:** a notebook on the phone with two pages: the last 200 or so posts you saw, so the app opens with something on screen even with no signal, and a short list of likes you made that the server hasn't confirmed yet.
+**In plain words:** a notebook on the phone with the last 200 or so posts you saw, so when you open the app on a train with no signal there's still something on screen.
 
-**Owns:** the saved posts and their cursor, and the pending like intents, on disk.
+**Owns:** the saved copy of the feed and the cursor after it, nothing else.
 
 **Interface:**
 
 ```swift
-protocol FeedStoreType: Sendable {
+protocol FeedCacheType: Sendable {
     /// Posts + cursor, or nil on first launch
     func load() async -> SavedFeed?
     /// After each successful page 1
     func save(_ feed: SavedFeed) async
-    /// Likes not yet confirmed by the server, by post
-    func pendingLikes() async -> [PostID: Bool]
-    /// Records or (with nil) forgets one
-    func setPendingLike(_ liked: Bool?, post: PostID) async
     /// On logout
     func clear() async
 }
 ```
 
-**The choice inside it:** two small `Codable` files, each written atomically: the saved feed in `Library/Caches` (it can always be downloaded again) and the pending likes in Application Support (they exist nowhere else, so the system must not delete them). `SavedFeed` is the store's own record, mapped to and from `FeedItem` in the repository like the API's DTOs. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
+**The choice inside it:** one `Codable` file in `Library/Caches`, written atomically. It's a copy that can always be downloaded again, so if the system empties that folder to free space, the code treats the missing file as "first launch". `SavedFeed` is the cache's own record, mapped to and from `FeedItem` by the post mapper. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
 
-> **Under the hood.** *In plain words:* the app writes the new copy beside the old one and swaps them in a single move, so a crash halfway through never leaves a half-written notebook. And it keeps the "likes in progress" page somewhere the phone never tidies away, because that's the only copy.
+> **Under the hood.** *In plain words:* the app writes the new copy beside the old one and swaps them in a single move, so a crash halfway through never leaves a half-written notebook.
 >
-> *The detail:* An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix. `Library/Caches` may be emptied by the system when storage runs low, which is fine for the saved feed (a missing file means "first launch") but not for pending likes, which is why they live in Application Support.
+> *The detail:* An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix.
 
-### 9 · Image loader (`ImagePipeline`, from question 1)
+### 9 · Pending likes (`PendingLikeStore`)
+
+**In plain words:** a short list of sticky notes: "liked post 81f, not confirmed yet". It's the only record of a like the server hasn't seen, so it lives somewhere the phone never tidies away.
+
+**Owns:** the like intents the server hasn't confirmed, nothing else.
+
+**Interface:**
+
+```swift
+protocol PendingLikeStoreType: Sendable {
+    /// Every unconfirmed like, by post
+    func all() async -> [PostID: Bool]
+    /// Records an intent, or (with nil) forgets it
+    func set(_ liked: Bool?, post: PostID) async
+}
+```
+
+**The choice inside it:** a separate store from the saved feed, because it changes for a different reason and has a different lifetime. The saved feed is a disposable copy (Caches, rebuilt from the server); pending likes are the only copy of the user's intent (Application Support, never deleted by the system). One "local storage" doing both would have to follow two sets of rules at once.
+
+> **Under the hood.** *In plain words:* one drawer you don't mind the cleaner emptying (the saved feed), and one you'd be upset to lose (your unsent likes). Keep them as two drawers.
+>
+> *The detail:* that's the *single responsibility principle* in practice: two pieces of state with different durability, different eviction rules and different reasons to change get two types. Both are tiny files written atomically; the pending one is small (a handful of entries) and rewritten whole on each change.
+
+### 10 · Image loader (`ImagePipeline`, from question 1)
 
 **In plain words:** the photo library designed in question 1. Each row on screen asks it for its photo at the size it's shown; it downloads it, shrinks it to fit and remembers it for next time.
 
@@ -465,9 +491,9 @@ protocol FeedStoreType: Sendable {
 
 **The choice:** reuse it, don't redesign it. Say *"that's question 1"* and move on. The boundary is the point: **the model carries URLs and sizes; only rows ever hold pixels.**
 
-### Why these nine, and not fewer
+### Why these ten, and not fewer
 
-Each changes for a different reason: the screen with the design, the view model with the screen's behaviour, the like use case with the product's rules for likes, the repository with where data lives and how it's combined, the API client with the server, local storage with the storage format. One "FeedManager" would change for all of them. And none of them only forwards a call. *"I split where the reasons to change differ, not per noun."*
+Each changes for a different reason: the screen with the design, the view model with the screen's behaviour, the like use case with the product's rules for likes, the repository with which source answers what, the API client with the server, the saved feed with the caching rules, pending likes with how intents are kept, and each part inside with its own small rule (formatting, translating, overlaying). One "FeedManager" would change for all of them. And none of them only forwards a call. *"I split where the reasons to change differ, not per noun."*
 :::
 
 ::: 7 · Key flows through the sketch
@@ -480,12 +506,15 @@ sequenceDiagram
   participant V as Feed screen
   participant VM as Feed view model
   participant R as Feed repository
-  participant S as Local storage
+  participant S as Saved feed
+  participant P as Pending likes
   participant A as API client
   V->>VM: onAppear()
   VM->>R: savedFeed()
-  R->>S: load() and pendingLikes()
-  S-->>R: 200 saved posts, 1 pending like
+  R->>S: load()
+  S-->>R: 200 saved posts
+  R->>P: all()
+  P-->>R: 1 pending like
   Note over R: map records → FeedItem, lay pending likes on top
   R-->>VM: saved posts
   VM-->>V: view state: saved posts, at once
@@ -515,25 +544,26 @@ sequenceDiagram
   participant VM as Feed view model
   participant U as Like post use case
   participant R as Feed repository
-  participant S as Local storage
+  participant P as Pending likes
   participant A as API client
   V->>VM: toggleLike(post)
   VM-->>V: view state: heart filled, 413 likes
   VM->>U: setLiked(true, post)
   U->>R: setLikeIntent(true, post)
-  R->>S: setPendingLike(true, post)
+  R->>P: set(true, post)
   U->>R: sendLike(true, post)
   R->>A: PUT /posts/{id}/like
   alt server accepted
     A-->>R: 204
     R-->>U: ok
     U->>R: setLikeIntent(nil, post)
-    R->>S: setPendingLike(nil, post)
+    R->>P: set(nil, post)
     U-->>VM: confirmed
   else server refused
     A-->>R: error
     R-->>U: failed
     U->>R: setLikeIntent(nil, post)
+    R->>P: set(nil, post)
     U-->>VM: reverted
     VM-->>V: view state: heart back, "Couldn't like this post"
   end
@@ -631,7 +661,7 @@ sequenceDiagram
 2. **The like use case records the intent first.** Because the composite repository lays pending intents over every page it returns, a refresh that arrives before the server has seen the like can't make the heart flicker off.
 3. **It sends "liked = true", never "toggle".** Sent twice, it's still liked; that's what makes retries and replays safe.
 4. **A newer tap supersedes an older one.** The use case cancels the post's previous attempt; even a request that already left the phone can't leave the wrong state, because the newest request also says the final state. (If ordering matters on the server, a per-post sequence number settles it.)
-5. **Refused → undone; offline → kept.** A refusal clears the intent and the view model rolls the heart back with a quiet message. With no network the intent stays in local storage and is sent when `NWPathMonitor` reports a path; say the trade-off: the user sees "liked" for something the server hasn't recorded yet.
+5. **Refused → undone; offline → kept.** A refusal clears the intent and the view model rolls the heart back with a quiet message. With no network the intent stays in pending likes and is sent when `NWPathMonitor` reports a path; say the trade-off: the user sees "liked" for something the server hasn't recorded yet.
 
 *Alternative rejected:* waiting for the server before changing the heart. Correct, and it feels broken. *Switch condition:* actions with real cost (a purchase, a follow that notifies someone) wait for the server and show progress.
 
@@ -678,7 +708,7 @@ LikePostUseCase`"]
 - **Duplicates and gaps.** Duplicates: merge by id. Gaps: impossible with cursors unless the server breaks its contract — log them, don't paper over.
 - **Races.** Double load-more: the main-actor guard. Refresh versus load-more: cancel plus generation. Late like response: the like use case's per-post task, newest wins.
 - **Memory pressure.** The image cache purges; models stay. Visible cells re-request their images at the same size and hit the disk cache.
-- **Killed mid-scroll.** Nothing to recover: the store holds the last successful first page, local storage holds pending likes, both written atomically.
+- **Killed mid-scroll.** Nothing to recover: the saved feed holds the last successful first page, pending likes hold unconfirmed likes, both written atomically.
 - **Low Data Mode.** No image prefetch, smaller image width bucket, same feed.
 
 **At 10×** — ten times more posts per session, or heavier posts:
@@ -746,6 +776,12 @@ One `FeedViewState` struct: the rows already formatted for display, a status (lo
 </details>
 
 <details>
+<summary>"Why are the saved feed and pending likes two components?"</summary>
+
+They change for different reasons and live by different rules. The saved feed is a disposable copy the system may delete (Caches); pending likes are the only record of what the user did (Application Support). One store would have to follow both sets of rules. Same test everywhere: one reason to change per component, and helpers that serve one card (the mappers, the overlay) are parts inside it.
+</details>
+
+<details>
 <summary>"Why does liking get a use case and loading doesn't?"</summary>
 
 A use case earns its place when a job coordinates several sources or holds a business rule. Loading a page is one repository call, so a `LoadFeedUseCase` would only forward it. Liking records an intent, sends it, confirms or undoes, and lets the newest tap win: steps and rules that belong to neither the screen nor the data layer.
@@ -772,7 +808,7 @@ The view model depends on the `FeedRepository` protocol in the domain; the imple
 <details>
 <summary>"Where does the like state live?"</summary>
 
-Two places, on purpose. The user's unconfirmed intent lives in local storage, and the composite repository lays it over every page, so refreshes can't undo it. The confirmed value comes from the server. If a second screen shows the same post, posts move into a shared observable store that every screen reads.
+Two places, on purpose. The user's unconfirmed intent lives in pending likes, and the composite repository lays it over every page, so refreshes can't undo it. The confirmed value comes from the server. If a second screen shows the same post, posts move into a shared observable store that every screen reads.
 </details>
 
 <details>
@@ -894,7 +930,7 @@ Show the stored feed immediately, then load the first page and replace it. If th
 <details>
 <summary>"The user likes a post offline. What happens?"</summary>
 
-The heart changes at once and the like use case keeps the intent in local storage; when the network returns it sends it. The idempotent PUT makes the replay safe. The alternative, roll back with a message, is simpler but annoying for something as small as a like.
+The heart changes at once and the like use case keeps the intent in pending likes; when the network returns it sends it. The idempotent PUT makes the replay safe. The alternative, roll back with a message, is simpler but annoying for something as small as a like.
 </details>
 
 <details>

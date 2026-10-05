@@ -171,7 +171,8 @@ layer order, so pair it with an invisible link that keeps the protocol above:
 
 Label each solid arrow **request → reply** (it points from the part that asks to the part that
 answers), so the sketch shows data coming back as well as requests going down, and keep labels short
-(≈4 words) so the sketch isn't widened. Keep rows to three cards so the sketch isn't scaled down. Never put a `;` in diagram text: Mermaid reads it as a line break and
+(≈4 words) so the sketch isn't widened. Keep rows to three cards so the sketch isn't scaled down. Sequence diagrams render at their natural width and the board scrolls sideways (flowcharts still
+scale to fit), so keep them to about six participants. Never put a `;` in diagram text: Mermaid reads it as a line break and
 the diagram falls back to its raw source.
 ## Publishing
 

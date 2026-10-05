@@ -127,6 +127,11 @@ matter, and it eats the minutes the deep dives need. The rules every chapter her
 - **One colour per layer**, the same in every chapter and on your own board: blue for presentation
   or API, purple for domain or core, green for data or I/O, orange for anything that crosses the
   network, grey and dashed for something reused.
+- **One job per card, meaning one reason to change.** If describing a card takes "and" ("shows it,
+  sends it and confirms it"), it's doing several jobs: split it into cards when the jobs are
+  real components (a disposable cache vs data that exists nowhere else; sending vs receiving), or
+  name a small **part inside** when the helper serves only that card (a view-state mapper, a DTO
+  mapper). Parts inside are explained, not drawn.
 - **A card earns its place** only if you can say in one sentence what it owns that nothing else does.
 - **Arrows show who asks whom, and what comes back.** A solid arrow points from the part that asks to
   the part that answers (also the direction of dependency) and is labelled **request → reply**

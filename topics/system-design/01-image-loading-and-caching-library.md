@@ -126,13 +126,14 @@ List them out loud, in the order you'll draw them. Name each by **what it does**
 
 | # | Component | Type name | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Image view helpers** | `setImage` · `LazyImage` | API | The one line a screen calls to say "show this picture here". Calls it off if the row scrolls away. |
-| 2 | **Image pipeline** | `ImagePipeline` | Core | The dispatcher: is the picture ready, is someone already fetching it, or send someone. |
-| 3 | **Memory cache** | `ImageMemoryCache` | Core | A small, fast shelf of ready-to-show pictures in the phone's memory. Lives inside the dispatcher. |
-| 4 | **Disk cache** | `ImageDiskCache` | I/O | A bigger, slower drawer of downloaded files on the phone, so seen pictures show offline. |
-| 5 | **Data loader** (protocol) | `DataLoader` | I/O | The job description "get the file at this address", written once for every source. |
-| 6 | **Network and file loaders** | `NetworkDataLoader` · `FileDataLoader` | Sources | The two workers who do that job: one downloads from the internet, one reads from the phone. |
-| 7 | **Image decoder** | `ImageDecoder` | I/O | Unpacks the downloaded file into a picture the screen can draw, at the size it's shown. |
+| 1 | **Image view helpers** | `setImage` · `LazyImage` | API | Connects one view to the picture it's waiting for. |
+| 2 | **Image pipeline** | `ImagePipeline` | Core | Coordinates every image request, so no picture is loaded twice at once. |
+| 3 | **Memory cache** | `ImageMemoryCache` | Core | Keeps recently shown pictures ready to draw. (Drawn inside the pipeline's card.) |
+| 4 | **Disk cache** | `ImageDiskCache` | I/O | Keeps downloaded files on the phone, so seen pictures show offline. |
+| 5 | **Data loader** (protocol) | `DataLoader` | I/O | Describes the job "get the file at this address", for any source. |
+| 6 | **Network loader** | `NetworkDataLoader` | Sources | Downloads a file from the internet. |
+| 7 | **File loader** | `FileDataLoader` | Sources | Reads a file already on the phone or inside the app. |
+| 8 | **Image decoder** | `ImageDecoder` | I/O | Turns a downloaded file into a picture at the size it's shown. |
 
 And what's deliberately **not** on the list yet: prefetching, revalidation, Low Data Mode, the disk index. *"I'll add those if we go there."*
 :::
@@ -154,12 +155,12 @@ checks and fills card 3: **Memory cache**`"]
 ImageDiskCache`"]
     Loader["`**5 · Data loader**
 «protocol»`"]
-    Dec["`**7 · Image decoder**
+    Dec["`**8 · Image decoder**
 ImageDecoder`"]
   end
   Net["`**6 · Network loader**
 NetworkDataLoader`"]
-  File["`**6 · File loader**
+  File["`**7 · File loader**
 FileDataLoader`"]
   Call -- "URL + size → image" --> Pipe
   Pipe -- "1 · read · save bytes" --> Disk
@@ -187,7 +188,7 @@ Each card is **what it does** in bold, with the type name underneath.
 3. Write the memory cache *inside* the pipeline card (the pipeline owns it and checks it first), then number the pipeline's three arrows as you draw them, labelled **request → reply**. That numbering *is* the algorithm on a memory miss: bytes from disk if they're there, otherwise download them and save them to disk, then decode them into an image, which goes into the memory cache and back up to the view.
 4. Write «protocol» on the data loader card, put the two loaders under it, and draw a dashed "implements" arrow from each **up** to it. The pipeline depends on the protocol, and so do the loaders; the pipeline never points at a concrete loader. That's dependency inversion on the board. That's the one seam worth drawing: a new image source is a new card under it, never a change to the pipeline. *"The caches and the decoder are behind protocols too, for tests."*
 
-Seven cards, three frames, six arrows. Methods stay off the board; they come up when the interviewer asks about a component, which is the next section.
+Seven cards for eight components (the memory cache is written inside the pipeline's card), three frames, six arrows. Methods stay off the board; they come up when the interviewer asks about a component, which is the next section.
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
@@ -332,21 +333,35 @@ protocol DataLoader: Sendable {
 >
 > *The detail:* A protocol's contract is more than its signature. Every loader must also **stop when cancelled**, **never return half the bytes**, and be **safe to call from several tasks at once**. A loader that ignores cancellation still compiles, but breaks every caller that relies on it: that's the *Liskov substitution principle* in practice. Write the promises in the protocol's comment, and run the same tests against every loader.
 
-### 6 · Network and file loaders (`NetworkDataLoader`, `FileDataLoader`)
+### 6 · Network loader (`NetworkDataLoader`)
 
-**In plain words:** the two workers who do that job: one downloads files from the internet, the other reads files already on the phone or packed inside the app.
+**In plain words:** the worker who fetches a file from the internet: give it an address, it brings back the file.
 
-**Owns:** one source each.
+**Owns:** downloading from the network, and nothing else.
 
-**Interface:** both conform to `DataLoader`; nothing else is public. They differ only in what they're built from: `NetworkDataLoader(session: URLSession)`, `FileDataLoader(fileManager: FileManager)`.
+**Interface:** it conforms to `DataLoader`; nothing else is public. It's built from the URL session it uses: `NetworkDataLoader(session: URLSession)`.
 
-**The choice inside it:** the network loader asks the CDN for a resized image (`?w=`), rounding the width up to a few buckets (160, 320, 640, 1280) so neighbouring sizes share one cached copy.
+**The choice inside it:** it asks the CDN for a resized image (`?w=`), rounding the width up to a few buckets (160, 320, 640, 1280) so neighbouring sizes share one cached copy.
 
 > **Under the hood.** *In plain words:* a chain of nearby warehouses that keep copies of each picture and can cut it down to size before sending it, so the phone downloads less.
 >
 > *The detail:* A *CDN* is a network of servers that keep copies of files close to users. One that can resize on request means the phone downloads a 640-pixel image instead of a 4000-pixel original: less data, less memory, less decoding. Rounding widths into buckets keeps the number of distinct copies small, so they're more likely to be cached.
 
-### 7 · Image decoder (`ImageDecoder`)
+### 7 · File loader (`FileDataLoader`)
+
+**In plain words:** the worker who reads a picture that's already on the phone, either saved earlier or packed inside the app, so the rest of the library treats it exactly like a download.
+
+**Owns:** reading files from disk or the app bundle, and nothing else.
+
+**Interface:** it conforms to `DataLoader`; nothing else is public. It's built from the file system it reads: `FileDataLoader(fileManager: FileManager)`.
+
+**The choice inside it:** it's a separate type rather than an `if` inside the network loader, because the two change for unrelated reasons (HTTP and CDN rules versus file paths and bundles), and it's what makes the "new source = new loader" promise real.
+
+> **Under the hood.** *In plain words:* two workers with the same job description but different tools; the dispatcher never needs to know which one it got.
+>
+> *The detail:* this is the *single responsibility principle* applied to sources: one loader per way of getting bytes, each with exactly one reason to change, all behind one protocol. Adding the Photos library tomorrow is a third loader, not an edit to these two.
+
+### 8 · Image decoder (`ImageDecoder`)
 
 **In plain words:** a downloaded picture is a compressed file, like a zipped folder. The decoder unpacks it into the grid of coloured dots the screen draws, and shrinks it to the size it will be shown while doing so.
 
@@ -366,7 +381,7 @@ protocol ImageDecoderType: Sendable {
 >
 > *The detail:* A decoded image costs **width × height × 4 bytes** (one byte each for red, green, blue, transparency), whatever the file size. A 4032 × 3024 photo is a 2 MB JPEG but 49 MB decoded; at 300 × 300 pixels it's 0.36 MB. Shrinking during decoding means the large version never exists in memory.
 
-### Why these seven, and not one ImageManager
+### Why these eight, and not one ImageManager
 
 Each changes for a different reason: the loader with the transport, the decoder with the format, the caches with the eviction policy, the pipeline with the coordination rules. One `ImageManager` would be touched by all of them. *"I split where the reasons to change differ, not per noun."*
 :::
