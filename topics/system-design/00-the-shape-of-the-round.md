@@ -12,13 +12,9 @@ At senior level this is usually the round that decides the outcome, and it is th
 the material and passing come apart most often. What's graded is how you run 45 minutes, out loud,
 while someone interrupts you.
 
-The chapters are also meant to be **learned from**, not only rehearsed: every component comes with
-an *Under the hood* note explaining the concept behind it (what an actor is, why a cursor beats an
-offset, what a decoded image costs), so the answer makes sense even the first time through.
-They're written to be readable by someone who doesn't code, too: each chapter opens with a **Words
-used in this chapter** glossary, the component table describes every part in plain words, and
-every component starts with an **In plain words** line and an everyday comparison before any
-technical detail. Every *Under the hood* note does the same: plain words first, then *the detail*.
+The chapters are also meant to be **learned from**, and readable by someone who doesn't code. They
+stay short on purpose: each opens with a **Words used in this chapter** glossary, every component is
+its job in one or two plain sentences, its interface, and the one or two choices behind it.
 
 So every question here is written to be **performed, not read**. The prompt is at the top; the
 whole answer is behind collapsed sections, in the order a real round unfolds — including the
@@ -100,59 +96,19 @@ next one easy to follow, which is what the interviewer is grading.
 
 ## Keep the whiteboard simple
 
-A board with twenty boxes doesn't read as thorough. It reads as someone who can't tell which parts
-matter, and it eats the minutes the deep dives need. The rules every chapter here follows:
+A board with twenty boxes doesn't read as thorough. It reads as someone who can't tell what matters. If the interviewer can't follow your sketch in ten seconds, it's too big. The rules every chapter here follows:
 
-- **Three layers for an app question.** *Presentation* (a dumb view, and the view model that owns the
-  screen's state and hands the view **one view state**: a single `Equatable` struct describing
-  everything on screen, so the view only draws it and forwards user actions), *domain* (plain models and the protocol the view model depends on), *data* (the
-  implementation that decides between network and disk).
-  **Use cases only where they coordinate:** a use case earns a card when a job spans several sources
-  or carries a business rule owned by neither screen nor data (liking a post: record it, send it,
-  confirm or undo, newest tap wins). A job that's one repository call gets none: a
-  `LoadNextPageUseCase` that only forwards a call is ceremony, and interviewers read it as such.
-  **When the screen's model has several sources** (server pages, the saved copy, the user's own
-  pending actions), the repository is a **composite** that maps each and merges them into one
-  domain model, with pending actions laid over server data until confirmed.
-  **Keep the server's models apart from the app's:** the API client decodes into DTOs that mirror
-  the JSON, and the repository maps them to domain models (and the saved format to and from them).
-  The domain never sees the server's shape, so a server change touches one DTO and one mapping.
-  A library question (an image loader, an analytics SDK) isn't an app, so it gets three layers of its
-  own instead: *API* (what callers touch), *core* (the coordinator), *I/O* (loaders, caches, codecs).
-- **Each card: the role in bold, the type name underneath.** Someone who doesn't know Swift should
-  still be able to read the board.
-- **About seven or eight cards**, at most three side by side. Something that lives inside another
-  component (a cache the coordinator owns) is written inside that card. Anything reused from an
-  earlier question is one dashed card, not its insides.
-- **One colour per layer**, the same in every chapter and on your own board: blue for presentation
-  or API, purple for domain or core, green for data or I/O, orange for anything that crosses the
-  network, grey and dashed for something reused.
-- **One job per card, meaning one reason to change.** If describing a card takes "and" ("shows it,
-  sends it and confirms it"), it's doing several jobs: split it into cards when the jobs are
-  real components (a disposable cache vs data that exists nowhere else; sending vs receiving), or
-  name a small **part inside** when the helper serves only that card (a view-state mapper, a DTO
-  mapper). Parts inside are explained, not drawn.
-- **A card earns its place** only if you can say in one sentence what it owns that nothing else does.
-- **Arrows show who asks whom, and what comes back.** A solid arrow points from the part that asks to
-  the part that answers (also the direction of dependency) and is labelled **request → reply**
-  ("ask for posts → posts", "URL → bytes"), so the data flowing back is on the board too. Show
-  writes as well as reads ("load · save posts"). The one dashed arrow is "implements". Then the
-  sequence diagram (or, in the room, your one traced request) replays the same flow with the
-  replies drawn as their own arrows back up to the screen.
-- **Draw one protocol seam, not every one.** Show interface and implementation as separate cards
-  only at the boundary that defines the architecture (usually the repository). The
-  implementation gets a dashed **"implements" arrow pointing up** at the protocol, so both arrows
-  touching the protocol card point *at* it: the layer above uses it, the layer below implements it,
-  and nothing in the domain points down at the data layer. That's dependency inversion on the
-  board. (An arrow from the protocol *down* to the implementation would draw the opposite.) Then say
-  it once: *"Everything else is behind a protocol too, for tests. I'm drawing the one that matters."*
-- **A second screen showing the same data is a pushed topic.** Then: one shared observable store
-  every screen reads (change it once, every screen redraws), and a change bus ("refetch, this is
-  stale") only for events where a fresh fetch is the right answer. Neither belongs on the first
-  sketch.
-- **Start simple, grow under pressure.** Every extra component (an outbox, a shared store, a
-  socket) waits until the interviewer pushes on that area. Adding it then, with the reason, scores
-  better than having drawn it at minute twelve.
+- **Three layers.** *Presentation*: a dumb view and a view model that hands it one view state. *Domain*: the model, the repository protocol, and a use case only where there's a rule. *Data*: the repository and the API client. (A library gets *API*, *core*, *I/O* instead.)
+- **Seven to nine cards.** Never more than nine. Leave out what the scope doesn't need (offline cache, outbox, socket, shared store) and say "I'll add that if we go there".
+- **Name the endpoints.** Say each one, put them on the API card, and write them in the contract. Per-user data (likes, read state) usually has its own endpoint.
+- **One repository per source, one composite to combine them.** A posts repository and a likes repository; the composite asks both and returns one `Post`. A use case talks only to the repository it needs.
+- **DTOs stay in the data layer.** The repository maps them to the app's model.
+- **A use case needs a rule.** Liking (last tap wins) gets one. Loading a page is one call, so it doesn't.
+- **Cards are two lines:** the role in bold, the type name underneath.
+- **Arrow labels are three words at most:** `request → reply`, like "load → posts".
+- **A protocol for each repository the domain uses,** with a dashed "implements" arrow pointing **up** at it. That's dependency inversion on the board.
+- **One colour per layer:** blue presentation, purple domain, green data, orange network, grey dashed for something reused.
+- **Grow under pressure.** A second screen, offline, live updates: add them when the interviewer asks, with the reason.
 
 ## Components, and saying why those components
 
@@ -189,8 +145,7 @@ answer. Then, collapsed: a **Words used in this chapter** glossary, and the answ
 3. The idea, in 30 seconds — what you say before drawing anything
 4. What we need — the components, in drawing order: role, type name, layer, one job
 5. The sketch — the diagram, and how to draw it on your own board step by step
-6. Each component — **in plain words** first, then what it owns, **its interface**, the choice inside
-   it, and an *Under the hood* note that teaches the concept
+6. Each component — its **job** in plain words, **its interface**, and the choices behind it
 7. Key flows through the sketch — one sequence diagram per main read or write flow, every arrow a
    method from section 6
 8. The server contract — endpoints and payloads

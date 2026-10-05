@@ -14,132 +14,100 @@ sources:
 - Apple · allowsConstrainedNetworkAccess | https://developer.apple.com/documentation/foundation/urlsessionconfiguration/allowsconstrainednetworkaccess
 ---
 
-*An image-heavy feed is one of the recurring senior mobile prompts in the first-hand reports collected for this programme. The public corpus interviewers draw on uses a Twitter-style feed as its main worked example, and the pagination advice below matches it: cursors, not offsets.*
+*An image-heavy feed is one of the most common senior mobile prompts. The answer below stays small on purpose: one repository per source, one composite to combine them, three endpoints.*
 
 > **Interviewer:** "We have a feed of photos — think Instagram's home feed. It scrolls forever. Design the client for me."
 
 ## Run it as a round, not as reading
 
-Set a timer. Stand up. Sketch. Talk the whole time. **Do not open a section until its slot is over.**
+Set a timer. Sketch. Talk the whole time. Open a section only when its slot is over.
 
 | Clock | Phase | What you do |
 |---|---|---|
-| 0:00–0:02 | The prompt | Repeat it back in one sentence and say how you'll use the time |
-| 0:02–0:07 | Clarify | Ask yours; then open section 1 and take its answers as the interviewer's |
-| 0:07–0:12 | Scope | Out of scope first, then 3–5 functional, then the non-functional ones that matter |
-| 0:12–0:24 | High level | Say the idea (1 min) · list the components (2) · sketch them (4) · explain each (4) · trace one request (1) |
-| 0:24–0:40 | Deep dives | The interviewer picks; sections 9–11 are the three they pick from |
-| 0:40–0:45 | Follow-ups and recap | Whatever they still probe, then the 60-second summary; the question bank afterwards |
+| 0:00–0:02 | The prompt | Repeat it back in one sentence |
+| 0:02–0:07 | Clarify | Ask yours, then read section 1 |
+| 0:07–0:12 | Scope | Out of scope first, then features, then what must feel good |
+| 0:12–0:24 | High level | The idea · the parts · the sketch · each part · two flows |
+| 0:24–0:40 | Deep dives | The interviewer picks one of sections 9–11 |
+| 0:40–0:45 | Recap | Follow-ups, then the 60-second summary |
 
 ## What this question is really testing
 
-It looks like a question about lists. It is a question about **three clocks running at once**: the frame clock (16 ms, or 8 ms on a 120 Hz screen), the network clock (hundreds of milliseconds per page) and the user's thumb, which is faster than both.
+- **Cursor pagination**, and why not page numbers.
+- **Rows that know their height before the photo arrives**, so nothing jumps.
+- **"Load more" that fires once**, not five times.
+- **A like that feels instant** and is undone if the server says no.
+- **Keeping it small.** Ranking is the server's job. The photos come from question 1's image loader.
 
-- **Do you pick cursor pagination, and can you say why?** Offsets break the moment someone posts while you scroll. This is the single most-checked line in the answer.
-- **Do you know the cell's height before the image arrives?** Layout jumps are the visible bug in most feeds, and the fix is in the API, not in the view.
-- **Can you keep "load the next page" from firing five times?** That's the concurrency content: a guard that is atomic on the main actor, and a refresh that doesn't race with a page load.
-- **Do you treat the image work as solved?** You built it in question 1. Say "the image pipeline from before" and spend the time on the feed.
-- **Do you keep it client-side?** Ranking, fan-out and timelines are the server's job. Name them as out of scope in the first minute.
-
-**Traps:** offset pagination; inserting new posts at the top while the user is reading; holding `UIImage`s in the model; a like button that flickers back when the feed refreshes; designing the ranking algorithm.
+**Traps:** page numbers instead of a cursor; photos stored inside the post model; inserting new posts above what the user is reading; designing the ranking.
 
 ::: Words used in this chapter
-Plain definitions for the technical words this chapter uses. Read once; come back when a word stops you.
-
-- **App, server, API** — the *app* runs on the phone; the *server* is the company's computer that stores every post; the *API* is the agreed set of requests the app may send it (like the forms a counter clerk accepts).
-- **Endpoint** — one specific request the API accepts, such as "give me the next posts".
-- **Feed, page** — the *feed* is the endless list of posts; it arrives in *pages* of about 20 at a time, so the app never downloads everything at once.
-- **Cursor** — a bookmark the server hands back with each page, meaning "you stopped here". The app sends it back to get the page after it.
-- **Layer** — a group of parts with the same kind of job. Here: *presentation* (what you see), *domain* (the plain description of the data and what may be asked for), *data* (where the data actually comes from).
-- **View model** — the part that holds a screen's current state and decisions, separate from the drawing of it.
-- **View state** — one complete description of what a screen shows right now (every row's text, whether a spinner is visible), handed to the screen in a single piece, like a cue sheet.
-- **Model** — a plain description of one thing (a post), with no behaviour. The *domain model* is the app's own version.
-- **DTO and mapping** — a *DTO* is a copy of the server's format, field for field; *mapping* translates it into the app's domain model, like converting a form from another office into your own.
-- **Protocol** — a written promise of what a part can do, without how. Any part that keeps the promise can stand in, including a fake one in a test.
-- **Repository** — the one place the app asks for data, which hides whether it came from the server or the phone.
-- **Composite** — one repository that gathers pieces from several sources (the server, the phone's copy, likes in progress) and hands back one finished post.
-- **Use case** — one complete job the app does, written down once ("like a post: note it, send it, confirm or undo"). It gets its own part only when the job has several steps or a rule.
-- **Shared store, change bus** — a *shared store* is one copy of the posts every screen reads, so a change shows everywhere; a *change bus* is an announcement every screen hears ("refetch, things changed"), used when a fresh fetch is the right answer.
-- **Cache** — a kept copy of something fetched before, so it's instant next time.
-- **Main thread / main actor** — the single lane that draws the screen. Slow work there freezes scrolling, so it's kept short.
-- **Optimistic update** — showing the result of a tap (the red heart) immediately, before the server confirms, and undoing it if the server says no.
-- **Idempotent** — a request that has the same effect sent once or twice ("set liked to yes"), so repeating it after a network blip is safe.
-- **Decode, pixel** — a photo arrives compressed (a JPEG); *decoding* unpacks it into the grid of coloured dots (*pixels*) the screen draws. Unpacked, it's many times bigger.
+- **Server, API, endpoint** — the server stores the posts; the API is the list of requests it accepts; an endpoint is one of those requests.
+- **Page, cursor** — posts arrive about 20 at a time (a page). The cursor is a bookmark the server sends with each page: "you stopped here".
+- **Layer** — a group of parts with the same kind of job: *presentation* (what you see), *domain* (the app's own rules and data), *data* (where data comes from).
+- **View model, view state** — the view model is the screen's brain. The view state is one value that describes everything the screen shows.
+- **Model, DTO, mapping** — the *model* is the app's own description of a post. A *DTO* is the server's format. *Mapping* turns one into the other.
+- **Protocol** — a promise of what a part can do, without saying how. A fake can keep the same promise in tests.
+- **Repository** — the one place the app asks for data.
+- **Composite** — a repository that combines several sources into one model.
+- **Use case** — one job of the app with its own rules, like "like a post".
+- **Optimistic update** — show the result of a tap at once, undo it if the server refuses.
+- **Idempotent** — sending the same request twice has the same effect as once.
 :::
 
 ::: 1 · The interviewer answers your clarifying questions
-Ask yours first. These are the answers you'd get, and the assumptions the rest of this chapter runs on.
+**"What's in a post?"** → *One photo, an author, a caption, a like count. Skip video and carousels.*
 
-**"What's in a post?"**
-→ *One photo, an author, a caption, a like count and whether I liked it. Carousels and video exist in the real app; leave them out.*
+**"Who orders the feed?"** → *The server ranks it. The app shows pages in the order it gets them.*
 
-**"Who orders the feed — chronological or ranked?"**
-→ *Ranked, by the server. The client gets pages in order and doesn't reorder.*
+**"How do I know which posts I liked?"** → *There's a separate likes endpoint. Posts are the same for everyone, so they don't say whether you liked them.*
 
-**"How much should work offline?"**
-→ *Opening the app on the U-Bahn should show what you saw last time. Posting and liking offline are nice-to-haves.*
+**"Offline?"** → *Nice to have. An error with a retry button is fine for now.*
 
-**"Do new posts appear live?"**
-→ *We'd like the user to know there's something new. We don't need a live socket for it.*
+**"New posts live?"** → *No. Pull to refresh is enough.*
 
-**"Which interactions matter?"**
-→ *Like and unlike from the feed. Comments open a separate screen — out of scope.*
+**"Minimum OS, UIKit or SwiftUI?"** → *iOS 17, SwiftUI. Tell me if you'd use UIKit for the list.*
 
-**"Minimum OS, UIKit or SwiftUI?"**
-→ *iOS 17 minimum. SwiftUI app, but the feed screen is the most performance-sensitive thing we have — tell me what you'd use.*
-
-**"What hurts today?"**
-→ *Stutter when flinging on older phones, the list jumping when images load, and data use.*
+**"What hurts today?"** → *Stutter on older phones, and the list jumping when photos load.*
 :::
 
 ::: 2 · Requirements and scope — what you should have said
-**Out of scope, stated first:** ranking and the server timeline, posting and the camera, comments, stories, video and carousels, ads, search. The image loading pipeline is in scope only as a dependency — it's question 1, and you say so.
+**Out of scope, said first:** ranking, posting, comments, stories, video, ads, search. The image loader is reused from question 1.
 
-**Functional — four**
+**Features**
 
-1. Show a ranked feed of photo posts that loads more as you scroll, without a visible wait in normal conditions.
-2. Pull to refresh; tell the user when newer posts exist, without moving what they're reading.
-3. Like and unlike, instantly, surviving a refresh and a flaky network.
-4. Show the last-seen feed immediately on launch, including offline.
+1. Show the feed and load more as the user scrolls.
+2. Pull to refresh.
+3. Like and unlike, instantly.
 
-**Non-functional that matter here**
+**What must feel good**
 
-- **Smoothness** — no dropped frames while flinging on a three-year-old phone. No decode, no JSON parsing, no layout measurement of unknown images on the main actor.
-- **Stability** — the content under the user's thumb never moves unless they asked it to.
-- **Memory** — bounded however far you scroll; decoded images are the budget, not models.
-- **Data and battery** — prefetch a little ahead, not a lot; honour Low Data Mode.
-- **Correctness** — no duplicates, no gaps, no stale like state.
-
-Then say the axis: *"Everything here trades how far ahead I load against memory, data and battery. Too little and the user waits; too much and we pay for posts nobody sees."*
+- **Smooth** — no dropped frames, even on an old phone.
+- **Stable** — rows never jump under the user's thumb.
+- **Bounded memory** — however far they scroll.
+- **Correct** — no duplicate posts, no wrong hearts.
 :::
 
 ::: 3 · The idea, in 30 seconds — before you draw anything
-Say the whole design in plain words first, so the interviewer knows where you're going before the first box appears:
-
-> *"The feed is a list that loads pages from the server with a cursor. One view model owns that list and decides when to load more. It gets posts from a repository that combines three sources into one post model: fresh pages from the server, the copy saved on the phone, and any likes still on their way to the server. A like is a small job of its own: the heart changes at once, and a like use case sends it and confirms or undoes it. Each post carries its image's size, so rows know their height before the photo arrives, and the photos come from the image library of question 1. Three layers: presentation, domain, data."*
-
-That's it. If they stop you here, you've already shown the shape of the answer. Everything after this is filling it in.
+> *"One repository per source: a posts repository calls `GET /feed`, a likes repository calls `GET /likes` and `POST /like`. A composite feed repository combines the two into one Post model. The view model loads pages from it with a cursor and gives the screen one view state. Liking is a use case that talks only to the likes repository: the heart changes at once and is undone if the server refuses. Three layers: presentation, domain, data."*
 :::
 
 ::: 4 · What we need — the components, before the sketch
-List them out loud, in the order you'll draw them. Name each by **what it does**, not by its class name: the interviewer should understand the board without knowing Swift. The type name is a detail you mention while explaining it.
-
-| # | Component | Type name | Layer | Its one job |
+| # | Part | Type | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Feed screen** | `FeedView` | Presentation | Shows the feed exactly as the view state describes. |
-| 2 | **Feed view model** | `FeedViewModel` | Presentation | Decides what the screen shows next, event by event. |
-| 3 | **Post model** | `FeedItem` | Domain | Describes one post. |
-| 4 | **Feed repository** (protocol) | `FeedRepository` | Domain | Lists what can be asked for, without saying how. |
-| 5 | **Like post use case** | `LikePostUseCase` | Domain | Gets a like accepted by the server, or reports that it wasn't. |
-| 6 | **Feed repository** (the real one) | `CompositeFeedRepository` | Data | Assembles posts from their sources. |
-| 7 | **API client** | `FeedAPI` | Data | Talks to the server. |
-| 8 | **Saved feed** | `FeedCache` | Data | Keeps the last 200 posts on the phone. |
-| 9 | **Pending likes** | `PendingLikeStore` | Data | Remembers likes the server hasn't confirmed yet. |
-| 10 | **Image loader** | `ImagePipeline` | Reused | Delivers each photo at the size its row needs. |
+| 1 | **Feed screen** | `FeedView` | Presentation | Draws the view state. |
+| 2 | **Feed view model** | `FeedViewModel` | Presentation | Turns posts into a view state. |
+| 3 | **Image loader** | `ImagePipeline` | Reused | Delivers each photo, from question 1. |
+| 4 | **Feed repository** | `FeedRepository` | Domain | Promises pages of posts. |
+| 5 | **Like use case** | `LikePostUseCase` | Domain | Sends a like. |
+| 6 | **Likes repository** | `LikesRepository` | Domain | Promises likes: read and save. |
+| 7 | **Composite feed repository** | `CompositeFeedRepository` | Data | Combines posts and likes into `Post`. |
+| 8 | **Posts repository** | `PostsRepository` | Data | Fetches pages of posts. |
+| 9 | **Likes repository** | `RemoteLikesRepository` | Data | Reads and saves the user's likes. |
 
-Each line is **one job: one reason to change**. Helpers that serve a single card (formatting rows, translating the server's format, laying pending likes over posts) are its *parts inside*, described in section 6 but not drawn.
+The `Post` model isn't a card: it's what the composite returns, written on its card. The HTTP client the two data repositories share isn't drawn either.
 
-Then say what's deliberately **not** on the list yet: a shared post store for when a second screen shows the same posts (deep dive 11), and a live socket for new posts. *"I'll add those if we go there."*
+Not on the list yet: a saved copy for offline, a "new posts" pill, a shared store for a second screen. *"I'll add those if we go there."*
 :::
 
 ::: 5 · The sketch
@@ -147,1000 +115,568 @@ Then say what's deliberately **not** on the list yet: a shared post store for wh
 flowchart TB
   subgraph P["PRESENTATION"]
     View["`**1 · Feed screen**
-FeedView`"] -- "user actions → view state" --> VM["`**2 · Feed view model**
+FeedView`"] -- "actions → view state" --> VM["`**2 · Feed view model**
 FeedViewModel`"]
   end
+  Img["`**3 · Image loader**
+reused from Q1`"]
   subgraph D["DOMAIN"]
-    Item["`**3 · Post model**
-FeedItem
-the app's own shape`"]
-    Repo["`**4 · Feed repository**
+    Feed["`**4 · Feed repository**
 «protocol»`"]
-    Like["`**5 · Like post use case**
+    Like["`**5 · Like use case**
 LikePostUseCase`"]
+    Likes["`**6 · Likes repository**
+«protocol»`"]
   end
   subgraph DA["DATA"]
-    Impl["`**6 · Feed repository**
+    Comp["`**7 · Composite feed repository**
 CompositeFeedRepository
-merges 3 sources → FeedItem`"]
-    API["`**7 · API client**
-FeedAPI
-returns DTOs`"]
-    Cache["`**8 · Saved feed**
-FeedCache`"]
-    Pending["`**9 · Pending likes**
-PendingLikeStore`"]
+posts + likes → Post`"]
+    Posts["`**8 · Posts repository**
+PostsRepository
+GET /feed`"]
+    LikesImpl["`**9 · Likes repository**
+RemoteLikesRepository
+GET /likes · POST /like`"]
   end
-  Pipe["`**10 · Image loader**
-from question 1`"]
-  VM -- "ask for posts → FeedItems" --> Repo
-  VM -- "like → confirmed or reverted" --> Like
-  Like -- "record · send → ok or failed" --> Repo
-  Repo ~~~ Impl
-  Impl -. "implements" .-> Repo
-  Impl -- "requests → DTOs" --> API
-  Impl -- "load · save → saved posts" --> Cache
-  Impl -- "read · write → intents" --> Pending
-  View -- "photo URL + size → image" --> Pipe
+  View -- "URL → photo" --> Img
+  VM -- "like → ok" --> Like
+  Like -- "send → ok" --> Likes
+  Likes ~~~ LikesImpl
+  LikesImpl -. "implements" .-> Likes
+  VM -- "load → posts" --> Feed
+  Like ~~~ Feed
+  Feed ~~~ Comp
+  Comp -. "implements" .-> Feed
+  Comp -- "page → DTOs" --> Posts
+  Comp -- "IDs → liked" --> LikesImpl
   class View,VM pres
-  class Item,Repo,Like dom
-  class Impl,Cache,Pending data
-  class API net
-  class Pipe reuse
+  class Feed,Like,Likes dom
+  class Comp,Posts,LikesImpl data
+  class Img reuse
 ```
 
-Each card is **what it does** in bold, with the type name underneath. A newcomer to the board reads the bold line; you say the type name as you point at it.
+**How to read it.** A solid arrow points from the part that asks to the part that answers: *request → reply*. The dashed arrows mean *implements*. The grey dashed card is reused from question 1.
 
-**How to read the arrows.** A solid arrow means *asks*: it points from the part that asks to the part that answers, which is also the direction of dependency. Its label reads **request → reply**, so the data coming back travels the other way along the same arrow. The dashed arrow means *implements*. Section 7 replays the main flows step by step.
+**Dependency inversion, in one line.** The domain writes the two promises (cards 4 and 6); the data layer keeps them (cards 7 and 9). Both dashed arrows point **up**, so the domain never depends on the network.
 
-**Drawing it on Miro, step by step** (about four minutes, talking the whole time):
+**One owner per source.** Posts come only from card 8, likes only from card 9. The composite (card 7) is the one place they meet. The like use case never touches posts.
 
-1. Three wide frames stacked top to bottom: **Presentation**, **Domain**, **Data**. Label them before putting anything in them.
-2. Fill them in the order of your list, one card per component (each with one job), one colour per layer: blue for presentation, purple for domain, green for data, orange for anything that crosses the network, grey and dashed for the reused image loader.
-3. Arrows last, each pointing from the part that asks to the part that answers, labelled **request → reply**: the screen reports what the user did and gets one view state back; the view model asks the repository for posts and hands likes to the like use case; the use case records and sends the like through the repository; the real repository fetches pages from the API client, loads and saves the saved feed, and reads and writes pending likes; each row asks the image loader for its photo. Then one dashed arrow **up** from the real repository to the protocol, labelled "implements".
-4. Write «protocol» on the domain repository card. Every arrow touching it points *at* it: the view model and the like use case use it from above, the real repository implements it from below. Nothing in the domain points down at the data layer, so the domain never depends on networking or storage. That's dependency inversion on the board.
-
-Ten cards, three frames, nine arrows. Say two things while pointing: **"this repository is a composite: one post model out of three sources"**, and **"liking gets a use case because it coordinates several steps and a rule; loading doesn't, because it's one call."**
+**On Miro:** three frames (blue, purple, green), nine cards, nine arrows. Point at card 7 and say: *"two repositories, one composite, one model."*
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
-Point at each card and cover three things: **what it owns**, **its interface** (what others can call or read, which is what an interviewer means by "what does this expose?"), and **the choice you made inside it**. Every card has **one job, meaning one reason to change**; where a job needs a helper nobody else uses, the helper is listed as a *part inside* with its own single job. The *Under the hood* notes are for learning; you won't recite them in the room, but they're what lets you answer the follow-up.
+**The model everyone shares.** It's what the composite returns; the screen never sees a DTO.
+
+```swift
+struct Post: Identifiable, Hashable, Sendable {
+    let id: PostID
+    let author: Author
+    let caption: String
+    /// URL, width, height
+    let image: ImageRef
+    var likeCount: Int
+    var isLiked: Bool
+}
+```
+
+The photo's **size** is in the model, the photo itself isn't. Pixels live in the image loader's cache, which has a memory limit.
 
 ### 1 · Feed screen (`FeedView`)
 
-**In plain words:** the part of the app you actually see and scroll. It draws exactly what it's handed and tells the rest of the app what you did: scrolled near the bottom, pulled down to refresh, tapped a heart. Like a shop window dressed from a photo of how it should look: it doesn't decide anything, it just arranges what the photo shows.
+**Job:** draws what the view model hands it and reports taps and scrolls. It decides nothing.
 
-**Owns:** nothing. It's **dumb on purpose**: no formatting, no "if the list is empty show…", no decisions.
+**Interface:** reads `viewModel.viewState`; calls `onAppear()`, `onNearEnd()`, `refresh()`, `toggleLike(_:)`.
 
-**Interface:** it's created with a view model, reads **one** thing from it, `viewState`, and calls four (`onAppear`, `onNearEnd`, `refresh`, `toggleLike`). Everything it draws is in that one value; if the screen needs to know something, it goes into the view state.
-
-**The choice inside it:** `UICollectionView` with a diffable data source, wrapped in `UIViewControllerRepresentable`, because it recycles rows, has a prefetch callback, and has been tuned for this for a decade. *Rejected:* SwiftUI `LazyVStack`, which creates rows lazily but is widely reported to keep them, so memory grows with how far you scroll. *Switch condition:* simple rows on iOS 18, where `List` profiles clean on the oldest supported phone.
-
-> **Under the hood.** *In plain words:* the list doesn't build a row for every post. It keeps about a screenful of rows and repaints them as you scroll, like a waiter reusing the same few plates. So a row must never assume what it showed a moment ago.
->
-> *The detail:* A collection view keeps only the rows on screen plus a few spare; when a row scrolls off, it's *reused* for the one scrolling on. That's why a row must never assume what it showed before, and why images are requested per row and cancelled on reuse. A *diffable data source* takes a list of IDs, works out what was inserted, removed or moved, and animates only that. It needs every ID to be unique, which is why duplicate posts must be filtered out (a duplicate crashes, rather than glitching).
+**Choice:** `UICollectionView` wrapped for SwiftUI, because it reuses rows and has prefetching. *Switch to* SwiftUI `List` if it profiles smooth on the oldest phone.
 
 ### 2 · Feed view model (`FeedViewModel`)
 
-**In plain words:** the screen's brain. It keeps the posts, knows whether something is loading or failed, and decides when to fetch the next batch. Then it writes **one complete description of the screen**, the *view state*, like a stage manager handing the crew a single cue sheet: what every row says, whether to show a spinner, an error or the "new posts" pill. The screen only ever reads that sheet.
-
-**Owns:** the screen's state (the posts, the loading phase, the cursor) and what happens when the user acts.
+**Job:** keeps the posts and the loading state, and turns them into one view state.
 
 **Interface:**
 
 ```swift
-/// Everything the screen shows, as one value. The screen draws this and nothing else.
 struct FeedViewState: Equatable {
-    /// One per post, already formatted for display
-    let rows: [PostRowState]
-    /// Loading, content, loading more, empty, error with its message, end of feed
+    let rows: [PostRow]
+    /// loading, loaded, loadingMore, failed(message), end
     let status: Status
-    /// "7 new posts", or nil to hide the pill
-    let newPostsBanner: String?
 }
 
-/// One row, ready to draw: no dates to format, no counts to pluralise.
-struct PostRowState: Equatable, Identifiable {
+struct PostRow: Equatable, Identifiable {
     let id: PostID
-    let authorName: String
+    let author: String
     let caption: String
-    let image: ImageRequest
-    /// Width ÷ height, so the row is sized before the photo arrives
+    let imageURL: URL
+    /// width ÷ height, so the row has its size before the photo
     let aspectRatio: Double
-    /// Already formatted, e.g. "412 likes"
-    let likeCountText: String
+    /// already formatted, e.g. "412 likes"
+    let likes: String
     let isLiked: Bool
 }
 
 @MainActor @Observable
 final class FeedViewModel {
-    init(repository: FeedRepository, likePost: LikePostUseCaseType, mapper: FeedViewStateMapper)
+    init(feed: FeedRepository, likePost: LikePostUseCaseType)
 
-    /// The one thing the screen reads, rebuilt from the private state on every change
     var viewState: FeedViewState { get }
 
-    /// Saved posts, then page 1
     func onAppear() async
-    /// The only way the next page loads
     func onNearEnd() async
-    /// Pull to refresh
     func refresh() async
-    /// Changes the heart now; the like use case does the rest
     func toggleLike(_ id: PostID)
 }
 ```
 
-**The choices inside it:**
+**Choices:**
 
-- **One view state, not a handful of properties.** The screen gets a single `FeedViewState` instead of reading `items`, `phase` and `newerAvailable` and combining them itself. That keeps the view dumb and makes the whole screen testable as one value: call `onNearEnd()`, then check `viewState` equals the expected struct.
-- **Part inside: the view-state mapper (`FeedViewStateMapper`).** Its one job is formatting: posts and the phase in, a `FeedViewState` out ("412 likes", the right status, the banner text). It's a pure function with no collaborators, so it's tested directly with plain values, and the view model's job stays "hold the state and react to the user". A copy change ("412 likes" → "412 ♥") touches the mapper, never the view model's logic. *Rejected:* exposing the raw properties, which is less code but moves "what does loading-while-empty look like?" into the view, where it can't be unit-tested.
-- **Private state, derived view state.** Inside, the view model keeps the posts, the cursor and **one `phase`, not five booleans** (separate `isLoading`, `isRefreshing`, `hasError` flags allow states that can't exist, like loading *and* failed). `viewState` is computed from them, never stored and updated separately, so the two can't drift apart.
-- **On the main actor**, because the screen reads it every frame. Every change happens in one place, so "is it already loading? if not, start" needs no lock.
-- **Why MVVM.** The view model is what makes the feed testable without a screen: give it a fake repository, call `onNearEnd()` twice, check one request went out and the view state shows "loading more". *Rejected:* a single reducer store (TCA-style), which buys a strict event log at the cost of a dependency and a learning curve. *Switch condition:* several screens sharing feed state.
+- **One view state**, so the screen stays dumb and a test checks one value.
+- **One `status` enum**, not several booleans, so "loading and failed" can't happen.
+- **Optimistic like:** `toggleLike` flips the heart and the count at once, calls the use case, and flips them back if it throws.
 
-> **Under the hood.** *In plain words:* the screen is a copy machine for the cue sheet: hand it a new sheet and it redraws to match. Because the sheet is one value that can be compared, the screen can tell exactly which rows changed and redraw only those.
->
-> *The detail:* `FeedViewState` and `PostRowState` are `Equatable` value types. The list applies `rows` as a diffable snapshot, and rows whose state didn't change are left alone (`reconfigureItems` only for the ones that did), so one like doesn't redraw the feed. With `@Observable` (iOS 17), SwiftUI tracks that the screen read `viewState` and redraws when it changes; the older `ObservableObject` redrew on any `@Published` change. `@MainActor` means "all of this runs on the main thread", enforced by the compiler, so the screen never reads a half-updated state.
+### 3 · Image loader (`ImagePipeline`, from question 1)
 
-### 3 · Post model (`FeedItem`)
+**Job:** gives each row its photo at the size the row shows.
 
-**In plain words:** a description of one post, like an index card: who posted it, the caption, the number of likes, whether you liked it, and the address of the photo with its width and height. The card says *where* the photo is, never holds the photo itself.
+**Interface:** the row asks with the photo's URL and its display size, and cancels when the row is reused.
 
-**Owns:** one post's data. No behaviour.
+**Choice:** reused, not redesigned. Say "the image loader from question 1" and spend the time on the feed.
 
-**Interface:**
+### 4 · Feed repository (`FeedRepository`)
 
-```swift
-struct FeedItem: Identifiable, Hashable, Sendable {
-    let id: PostID
-    /// Name, avatar URL
-    let author: Author
-    let caption: String
-    /// URL, pixel width, pixel height, placeholder colour
-    let image: ImageRef
-    var likeCount: Int
-    var likedByMe: Bool
-}
-```
-
-**The choice inside it:** **no `UIImage` in the model.** The image's width and height are in it, because they decide the row's height before any pixel arrives.
-
-> **Under the hood.** *In plain words:* a post's text is tiny, but its photo, once unpacked for the screen, is thousands of times bigger. So each post carries only the photo's address and size, and the photos themselves live in one place with a size limit.
->
-> *The detail:* A post as data is about a kilobyte, so ten thousand of them is about 10 MB. A decoded photo is width × height × 4 bytes: a 12-megapixel photo is about 48 MB. Put images in the model and the model's memory grows with every post scrolled past; leave them to the image loader, whose cache has a fixed budget, and memory stays flat. `Sendable` means the struct can safely be handed from a background task to the main actor, which is how a page travels from the network to the screen.
-
-### 4 · Feed repository, the protocol (`FeedRepository`)
-
-**In plain words:** a written menu of what may be asked for: the posts saved on the phone, the next page, how many new posts there are, "remember that I liked this" and "tell the server". It lists what you can order, not how the kitchen cooks it, so the kitchen can change without the menu changing.
-
-**Owns:** nothing. It's a list of promises the data layer makes to the domain and the view model.
-
-**Interface:**
+**Job:** the promise the view model needs: pages of finished posts.
 
 ```swift
 protocol FeedRepository: Sendable {
-    /// What we stored last time, with pending likes applied, instantly
-    func savedFeed() async -> [FeedItem]
-    /// Posts + next cursor (nil = no more), with pending likes applied
-    func page(after cursor: Cursor?) async throws -> FeedPage
-    /// For the "new posts" pill
-    func newCount(since token: HeadToken) async throws -> Int
-    /// Remembers what the user wants before the server knows; nil forgets it
-    func setLikeIntent(_ liked: Bool?, post: PostID) async
-    /// Tells the server; throws if it didn't take
-    func sendLike(_ liked: Bool, post: PostID) async throws
+    /// Posts with isLiked filled in, plus the next cursor (nil = end)
+    func posts(after cursor: Cursor?) async throws -> FeedPage
 }
 ```
 
-**The choice inside it:** this is the one protocol drawn on the board. The view model and the like use case depend on it, never on the real repository, so a test can swap in a fake, and the data layer can change (a database instead of a file, GraphQL instead of REST) without the domain noticing. Recording a like and sending it are **two separate promises** on purpose: the use case decides how they're sequenced; the repository only knows how to do each.
+**Choice:** a protocol in the domain, so the view model is tested with a fake and never knows there are two sources.
 
-> **Under the hood.** *In plain words:* think of a restaurant. Card 4 is the **menu**: it lists what can be ordered (saved posts, the next page, a like) and says nothing about cooking. Card 6 is the **kitchen** that makes each order, from the server or from the phone's notebook. The dashed arrow pointing **up** is the kitchen promising to cook what's on the menu: the kitchen adapts to the menu, never the other way round. Everyone above only ever reads the menu, so you can swap the kitchen (a test kitchen with fake posts, a different server, a database) and nobody notices, as long as the new kitchen serves what's on the menu. In one line: *the screen depends on a promise, not on whoever keeps it, and whoever keeps it depends on the same promise.*
->
-> *The detail:* This is *dependency inversion*: the higher layers (presentation, and the domain's use case) define what they need as a protocol in the domain, and the lower layer (data) conforms to it. The arrows of dependency all point *at* the protocol, so neither the view model nor the use case imports anything about networking or storage. In practice it's what makes both unit-testable.
+### 5 · Like use case (`LikePostUseCase`)
 
-### 5 · Like post use case (`LikePostUseCase`)
-
-**In plain words:** the person whose one job is getting your like accepted by the server. The screen has already turned the heart red; this person makes it stick: they write your wish on a sticky note (so a refresh can't lose it), pass it to the server, and then either throw the note away (accepted) or report back that it was refused. If you tap again before they're done, only your last tap counts.
-
-**Owns:** settling a like with the server: the rules for that (the newest tap wins, a refusal is reported, a like made offline is kept and sent later). Changing the heart on screen is the view model's job, not this one's.
-
-**Interface:**
+**Job:** sends a like. If the user taps again, only the last tap counts.
 
 ```swift
-enum LikeOutcome: Equatable { case confirmed, reverted, superseded }
-
 protocol LikePostUseCaseType: Sendable {
-    /// Records the intent at once, sends it, then confirms or reverts.
-    /// A newer call for the same post supersedes an older one.
-    func setLiked(_ liked: Bool, post: PostID) async -> LikeOutcome
-}
-```
-
-It's built from the repository protocol: `init(repository: FeedRepository)`.
-
-**The choices inside it:**
-
-- **Why a use case here, when loading has none.** Loading a page is one call to the repository, so a `LoadFeedUseCase` would only forward it. Liking is several steps across two sources (the local intent and the server) plus product rules (last tap wins, undo on refusal, keep offline likes). That's logic that belongs to neither the screen nor the data layer, which is exactly when a use case earns its card.
-- **What it does, in order:** record the intent through the repository (so every page and refresh shows it); cancel any older like still in flight for that post; send it; on success forget the intent (the server now agrees); on refusal forget it and report `reverted`; with no network keep it, and send it when the network returns.
-- *Rejected:* putting this in the view model. A second screen that also has a heart (a profile grid, a post detail) would have to copy it. *Rejected:* putting it in the repository, which would mix product rules about likes into data access. *Switch condition:* a like with no optimistic update and no undo would be a single call, and then no use case.
-
-> **Under the hood.** *In plain words:* a use case is one complete job the app does, written down once like a recipe card: "to like a post: note it, send it, confirm or undo". It gets its own card only when the job needs more than one helper or follows a rule; "get the next page" is one step, so it doesn't.
->
-> *The detail:* this is the *use case* (or *interactor*) of clean architecture: domain logic that coordinates repositories and holds business rules, with no UI and no I/O of its own, so it's tested with a fake repository alone. It's an `actor` holding one task per post: a new call cancels the post's previous task and returns `superseded` to the older caller. Sending "liked = true", never "toggle", is what keeps a cancelled request that already left the phone from leaving the post in the wrong state.
-
-### 6 · Feed repository, the real one (`CompositeFeedRepository`)
-
-**In plain words:** the kitchen behind that menu, and a **composite**: what the screen shows as one post is put together from three places: fresh posts from the server, the copy saved on the phone, and the likes that haven't reached the server yet. Its one job is assembling posts from those sources; two helpers in the kitchen do the translating and the laying-on-top.
-
-**Owns:** assembling posts from their sources: which source answers which request, and when the saved copy is refreshed.
-
-**Interface:** it conforms to `FeedRepository` (above) and is built from the three sources it reads and its two parts: `init(api: FeedAPIType, cache: FeedCacheType, pendingLikes: PendingLikeStoreType, mapper: PostMapper, overlay: PendingLikeOverlay)`. Nothing else is public.
-
-**The choices inside it:**
-
-- **Three sources, one model.** `savedFeed()` reads the saved feed; `page(after:)` fetches from the server (and after a successful page 1, rewrites the saved feed); both results go through the two parts below before they're returned. `setLikeIntent` and `sendLike` pass straight to pending likes and the API client.
-- **Part inside: the pending-like overlay (`PendingLikeOverlay`).** Its one job: posts and the current intents in, posts with `likedByMe` set to the intent and the count moved by one out. Pure, tested directly. That's why a refresh that returns `likedByMe: false` (the server hasn't seen the like yet) can't make the heart flicker off.
-- **Part inside: the post mapper (`PostMapper`).** Its one job is translating: `PostDTO` (the server's shape) or the saved feed's record in, `FeedItem` out. That's where a string date becomes a `Date`, a missing optional gets a default, and a post that can't be shown (no image URL, say) is dropped and logged instead of crashing a screen. All of it runs off the main actor, so callers receive finished values.
-- *Rejected:* decoding the JSON straight into `FeedItem`. One type for both looks simpler, until the server renames a field or makes one optional and every screen that uses posts has to change. *Rejected:* letting the view model merge pending likes itself; then every screen showing posts would need the same merge. *Switch condition:* a throwaway prototype, or an API you own and version together with the app.
-
-> **Under the hood.** *In plain words:* the repository is the single counter you ask for posts. Behind the counter, someone gathers the pieces from several shelves (the server, the phone's notebook, the sticky notes of likes in progress) and hands you one finished post. You never see the shelves.
->
-> *The detail:* this is the *repository pattern* in its *composite* form: several data sources behind one interface, combined into one domain model. The server is the truth for posts; the saved copy is only for opening fast and offline; the pending intents are the truth for *your own* unconfirmed actions, so they win over server data until the server catches up. Doing the merge in one place is what keeps every screen consistent.
-
-> **Under the hood.** *In plain words:* the server sends posts on its own form, and the app uses its own form. The repository copies one onto the other. When the server changes its form, only that copying step changes, not every screen that shows a post.
->
-> *The detail:* A *DTO* (data transfer object) is a type that exists only to match the outside world's format, field for field: the server's JSON, or the shape you save on disk. The *domain model* is the app's own idea of the same thing, in the types the app wants. Keeping them separate means each changes for its own reason: the server team can rename `likes_count` and only the DTO and one mapping line change. The mapping lives in the data layer (here the repository), because the domain must not know the server exists — the same rule as dependency inversion, applied to data.
-
-### 7 · API client (`FeedAPI`)
-
-**In plain words:** the messenger to the company's servers. It knows their addresses and the format messages must be in, sends the request, and brings back the answer. Nothing else in the app talks to the servers.
-
-**Owns:** the HTTP details: URLs, headers, auth, and decoding the JSON into DTOs that mirror it exactly.
-
-**Interface:**
-
-```swift
-/// The server's shape, field for field. Lives in the data layer; never reaches a screen.
-struct FeedPageDTO: Decodable, Sendable {
-    let items: [PostDTO]
-    let nextCursor: String?
-    let headToken: String
-}
-
-struct PostDTO: Decodable, Sendable {
-    let id: String
-    let author: AuthorDTO
-    let caption: String?
-    /// URL, width, height, placeholder colour
-    let image: ImageDTO?
-    let likeCount: Int
-    let likedByMe: Bool
-    /// ISO 8601 text; becomes a Date when mapped
-    let createdAt: String
-}
-
-protocol FeedAPIType: Sendable {
-    func feed(cursor: Cursor?, limit: Int) async throws -> FeedPageDTO
-    func newCount(since token: HeadToken) async throws -> Int
-    /// PUT or DELETE
+    /// Throws if the server refused
     func setLiked(_ liked: Bool, post: PostID) async throws
 }
 ```
 
-**The choices inside it:** pages by **cursor**, likes as **idempotent** `PUT` and `DELETE` (endpoints in section 8). It returns **DTOs, not `FeedItem`s**: the API client knows the server's format and nothing about the app's models, so it can be tested against recorded JSON on its own.
+Built with `init(likes: LikesRepository)`.
 
-> **Under the hood.** *In plain words:* asking for "the 20 posts after this one" works like a bookmark. Asking for "posts 41 to 60" breaks as soon as new posts arrive at the top and push everything down, so you see some twice.
->
-> *The detail:* *Offset* pagination asks for "posts 41–60"; if five posts were added at the top meanwhile, 41–60 now contains five you've already seen. A *cursor* asks for "the 20 after this one", which doesn't move when posts are added above. *Idempotent* means sending the same request twice has the same effect as once: "liked = true" twice is still liked, while "toggle" twice is unliked. That's what makes retries safe.
+**Choices:**
 
-### 8 · Saved feed (`FeedCache`)
+- **It sends the final state** ("liked = true"), never "toggle", so a retry is safe.
+- **A new tap cancels the older request** for the same post.
+- **Why a use case for liking but not for loading:** loading is one call; liking has a rule (last tap wins). A rule is what earns a use case.
 
-**In plain words:** a notebook on the phone with the last 200 or so posts you saw, so when you open the app on a train with no signal there's still something on screen.
+### 6 · Likes repository (`LikesRepository`)
 
-**Owns:** the saved copy of the feed and the cursor after it, nothing else.
-
-**Interface:**
+**Job:** the promise for likes: which posts the user liked, and saving a like.
 
 ```swift
-protocol FeedCacheType: Sendable {
-    /// Posts + cursor, or nil on first launch
-    func load() async -> SavedFeed?
-    /// After each successful page 1
-    func save(_ feed: SavedFeed) async
-    /// On logout
-    func clear() async
+protocol LikesRepository: Sendable {
+    /// Which of these posts the user has liked
+    func likedIDs(among posts: [PostID]) async throws -> Set<PostID>
+    /// Saves the user's like on the server
+    func setLiked(_ liked: Bool, post: PostID) async throws
 }
 ```
 
-**The choice inside it:** one `Codable` file in `Library/Caches`, written atomically. It's a copy that can always be downloaded again, so if the system empties that folder to free space, the code treats the missing file as "first launch". `SavedFeed` is the cache's own record, mapped to and from `FeedItem` by the post mapper. *Rejected:* SwiftData or SQLite, which earn their place only when other screens query posts.
+**Choice:** its own protocol, because the like use case needs likes and nothing else. It depends on the smallest promise that does the job.
 
-> **Under the hood.** *In plain words:* the app writes the new copy beside the old one and swaps them in a single move, so a crash halfway through never leaves a half-written notebook.
->
-> *The detail:* An *atomic* write saves to a temporary file and then renames it over the old one. A rename can't be half done, so a crash leaves either the old file or the new one, never a broken mix.
+### 7 · Composite feed repository (`CompositeFeedRepository`)
 
-### 9 · Pending likes (`PendingLikeStore`)
+**Job:** gets a page of posts and the user's likes for them, and combines them into `Post`s.
 
-**In plain words:** a short list of sticky notes: "liked post 81f, not confirmed yet". It's the only record of a like the server hasn't seen, so it lives somewhere the phone never tidies away.
+**Interface:** conforms to `FeedRepository`. Built with `init(posts: PostsRepositoryType, likes: LikesRepository)`.
 
-**Owns:** the like intents the server hasn't confirmed, nothing else.
+**How it combines:**
 
-**Interface:**
+1. Ask the posts repository for a page → `PostDTO`s and the next cursor.
+2. Ask the likes repository which of those IDs are liked → a set of IDs.
+3. Map each `PostDTO` to a `Post`, with `isLiked = likedIDs.contains(id)`.
+
+**Choices:**
+
+- **It owns no source of its own.** It only combines, so adding a third source later (a saved copy for offline) changes this one class.
+- **Mapping happens here.** DTOs never leave the data layer; a renamed server field changes one line.
+
+### 8 · Posts repository (`PostsRepository`)
+
+**Job:** fetches pages of posts from `GET /feed`.
 
 ```swift
-protocol PendingLikeStoreType: Sendable {
-    /// Every unconfirmed like, by post
-    func all() async -> [PostID: Bool]
-    /// Records an intent, or (with nil) forgets it
-    func set(_ liked: Bool?, post: PostID) async
+protocol PostsRepositoryType: Sendable {
+    /// The server's page, as it sent it
+    func page(after cursor: Cursor?) async throws -> FeedPageDTO
 }
 ```
 
-**The choice inside it:** a separate store from the saved feed, because it changes for a different reason and has a different lifetime. The saved feed is a disposable copy (Caches, rebuilt from the server); pending likes are the only copy of the user's intent (Application Support, never deleted by the system). One "local storage" doing both would have to follow two sets of rules at once.
+**Choice:** posts are the same for every user, so this source can be cached by the server and the CDN. It knows nothing about likes.
 
-> **Under the hood.** *In plain words:* one drawer you don't mind the cleaner emptying (the saved feed), and one you'd be upset to lose (your unsent likes). Keep them as two drawers.
->
-> *The detail:* that's the *single responsibility principle* in practice: two pieces of state with different durability, different eviction rules and different reasons to change get two types. Both are tiny files written atomically; the pending one is small (a handful of entries) and rewritten whole on each change.
+### 9 · Likes repository (`RemoteLikesRepository`)
 
-### 10 · Image loader (`ImagePipeline`, from question 1)
+**Job:** reads likes from `GET /likes` and saves them with `POST /like`.
 
-**In plain words:** the photo library designed in question 1. Each row on screen asks it for its photo at the size it's shown; it downloads it, shrinks it to fit and remembers it for next time.
+**Interface:** conforms to `LikesRepository`.
 
-**Owns:** everything about pixels: downloading, shrinking to the row's size, caching.
+**Choices:**
 
-**Interface** (the part this feed uses): `image(for: ImageRequest) async throws -> UIImage`, plus `prefetch(_:)` and `cancelPrefetch(_:)` for the rows about to appear. An `ImageRequest` is a URL plus the pixel size the row will show.
-
-**The choice:** reuse it, don't redesign it. Say *"that's question 1"* and move on. The boundary is the point: **the model carries URLs and sizes; only rows ever hold pixels.**
-
-### Why these ten, and not fewer
-
-Each changes for a different reason: the screen with the design, the view model with the screen's behaviour, the like use case with the product's rules for likes, the repository with which source answers what, the API client with the server, the saved feed with the caching rules, pending likes with how intents are kept, and each part inside with its own small rule (formatting, translating, overlaying). One "FeedManager" would change for all of them. And none of them only forwards a call. *"I split where the reasons to change differ, not per noun."*
+- **It remembers likes still being sent.** `likedIDs` lays them over the server's answer, so a refresh during a like can't turn the heart off. That fix lives with the likes, where it belongs.
+- **One owner of like state.** Reading and writing likes in the same place means they can't disagree.
 :::
 
 ::: 7 · Key flows through the sketch
-Now trace the main flows across the cards you drew, so the interviewer sees them working together. One reading flow and one writing flow, each in its own sketch.
-
-**Flow 1 — opening the feed, then loading more.**
+**Flow 1 — opening the feed.** Loading more is the same, with the cursor.
 
 ```mermaid
 sequenceDiagram
-  participant V as Feed screen
-  participant VM as Feed view model
-  participant R as Feed repository
-  participant S as Saved feed
-  participant P as Pending likes
-  participant A as API client
-  V->>VM: onAppear()
-  VM->>R: savedFeed()
-  R->>S: load()
-  S-->>R: 200 saved posts
-  R->>P: all()
-  P-->>R: 1 pending like
-  Note over R: map records → FeedItem, lay pending likes on top
-  R-->>VM: saved posts
-  VM-->>V: view state: saved posts, at once
-  VM->>R: page(after: nil)
-  R->>A: feed(cursor: nil)
-  A-->>R: FeedPageDTO (page 1 + next cursor)
-  Note over R: map PostDTO → FeedItem, lay pending likes on top
-  R->>S: save(page 1)
-  R-->>VM: page 1
-  VM-->>V: view state: page 1 replaces saved posts
-  Note over V,VM: user scrolls to about 5 posts from the end
-  V->>VM: onNearEnd()
-  VM->>R: page(after: cursor)
-  R->>A: feed(cursor: cursor)
-  A-->>R: FeedPageDTO (page 2)
-  R-->>VM: page 2
-  VM-->>V: view state: page 2 added, duplicates skipped
+  participant VM as View model
+  participant C as Composite
+  participant P as Posts repo
+  participant L as Likes repo
+  VM->>C: posts(after: nil)
+  C->>P: page(after: nil)
+  P-->>C: 20 PostDTOs + cursor
+  C->>L: likedIDs(among: 20 IDs)
+  L-->>C: liked IDs
+  Note over C: combine into Posts
+  C-->>VM: FeedPage
 ```
-
-In words: the app opens with what the user saw last time, replaces it with fresh posts, and asks for the next page about a screen before the end. Every page passes through the composite merge, so a like still in flight is always shown.
 
 **Flow 2 — liking a post.**
 
 ```mermaid
 sequenceDiagram
   participant V as Feed screen
-  participant VM as Feed view model
-  participant U as Like post use case
-  participant R as Feed repository
-  participant P as Pending likes
-  participant A as API client
+  participant VM as View model
+  participant U as Like use case
+  participant L as Likes repo
+  participant S as Server
   V->>VM: toggleLike(post)
-  VM-->>V: view state: heart filled, 413 likes
+  VM-->>V: heart filled, 413 likes
   VM->>U: setLiked(true, post)
-  U->>R: setLikeIntent(true, post)
-  R->>P: set(true, post)
-  U->>R: sendLike(true, post)
-  R->>A: PUT /posts/{id}/like
-  alt server accepted
-    A-->>R: 204
-    R-->>U: ok
-    U->>R: setLikeIntent(nil, post)
-    R->>P: set(nil, post)
-    U-->>VM: confirmed
-  else server refused
-    A-->>R: error
-    R-->>U: failed
-    U->>R: setLikeIntent(nil, post)
-    R->>P: set(nil, post)
-    U-->>VM: reverted
-    VM-->>V: view state: heart back, "Couldn't like this post"
+  U->>L: setLiked(true, post)
+  L->>S: POST /posts/{id}/like
+  alt accepted
+    S-->>L: 204
+    L-->>U: ok
+    U-->>VM: ok
+  else refused
+    S-->>L: error
+    L-->>U: throws
+    U-->>VM: throws
+    VM-->>V: heart back, "Couldn't like"
   end
 ```
-
-In words: the heart changes before anything else happens; the use case writes the intent down first, so any refresh in the meantime still shows it; then it asks the server, and either forgets the note (the server now agrees) or forgets it and tells the view model to undo. Solid arrows are requests, each a method from section 6; dashed arrows are the replies.
 :::
 
 ::: 8 · The server contract
-The interface between the app and the backend. This is the API every mobile design round asks for.
-
 ```
-GET /v1/feed?cursor={opaque}&limit=20
-200 {
-  "items": [ { "id": "p_81f", "author": {...}, "caption": "...",
-               "image": { "url": "https://img.../p_81f", "width": 3024,
-                          "height": 4032, "placeholder": "#7A6A58" },
-               "likeCount": 412, "likedByMe": false, "createdAt": "..." } ],
-  "nextCursor": "eyJyIjo...",        // null at the end
-  "headToken": "h_93a"               // what "newest" meant for this session
-}
+GET  /v1/feed?cursor={opaque}&limit=20
+     → { "items": [ { "id", "author", "caption",
+                      "image": { "url", "width", "height" },
+                      "likeCount" } ],
+         "nextCursor": "…" }            // null at the end
 
-GET  /v1/feed/head?since={headToken}   → { "newCount": 7 }
-PUT    /v1/posts/{id}/like              → 204   (idempotent)
-DELETE /v1/posts/{id}/like              → 204   (idempotent)
+GET  /v1/likes?postIds=p1,p2,…
+     → { "liked": ["p1", "p7"] }
+
+POST /v1/posts/{id}/like   { "liked": true }
+     → 204
 ```
 
-- **Cursor, not offset.** With `?page=3`, five new posts at the top shift everything down, so page 3 repeats five you've seen; a cursor asks for "the next 20 after *this one*", and insertions above it change nothing. The cursor is **opaque**: the client never parses it, so the server can change ranking without an app release.
-- **Width and height in the payload.** The row sizes itself from the aspect ratio before the image exists, so nothing jumps when it arrives; the placeholder colour fills the box meanwhile. If the server can't provide dimensions, ask for them first. It's cheaper than any client workaround.
-- **Like as PUT and DELETE, never "toggle".** Retries and offline replays are then safe.
-- **`headToken`** pins what "newest" meant when the session started, so "how many are new?" has a stable answer.
+- **Cursor, not page numbers.** New posts at the top would shift page 3 and show repeats. A cursor means "the 20 after this one".
+- **Width and height in the post**, so rows are sized before the photo loads.
+- **The like request says the final state**, so sending it twice is harmless.
 :::
 
 ::: 9 · Deep dive — "The user flings to the bottom. Walk me through loading more."
-**Decision: one trigger, one guard, one in-flight task — and a refresh that cancels it.**
+**Trigger:** ask for the next page about one screen before the end, not at the last row.
 
-**The trigger.** Ask for the next page when the user is within about one screen — five to ten posts — of the end. In UIKit that's `willDisplay` for an index past `items.count - threshold`, or the prefetch data source; in SwiftUI, the visibility of a post near the end via `onScrollTargetVisibilityChange` (iOS 18) or `.onAppear` on a sentinel row. *Alternative rejected:* fetching when the last cell appears. On a fling the user hits the bottom before the response, and sees a spinner every page. *Switch condition:* on a constrained network, widen the threshold and shrink the page — the round trip is the cost, not the bytes.
+**Guard — load once, not five times:**
 
-**The guard — the concurrency content of this question.**
+1. If already loading, or there are no more pages, do nothing.
+2. Otherwise set `status = .loadingMore` **at once**, with no `await` before it.
+3. Append the new posts, skipping IDs already shown (a duplicate ID crashes a diffable list).
 
-Explain it as what happens when "near the end" fires:
+The view model is on the main actor, so step 2 needs no lock: the first call wins, the others see "loading".
 
-1. **If something is already loading, or there are no more pages, ignore it.**
-2. **Otherwise mark the state as "loading more" immediately**, with no waiting between the check and the mark, then ask the repository for the page after the cursor.
-3. **When the page comes back, first check that no refresh happened meanwhile** (the generation number, below). If one did, throw the page away. If not, add the new posts and go back to idle, or to "no more pages" when the server sent no next cursor.
-4. **If it fails**, show an inline retry row, unless it failed because it was cancelled, which just means the user refreshed.
-
-**Why step 2 says "immediately".** The trigger fires for every cell past the threshold, so five calls in one fling is normal. The view model lives on the main actor, so if nothing waits between checking the state and setting it, the first call wins and the other four see "already loading" and stop. Put any waiting between those two and two calls both get through: the same bug as question 1's double download, in a different coat.
-
-**Refresh races with load-more.** The user pulls to refresh while page 4 is in flight. Page 4 returns after the refresh has replaced the list with fresh page 1 — and gets appended to it, with a cursor from the old session. Two fixes, used together: the refresh **cancels** the load-more task, and a **generation counter** bumped on every refresh makes any response — or error — from an older generation drop itself without touching `phase`. Cancellation alone isn't enough, because it's cooperative — a response already decoded can still arrive.
-
-```mermaid
-sequenceDiagram
-  actor U as User
-  participant VM as FeedViewModel
-  participant R as FeedRepository
-  VM->>R: page 4 (generation 1)
-  U->>VM: pull to refresh
-  Note over VM: cancel page 4 · generation = 2
-  VM->>R: page 1 (generation 2)
-  R-->>VM: page 1 replaces the list
-  R-->>VM: page 4 arrives late (generation 1)
-  Note over VM: 1 ≠ 2, so it is dropped
-```
-
-**Merging.** Append by id, skipping ids already present. Ranked feeds occasionally return an item again across pages; a duplicate id in a diffable snapshot is a crash, not a glitch. Keep a `Set<PostID>` beside the array.
-
-**Prefetch the next images, not the next pages.** When page N+1 arrives, hand its first few image requests to the pipeline's prefetcher at low priority, with `allowsConstrainedNetworkAccess = false` so Low Data Mode skips them. Cancel prefetches for rows the user has flung past (`cancelPrefetchingForItemsAt`). That's what makes images appear already loaded, and it's question 1's API doing the work.
+**Refresh while a page is loading:** the refresh cancels the page task, and a counter bumped on every refresh lets a late page see it's stale and drop itself.
 :::
 
 ::: 10 · Deep dive — "It stutters on an iPhone 12, and the list jumps. Why?"
-**Each frame has 8–16 ms of main-thread time. Find what's spending it.** Start in Instruments — the Hangs and Animation Hitches instruments, plus `os_signpost` around cell configuration — not with guesses. The usual culprits, in the order they turn up:
+Measure first (Instruments: Hangs, Animation Hitches). The usual causes:
 
-1. **Decoding full-size images on the main thread.** A 12-megapixel photo decodes to about 48 MB and takes tens of milliseconds. Fixed by question 1: downsample to the cell's pixel size, off the main actor, before the image reaches the view.
-2. **Measuring cells whose height depends on the image.** Self-sizing that waits for the image means the cell is laid out twice, and the content above the viewport changes height — that's the jump. **Fix: size from the model.** `height = width × image.height / image.width`, known when the post arrives. Text height is the only measured part, and caching it per post id and width makes it a dictionary lookup.
-3. **Reloading instead of reconfiguring.** A like changes one number. `reloadItems` throws away the cell and builds a new one; `reconfigureItems` (iOS 15) updates the existing cell in place. In SwiftUI, Observation gives you the same thing for free if the cell reads only its own post.
-4. **Too much view per cell.** Nested stacks, shadows with no `shadowPath`, rounded-corner masks on images. Flatten the hierarchy; give layers explicit shadow paths.
-5. **Work in `cellForItemAt`.** Date formatting, string building, attributed text. Precompute in the model mapping on the repository side, so the cell assigns finished values.
+1. **Full-size photos decoded on the main thread.** The image loader downsizes them off the main thread.
+2. **Rows measured after the photo arrives.** That's the jump. Size from the model: `height = width ÷ aspectRatio`.
+3. **Reloading a whole row for one like.** Use `reconfigureItems` to update it in place.
+4. **Formatting in the cell.** Format once, in the view state.
 
-**Keeping the user's place stable.** Three rules: never insert above the visible rows unless the user asked (that's the "new posts" pill in section 11); know every row's height before it's inserted; and on refresh, if the user has scrolled, keep the old list on screen until they tap to jump to the top.
-
-**Memory, however far they scroll.** Models are cheap; decoded images are not. Cells hold images only while visible, and the pipeline's memory cache has a byte budget, so memory is bounded by the cache, not by the scroll distance. *Alternative rejected:* trimming the model array as the user scrolls (windowing). It bounds memory that wasn't the problem and makes scroll-up need a second, backwards cursor. *Switch condition:* sessions of tens of thousands of posts with heavy models — then keep a window of pages and page backwards too.
+**Memory:** posts are tiny; photos are big. Photos live only in the image loader's cache, so memory stays flat however far you scroll.
 :::
 
-::: 11 · Deep dive — "New posts, the like button, and a second screen."
-**New posts: tell, don't insert.**
+::: 11 · Deep dive — "Likes: refresh, double taps, and a second screen."
+**Refresh during a like.** The like is still in flight, the refresh's `GET /likes` says "not liked", and the heart turns off. *Fix:* the likes repository remembers likes still being sent and lays them over the server's answer until they finish. The fix lives with the likes, not in the view model.
 
-*Decision:* check `GET /feed/head?since=` when the app returns to the foreground and every couple of minutes while the feed is visible; if `newCount > 0`, show a "7 new posts" pill. Tapping it scrolls to the top and loads page 1. The content under the user's thumb never moves on its own.
+**Three quick taps.** Each sends the final state, and each new tap cancels the older one, so the last tap wins.
 
-*Alternative rejected:* a WebSocket or server-sent events for live insertion. It costs a held connection, battery, reconnect logic and a server component, and it buys immediacy a ranked photo feed doesn't need — ranking already means "newest" isn't the point. *Alternative rejected:* silent push to trigger a refresh. Delivery is throttled by the system and not guaranteed, so it can't be the mechanism; it can be a hint. *Switch condition:* a chronological, conversational feed — chat-like, sports scores — where seconds matter. Then a socket earns its cost, and that's question 3's design.
-
-**The like: optimistic, idempotent, last tap wins.** The flow is drawn in section 7; the decisions behind it:
-
-1. **The view model changes the heart and the count at once**, before any network call: 300 ms of waiting for a tap feels broken.
-2. **The like use case records the intent first.** Because the composite repository lays pending intents over every page it returns, a refresh that arrives before the server has seen the like can't make the heart flicker off.
-3. **It sends "liked = true", never "toggle".** Sent twice, it's still liked; that's what makes retries and replays safe.
-4. **A newer tap supersedes an older one.** The use case cancels the post's previous attempt; even a request that already left the phone can't leave the wrong state, because the newest request also says the final state. (If ordering matters on the server, a per-post sequence number settles it.)
-5. **Refused → undone; offline → kept.** A refusal clears the intent and the view model rolls the heart back with a quiet message. With no network the intent stays in pending likes and is sent when `NWPathMonitor` reports a path; say the trade-off: the user sees "liked" for something the server hasn't recorded yet.
-
-*Alternative rejected:* waiting for the server before changing the heart. Correct, and it feels broken. *Switch condition:* actions with real cost (a purchase, a follow that notifies someone) wait for the server and show progress.
-
-**When a second screen shows the same post.** The interviewer adds a profile grid that also shows posts with hearts: *"I like a post in the feed. Does the profile grid show it?"* Not with per-screen lists: each screen holds its own copy, and they drift.
+**A second screen shows the same post** (say, a profile grid). Each screen with its own copy drifts. *Fix:* one shared, observable post store. Both view models read from it; the like use case updates it once.
 
 ```mermaid
 flowchart TB
-  subgraph P["PRESENTATION"]
-    FVM["`**Feed view model**
-FeedViewModel`"]
-    PVM["`**Profile view model**
-ProfileViewModel`"]
-  end
-  subgraph D["DOMAIN"]
-    PS["`**Post store**
-PostStore · shared, by post ID`"]
-    Like["`**Like post use case**
-LikePostUseCase`"]
-  end
-  FVM -- "read posts → FeedItems" --> PS
-  PVM -- "read posts → FeedItems" --> PS
-  Like -- "update post → done" --> PS
+  FVM["`**Feed view model**`"] -- "read" --> PS["`**Post store**
+shared`"]
+  PVM["`**Profile view model**`"] -- "read" --> PS
+  Like["`**Like use case**`"] -- "update" --> PS
   class FVM,PVM pres
   class PS,Like dom
 ```
 
-1. **One shared post store**, keyed by post ID, `@MainActor` and `@Observable`, created once and injected into every view model that shows posts. It's the single source of truth for posts in memory.
-2. **Screens hold lists of IDs, not copies of posts.** The feed keeps its order of IDs; the profile grid keeps its own; both read each post from the store.
-3. **Writers update the store, once.** The repository puts fetched posts into it; the like use case updates the post there. Because the store is observable, every screen showing that post redraws by itself: no messages, no refetch.
-4. **A change bus is for the other kind of change.** Some events mean "what you fetched is no longer right": the user blocked someone, changed a content filter, signed out. Those are announced on a small one-to-many bus (*"feed invalidated"*), and every feed that hears it refetches. Same idea as a trigger every component subscribes to, used only where refetching is the right answer.
-
-*Alternative rejected:* a refetch trigger for likes. Every like would cost a network round trip on every open screen, and the heart would flicker while it lands. *Alternative rejected:* screens notifying each other directly, which couples every screen to every other. *Switch condition:* with only one screen showing posts, none of this: the feed's own list is enough, which is why it isn't on the first sketch.
-
-> **Under the hood.** *In plain words:* a shared store is one whiteboard everyone in the office reads: change it once and everybody sees the change. A change bus is a loudspeaker announcement, "the old plan is cancelled, check your inbox": nobody's copy is updated, everyone is told to fetch a fresh one. Use the whiteboard for small edits, the loudspeaker for "start over".
->
-> *The detail:* the store is the *single source of truth* pattern applied in memory; `@Observable` gives each screen fine-grained redraws for exactly the posts it read. The bus is *publish–subscribe*: on iOS 17 it can itself be an `@Observable` object holding a counter per topic that observers read (posting increments it, readers redraw or refetch), or an `AsyncStream` per subscriber when the listener isn't a view. Either way it carries *that* something changed, never the data itself.
+For "everything is stale" events (signed out, blocked someone), a small change bus tells every screen to reload. Only add the store when the second screen exists.
 :::
 
 ::: 12 · Failure modes and 10×
-- **Offline at launch.** Show the stored feed with "Last updated 2 h ago". Load-more at the end of stored content shows an inline retry row, not an error screen.
-- **First page fails.** With a stored feed: keep it and show a banner. Without one: a full-screen error with retry. Never replace good content with an error.
-- **Page N fails.** Inline retry row at the bottom; `phase = .failed`, and the next "near end" or a tap retries. One automatic retry with jittered backoff for timeouts and 5xx, none for 4xx.
-- **Cursor expired** (server says 410 or "invalid cursor" after a long background). Reload from page 1 and keep the user's place if the post they were on comes back in it; otherwise jump to top with a pill-style hint.
-- **Duplicates and gaps.** Duplicates: merge by id. Gaps: impossible with cursors unless the server breaks its contract — log them, don't paper over.
-- **Races.** Double load-more: the main-actor guard. Refresh versus load-more: cancel plus generation. Late like response: the like use case's per-post task, newest wins.
-- **Memory pressure.** The image cache purges; models stay. Visible cells re-request their images at the same size and hit the disk cache.
-- **Killed mid-scroll.** Nothing to recover: the saved feed holds the last successful first page, pending likes hold unconfirmed likes, both written atomically.
-- **Low Data Mode.** No image prefetch, smaller image width bucket, same feed.
+- **First page fails** → full-screen error with retry.
+- **Later page fails** → retry row at the bottom.
+- **Likes endpoint fails** → the composite returns the posts with empty hearts and retries likes once; one source failing never hides the feed.
+- **Like refused** → heart goes back, short message.
+- **Cursor expired** → reload from the first page.
 
-**At 10×** — ten times more posts per session, or heavier posts:
-- **Scroll distance:** memory still bounded by the image cache; model array grows linearly, fine into the tens of thousands, then window it.
-- **Heavier posts (carousels, video):** a cell that holds a player is the new memory hog. One player, reused, attached to the most-visible cell only.
-- **More interactions per post:** the composite's overlay generalises — one pending intent per post per field — each action gets a use case only if it has steps and rules of its own, and once two screens show posts, the shared post store of deep dive 11 pays for itself.
-- **Data:** the CDN width bucket and Low Data Mode carry it; the client's job is to ask for the smallest bucket that looks sharp.
+**At 10×:**
+
+- **Longer sessions** → memory still bounded by the image cache.
+- **Offline** → add a saved copy as a third source inside the composite repository. Nothing above it changes.
+- **Video posts** → one shared player, attached to the most visible row.
 :::
 
 ::: 13 · Question bank — everything they can push on
-Grouped by the checklist from the first chapter. Read the question, answer it out loud, *then* open it. Each area ends with a follow-up chain, because a real interviewer doesn't change topic after your first answer; they go one level deeper.
+Answer out loud first, then open.
 
-### Clarify and scope
-
-<details>
-<summary>"Where would you start?"</summary>
-
-With questions, not boxes: what's in a post, who orders the feed, what must work offline, whether new posts appear live, which interactions matter, minimum OS. Then out of scope first (ranking, posting, comments, video), then four features.
-</details>
+### Scope and architecture
 
 <details>
-<summary>"Why is ranking out of scope? It's the most interesting part."</summary>
+<summary>"Why is ranking out of scope?"</summary>
 
-It's the server's job. The client receives pages in order and must not reorder them. Designing a ranking algorithm in a mobile round is the classic way to spend 15 minutes on something that isn't graded.
+It's the server's job. The app shows pages in the order it gets them.
 </details>
-
-<details>
-<summary>"What are your non-functional requirements?"</summary>
-
-Smooth scrolling on an old phone, nothing moving under the user's thumb, memory bounded however far they scroll, modest data use with Low Data Mode honoured, and no duplicates or stale likes. Then the axis: how far ahead I load against memory, data and battery.
-</details>
-
-<details>
-<summary>"What's the smallest version you'd ship?"</summary>
-
-Cursor pages with a main-actor guard, cells sized from the payload, and the image pipeline. The offline cache, the new-posts pill and offline likes come after, in that order.
-</details>
-
-<details>
-<summary>Follow-up chain: "What does the feed show offline?"</summary>
-
-1. *"What does the feed show offline?"* → The last ~200 posts I stored, with "last updated" time.
-2. *"Why 200 and not everything?"* → It's what a user scrolls in a session; more costs disk and launch time for content nobody reaches.
-3. *"And if they scroll past 200 offline?"* → An inline "you're offline, retry" row at the end. Never an error screen over good content.
-</details>
-
-### Architecture and layers
 
 <details>
 <summary>"Walk me through the layers."</summary>
 
-Presentation: a dumb view that draws one `FeedViewState`, and a view model that owns the posts, the phase and the cursor and turns them into that view state. Domain: the `FeedItem` model, the `FeedRepository` protocol and the like use case. Data: a composite repository that combines the server, the saved copy and pending likes into `FeedItem`s. Each changes for a different reason, which is why they're separate.
-</details>
-
-<details>
-<summary>"Why MVVM and not MVC, VIPER or TCA?"</summary>
-
-The view model is the seam that lets me test the feed's behaviour with no view: a fake repository, call "near end" twice, assert one request. MVC puts that logic in a view controller I can't test easily. VIPER adds a router, presenter and interactor for one screen. TCA buys a strict event log at the cost of a dependency and a learning curve; I'd switch to it if several screens shared complex state.
-</details>
-
-<details>
-<summary>"What does the view model expose to the view?"</summary>
-
-One `FeedViewState` struct: the rows already formatted for display, a status (loading, content, empty, error, end of feed) and the new-posts banner text. The view draws it and forwards user actions; it makes no decisions. Tests assert the whole state as one value, and because it's `Equatable` the list redraws only rows that changed.
-</details>
-
-<details>
-<summary>"Why are the saved feed and pending likes two components?"</summary>
-
-They change for different reasons and live by different rules. The saved feed is a disposable copy the system may delete (Caches); pending likes are the only record of what the user did (Application Support). One store would have to follow both sets of rules. Same test everywhere: one reason to change per component, and helpers that serve one card (the mappers, the overlay) are parts inside it.
+Presentation: screen and view model. Domain: Post, the feed and likes repository protocols, the like use case. Data: a posts repository, a likes repository, and a composite that combines them.
 </details>
 
 <details>
 <summary>"Why does liking get a use case and loading doesn't?"</summary>
 
-A use case earns its place when a job coordinates several sources or holds a business rule. Loading a page is one repository call, so a `LoadFeedUseCase` would only forward it. Liking records an intent, sends it, confirms or undoes, and lets the newest tap win: steps and rules that belong to neither the screen nor the data layer.
+Loading is one call. Liking has a rule: the last tap wins. A rule earns a use case; a pass-through doesn't.
 </details>
 
 <details>
-<summary>"Why a repository and not the view model calling the API directly?"</summary>
+<summary>"Why don't posts include isLiked?"</summary>
 
-The view model shouldn't know whether a post came from the network or from disk. The repository owns that decision, and its protocol is what I swap for a fake in tests.
+Posts are the same for everyone, so the server and CDN can cache them. Likes are personal, so they come from their own endpoint and their own repository, and the composite combines the two.
 </details>
 
 <details>
-<summary>"Would you decode the JSON straight into the model the UI uses?"</summary>
+<summary>"Why two repositories and a composite, not one feed repository?"</summary>
 
-No. The API client decodes into DTOs that mirror the server; the repository maps them to `FeedItem`. A renamed or newly optional server field then changes one DTO and one mapping line instead of every screen, and invalid posts are filtered once, at the boundary. For a prototype, or an API versioned with the app, one type is an acceptable shortcut.
+Posts and likes are different sources that change for different reasons. One repository each keeps them small; the composite is the one place they meet, and the like use case depends only on likes.
 </details>
 
 <details>
-<summary>"Show me where dependency inversion is."</summary>
+<summary>"Why does the like use case talk to the likes repository, not the feed repository?"</summary>
 
-The view model depends on the `FeedRepository` protocol in the domain; the implementation in the data layer conforms to it, so the arrow points up. Concrete types are created once at the composition root and injected.
+It only needs likes. Depending on the smallest promise means a change to posts can never break liking.
 </details>
 
 <details>
-<summary>"Where does the like state live?"</summary>
+<summary>"Where does mapping happen?"</summary>
 
-Two places, on purpose. The user's unconfirmed intent lives in pending likes, and the composite repository lays it over every page, so refreshes can't undo it. The confirmed value comes from the server. If a second screen shows the same post, posts move into a shared observable store that every screen reads.
+In the composite repository, where the posts' DTOs and the liked IDs meet. DTOs never leave the data layer; a server change touches one mapping.
 </details>
 
 <details>
-<summary>Follow-up chain: "Two screens show the same post."</summary>
+<summary>"Show me dependency inversion."</summary>
 
-1. *"A profile grid and the feed show the same post. The user likes it in one. What happens in the other?"* → With per-screen state, nothing: they drift.
-2. *"Fix it."* → One shared `@MainActor`, `@Observable` post store keyed by ID. Both view models read from it; the like use case writes to it once, and both screens redraw by themselves.
-3. *"Why not a refresh trigger every screen listens to?"* → A refetch per like costs a network round trip on every screen and flickers. A change bus is for "what you fetched is wrong now" (blocked a user, changed filters): then every feed refetches.
-4. *"Isn't that a global singleton?"* → It's one instance, but injected, not reached for. Tests give each view model its own.
-5. *"When would you not do this?"* → With one screen. It's complexity you add when the second consumer appears.
-</details>
-
-### API and networking
-
-<details>
-<summary>"Design the endpoint."</summary>
-
-`GET /v1/feed?cursor=&limit=20` returns items, `nextCursor` (null at the end) and a `headToken`. Each item carries the image URL with its width, height and a placeholder colour. Likes are `PUT` and `DELETE /v1/posts/{id}/like`. A cheap `GET /feed/head?since=` returns the count of newer posts.
+Two protocols live in the domain: the feed repository and the likes repository. The composite and the remote likes repository implement them. Both arrows point up, so the domain never imports networking.
 </details>
 
 <details>
-<summary>"Why not offset pagination? It's simpler."</summary>
+<summary>"What does the view model give the screen?"</summary>
 
-Insertions above your position shift every later page, so you see repeats; deletions skip posts. A cursor asks for "the next 20 after this one", which is stable under both. Opaque cursors also let the server change ranking without a client release.
+One `FeedViewState`: formatted rows and a status. The screen draws it and decides nothing.
+</details>
+
+### API and pagination
+
+<details>
+<summary>"Why a cursor and not page numbers?"</summary>
+
+New posts shift page numbers, so you'd see repeats. A cursor says "after this post", which doesn't move.
 </details>
 
 <details>
-<summary>"Why is like a PUT and DELETE, not a toggle?"</summary>
+<summary>"Why does the like request say liked: true instead of toggle?"</summary>
 
-They're idempotent: "liked = true" sent twice is still liked, while "toggle" retried once is unliked. That's what makes retries and offline replays safe.
+So a retry can't flip it back. Sent twice, it's still liked.
 </details>
 
 <details>
-<summary>"REST, GraphQL or something else?"</summary>
+<summary>"Two calls per page. Isn't that slow?"</summary>
 
-REST is enough for one feed with a fixed shape. GraphQL earns its place when many screens need different slices of the same objects and over-fetching costs real data. I'd follow what the backend already offers.
+The likes call is small and follows right after. If it matters, ask the backend for one endpoint that does both: only the composite changes.
 </details>
-
-<details>
-<summary>"How do you handle errors and retries?"</summary>
-
-One automatic retry with jittered backoff for timeouts and 5xx, none for 4xx. Page failures show an inline retry row. An expired cursor (410) reloads from the first page and tries to keep the user's place.
-</details>
-
-<details>
-<summary>"How do you find out about new posts?"</summary>
-
-Poll `/feed/head` on foreground and every couple of minutes while the feed is visible, and show a "7 new posts" pill. A socket costs battery and a server component for immediacy a ranked feed doesn't need.
-</details>
-
-<details>
-<summary>Follow-up chain: "The server can't send image sizes."</summary>
-
-1. *"The backend says image dimensions are hard to add. Now what?"* → First, push back: it's the cheapest fix for the most visible bug.
-2. *"They still say no."* → Use a fixed aspect ratio box (square crop) so nothing jumps, and accept cropping.
-3. *"Product wants the real ratio."* → Read the dimensions from the image header with ImageIO on the first bytes, before the full download, and cache them by URL. Slower and more code than the API field, which is why I asked for the field first.
-</details>
-
-### Pagination and the list
 
 <details>
 <summary>"When do you load the next page?"</summary>
 
-About one screen before the end, five to ten posts, via `willDisplay` or the prefetch data source in UIKit, or a near-end row's visibility in SwiftUI. Waiting for the last cell means a spinner on every fling.
+About one screen before the end, so a fast scroll rarely sees a spinner.
 </details>
 
 <details>
 <summary>"How do you avoid loading the same page five times?"</summary>
 
-One `phase` enum on the main-actor view model, checked and set with no `await` in between. The first call flips it to loading; the other four return.
+Check and set `status` on the main actor with no `await` in between. The first call wins.
 </details>
 
 <details>
-<summary>"What happens on pull to refresh while a page is loading?"</summary>
+<summary>"The server returns a post you already have."</summary>
 
-The refresh cancels the load-more task, and a generation counter bumped on each refresh makes any late response from the old generation drop itself. Cancellation alone isn't enough because it's cooperative.
+Skip it by ID. A duplicate ID crashes a diffable list.
 </details>
 
 <details>
-<summary>"The server returns a post you already have. What happens?"</summary>
+<summary>Follow-up chain: "Refresh during a page load."</summary>
 
-Merge by id and skip it. A duplicate id in a diffable snapshot crashes, so I keep a set of ids beside the array.
+1. *"User refreshes while page 4 loads."* → The refresh cancels page 4.
+2. *"Page 4 still arrives."* → A refresh counter marks it stale; it's dropped.
+3. *"Why isn't cancel enough?"* → Cancel is cooperative; a reply already decoded can still land.
+</details>
+
+### Likes
+
+<details>
+<summary>"What happens when the user taps the heart?"</summary>
+
+The heart and count change at once. The use case sends the like. If it fails, the view model undoes it and shows a short message.
 </details>
 
 <details>
-<summary>"UICollectionView or SwiftUI List?"</summary>
+<summary>"User likes, then refreshes, and the heart turns off."</summary>
 
-For the app's most performance-critical screen, `UICollectionView` with a diffable data source, wrapped for SwiftUI, because I control reuse and prefetch. On iOS 18 with simple cells, `List` is fine if it profiles clean on the oldest supported phone.
+The refresh read likes before the server saved this one. The likes repository keeps likes still in flight and lays them over its answer.
 </details>
 
 <details>
-<summary>"How do you stop the list jumping?"</summary>
+<summary>"The user taps like three times fast."</summary>
 
-Never insert above the visible rows unless the user asked, know every row's height before it's inserted (from the payload), and keep the old list on refresh if the user has scrolled.
+Each tap cancels the older request and sends the final state, so the last tap wins.
 </details>
 
 <details>
-<summary>Follow-up chain: "Infinite scroll for an hour."</summary>
+<summary>Follow-up chain: "A second screen."</summary>
 
-1. *"A user scrolls for an hour. What grows?"* → The model array, about a kilobyte per post. Decoded images don't: the pipeline's cache has a byte budget.
-2. *"10,000 posts?"* → About 10 MB of models. Fine.
-3. *"100,000 with heavy models?"* → Then keep a window of pages and drop the far ones, which means scroll-up needs a backwards cursor too. I wouldn't build that until a profile shows the need.
-</details>
-
-### Caching and offline
-
-<details>
-<summary>"What do you store on disk, and in what?"</summary>
-
-The first ~200 posts and the cursor after them, as one Codable file written atomically after each successful first page. SwiftData or SQLite only if other screens query posts.
-</details>
-
-<details>
-<summary>"What happens on launch?"</summary>
-
-Show the stored feed immediately, then load the first page and replace it. If the user has already scrolled, keep their view and offer the new content behind a pill.
-</details>
-
-<details>
-<summary>"The user likes a post offline. What happens?"</summary>
-
-The heart changes at once and the like use case keeps the intent in pending likes; when the network returns it sends it. The idempotent PUT makes the replay safe. The alternative, roll back with a message, is simpler but annoying for something as small as a like.
-</details>
-
-<details>
-<summary>"How stale can the stored feed be?"</summary>
-
-As stale as the last successful load, and the screen says so ("updated 2 h ago"). It's a fallback for opening the app, not a source of truth.
-</details>
-
-<details>
-<summary>Follow-up chain: "Offline likes conflict."</summary>
-
-1. *"User likes offline, then unlikes on another device, then this phone comes online. What wins?"* → The last intent by time, if the server compares a client timestamp per post.
-2. *"Clocks lie."* → A per-post sequence number from the server's last known state, or accept last-write-wins: for a like, the cost of being wrong is tiny.
-3. *"Would you do the same for a payment?"* → No. Anything with real cost waits for the server and never replays blindly.
-</details>
-
-### Concurrency
-
-<details>
-<summary>"What runs on the main actor?"</summary>
-
-The view model: its state and the check-and-set guards. JSON decoding, disk reads and image decoding happen elsewhere; the repository is `Sendable` and returns finished values.
-</details>
-
-<details>
-<summary>"Why @MainActor and not a lock?"</summary>
-
-The view reads this state every frame, and all mutations happen on one actor, so check-then-set needs no lock. A lock also can't be held across an `await`.
-</details>
-
-<details>
-<summary>"The user taps like three times quickly."</summary>
-
-The like use case is an actor with one task per post; each new tap cancels the older one, and each request says "liked = true/false" rather than "toggle", so the final state is the last tap whichever request lands first.
-</details>
-
-<details>
-<summary>"Where is actor re-entrancy a risk here?"</summary>
-
-Any `await` between checking `phase` and setting it. Put one there and two calls both pass the check and both load: the same bug as the image library's double download.
-</details>
-
-<details>
-<summary>Follow-up chain: "Refresh drops the heart."</summary>
-
-1. *"User likes, then refreshes, and the heart turns off. Why?"* → The refresh returned server state from before the PUT landed.
-2. *"Fix it."* → The like use case records the intent before sending, and the composite repository lays pending intents over every page it returns, so the local value wins until the server agrees.
-3. *"And when the PUT fails?"* → The use case clears the intent and returns `reverted`; the view model rolls the heart back with a quiet message.
+1. *"A profile grid shows the same post. User likes it in the feed."* → With separate copies, the grid is wrong.
+2. *"Fix it."* → One shared observable post store both screens read; the use case updates it.
+3. *"Why not refetch everywhere?"* → A network call per like on every screen, and flicker. Refetch is for "everything is stale" events.
+4. *"When wouldn't you do this?"* → With only one screen.
 </details>
 
 ### Performance and memory
 
 <details>
-<summary>"It stutters on an iPhone 12. Where do you start?"</summary>
+<summary>"It stutters. Where do you start?"</summary>
 
-Instruments (Hangs and Animation Hitches) plus `os_signpost` around cell configuration, not guesses. Usual culprits: full-size decodes on main, cells measured after the image arrives, `reloadItems` instead of `reconfigureItems`, heavy cell hierarchies, formatting in `cellForItemAt`.
+Instruments first. Usual causes: decoding photos on the main thread, measuring rows after the photo, reloading whole rows, formatting in cells.
 </details>
 
 <details>
-<summary>"What does a decoded photo cost?"</summary>
+<summary>"How do you stop the list jumping?"</summary>
 
-Width × height × 4 bytes, whatever the file size. A 12-megapixel photo is about 48 MB decoded, which is why cells ask for the displayed pixel size.
+Size each row from the photo's width and height in the post, before the photo arrives. Never insert above what the user is reading.
 </details>
 
 <details>
-<summary>"Why no UIImage in the model?"</summary>
+<summary>"Why no image in the Post model?"</summary>
 
-A model is about a kilobyte; a decoded image is megabytes. Pixels belong to visible cells, borrowed from the pipeline's bounded cache.
+A post is about a kilobyte; a decoded photo is megabytes. Photos stay in the image loader's limited cache.
 </details>
 
 <details>
-<summary>"How far ahead do you prefetch?"</summary>
+<summary>"UICollectionView or SwiftUI List?"</summary>
 
-Images for the next few rows at low priority, off in Low Data Mode, cancelled for rows flung past. Pages one screen ahead. Further costs data and battery for posts nobody sees.
+Collection view for the most performance-critical screen, for reuse and prefetch. `List` if it profiles smooth.
+</details>
+
+### Offline, testing and change
+
+<details>
+<summary>"Make it work offline."</summary>
+
+Add a saved copy of the last pages as a third source inside the composite repository. The view model doesn't change.
 </details>
 
 <details>
-<summary>Follow-up chain: "Memory warning mid-scroll."</summary>
+<summary>"How do you test loading more?"</summary>
 
-1. *"A memory warning arrives while scrolling. What happens?"* → The image cache purges; models stay.
-2. *"Visible cells go blank?"* → They re-request at the same size and hit the disk cache, so it's a frame or two.
-3. *"It still gets killed in the field."* → MetricKit exit reasons confirm it; then lower the memory budget and the width bucket, behind a remote flag.
-</details>
-
-### Testing
-
-<details>
-<summary>"How do you test pagination?"</summary>
-
-A fake repository that returns scripted pages and can hold a response open. Call "near end" five times, assert one request. No view, no network.
+A fake repository that holds a reply. Call `onNearEnd()` five times; check one request went out.
 </details>
 
 <details>
-<summary>"How do you test the refresh race?"</summary>
+<summary>"How do you test the composite repository?"</summary>
 
-Hold page 4 open in the fake, refresh, then release page 4 and assert it was not appended. Wait by yielding, never by sleeping.
-</details>
-
-<details>
-<summary>"What do you test in the view?"</summary>
-
-Little: a snapshot test per cell state if the team uses them. The logic lives in the view model, which is where the unit tests go.
+A fake posts repository returning three posts and a fake likes repository returning one ID; check only that post comes back with `isLiked = true`.
 </details>
 
 <details>
 <summary>"How do you test liking?"</summary>
 
-Two places. The like use case with a fake repository: a refusal must clear the intent and return reverted; two quick calls must return superseded to the first. The composite repository with fake sources: a page saying likedByMe false plus a pending intent must come back liked.
+A fake use case that throws; check the view state's heart goes back. The use case itself with a fake likes repository: two quick calls, only the last is sent.
 </details>
 
 <details>
-<summary>Follow-up chain: "Your tests are flaky."</summary>
+<summary>"Add a 'new posts' pill."</summary>
 
-1. *"Your async tests pass alone and fail in CI."* → They wait on wall-clock time, which other tests steal under parallel load.
-2. *"Fix it."* → Fakes whose responses the test releases, and waits bounded by a count of `Task.yield()`s.
-3. *"And for the real API?"* → A contract test against recorded responses, run separately from the unit suite.
-</details>
-
-### Observability, rollout, security and accessibility
-
-<details>
-<summary>"How do you know it's smooth in production?"</summary>
-
-MetricKit's hitch rate and hang diagnostics, signposts around configuration and decode, and the image cache hit rate. Prefetch distance behind a remote flag so it can be tuned without a release.
-</details>
-
-<details>
-<summary>"How would you roll this out?"</summary>
-
-Behind a feature flag to a small percentage, watching hitch rate, crash rate and time-to-first-post against the old feed, then ramping. The flag is also the kill switch.
-</details>
-
-<details>
-<summary>"Anything security-sensitive here?"</summary>
-
-The stored feed can include private accounts' posts, so it uses file protection and is cleared on logout. Auth tokens live in the Keychain, never in the store.
-</details>
-
-<details>
-<summary>"What about accessibility?"</summary>
-
-Each cell is one accessibility element with author, caption and like state, plus a custom action for like. Dynamic Type changes text height, which is why that height is measured and cached per width rather than assumed.
-</details>
-
-<details>
-<summary>Follow-up chain: "Time to first post got worse."</summary>
-
-1. *"After launch, time-to-first-post regressed 300 ms. How do you find it?"* → A signpost from launch to first rendered post, split by phase: store read, first page, first image.
-2. *"It's the store read."* → The file grew; read it off the main actor and show it as soon as it decodes, or store fewer posts.
-3. *"How do you stop this regressing again?"* → A performance test in CI on that signpost, and an alert on the field metric.
-</details>
-
-### Scale and change
-
-<details>
-<summary>"Add video posts."</summary>
-
-A cell that holds a player is the new memory hog. One player, reused, attached to the most visible cell only; the rest show a poster frame.
-</details>
-
-<details>
-<summary>"Add comments and shares on each post."</summary>
-
-The composite's overlay generalises to one pending intent per post per field. Each action gets a use case only if it has steps and rules of its own; a comment count that just displays doesn't.
-</details>
-
-<details>
-<summary>"Make the feed live, like chat."</summary>
-
-Then a socket earns its cost: seconds matter and order is chronological. That's a different design, the chat question, not a change to this one.
-</details>
-
-<details>
-<summary>"Ten times more users. What changes on the client?"</summary>
-
-Almost nothing: load is the server's problem. The client's levers are page size, prefetch distance and image width buckets, all behind flags.
+One more endpoint that returns a count since the first post; poll it on foreground. Show a pill; never insert under the thumb.
 </details>
 
 <details>
 <summary>Follow-up chain: "Two weeks instead of six."</summary>
 
-1. *"You have two weeks. What do you cut?"* → Offline likes, the new-posts pill and the disk store.
-2. *"What can't you cut?"* → Cursor pages, the load-more guard, and sizing cells from the payload. Those are the visible bugs.
-3. *"What's the risk you're accepting?"* → Opening offline shows nothing, and likes fail when the network does. Both are recoverable in the next release.
+1. *"What do you cut?"* → Offline and the second-screen store.
+2. *"What can't you cut?"* → Cursor pages, the load-more guard, rows sized from the post.
+3. *"Risk?"* → No content offline. Fixable next release.
 </details>
 :::
 
 ::: 14 · Scorecard — mark yourself, 0 / 1 / 2
-The first five rows are the public exercise's grading criteria; the rest are specific to this question.
-
 | | Did you… | 0–2 |
 |---|---|---|
-| 1 | Narrate continuously, and listen when interrupted | |
-| 2 | Clarify before designing, and state your assumptions | |
-| 3 | Attach a rejected alternative and a switch condition to each choice | |
-| 4 | Say plainly where your knowledge ends | |
-| 5 | Name a smaller version that would be enough | |
-| 6 | Say out of scope **first**, including ranking | |
-| 7 | Choose cursor pagination and say why in one sentence | |
-| 8 | Size cells from width and height in the payload | |
-| 9 | Guard load-more on the main actor, and handle refresh racing it | |
-| 10 | Keep pixels out of the model; reuse the image pipeline | |
-| 11 | Make likes optimistic and idempotent, and survive a refresh | |
-| 12 | Merge the server, saved copy and pending likes into one model, and give liking (not loading) a use case | |
-| 13 | Say the idea, list the components, *then* sketch: three layers, about eight cards, one seam | |
+| 1 | Talk the whole time, and listen when interrupted | |
+| 2 | Clarify before designing | |
+| 3 | Give a rejected alternative for each choice | |
+| 4 | Say out of scope first, including ranking | |
+| 5 | Say the idea, list the parts, then sketch | |
+| 6 | Keep the sketch to about nine cards | |
+| 7 | Choose a cursor and say why in one sentence | |
+| 8 | Name the three endpoints | |
+| 9 | One repository per source, a composite that combines them | |
+| 10 | Keep DTOs out of the domain | |
+| 11 | Make the like optimistic, and undo it on failure | |
+| 12 | Guard load-more so it fires once | |
+| 13 | Size rows from the post, not the photo | |
 | 14 | Land the recap inside 60 seconds | |
 
-14+ is a pass in a real round.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero is worth more than the total: it names the thing to read about before the next one.<!--/public-->
+14+ is a pass.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero names the thing to read about next.<!--/public-->
 :::
 
 ::: 15 · The 60-second recap
-A photo feed is three clocks — the frame, the network and the user's thumb — and the design keeps the frame clock safe while the other two catch up. A main-actor view model owns one ordered array of small value models and a single phase enum, and hands a dumb screen one view state to draw. Pages come from the server by opaque cursor, so new posts never shift what's already loaded; the next page is requested a screen before the end, behind a guard that's atomic because nothing awaits between the check and the set, and a refresh cancels any page in flight and drops late answers by generation. Every post carries its image's width and height, so cells are sized before any pixel arrives and nothing jumps. Pixels never live in the model: cells ask the image pipeline from question 1 for the exact size they show, with prefetch a few rows ahead and off in Low Data Mode. New posts are announced with a pill, not inserted under the user's thumb. Likes change the screen at once; a like use case records the intent, sends it as an idempotent PUT or DELETE and confirms or undoes it, and the composite repository lays pending intents over every page, so a refresh never undoes a tap. A second screen would read one shared post store. The last feed is on disk, so the app opens with content even offline.
+The feed loads pages by cursor, so new posts never shift what's loaded. A main-actor view model asks for the next page a screen before the end, guards it so it fires once, and gives a dumb screen one view state. Posts and likes each have their own repository, and a composite combines them into one `Post` model; the server's DTOs never leave the data layer. Each post carries its photo's size, so rows never jump, and the photos come from question 1's image loader. Liking is a use case that talks only to the likes repository: the heart changes at once, the final state is sent, the last tap wins, and the view model undoes it if the server refuses. The likes repository remembers likes in flight, so a refresh can't undo a tap. Offline, a new-posts pill and a second screen are additions, not rewrites.
 :::
