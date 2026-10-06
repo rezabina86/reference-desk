@@ -100,10 +100,12 @@ A board with twenty boxes doesn't read as thorough. It reads as someone who can'
 
 - **Three layers.** *Presentation*: a dumb view and a view model that hands it one view state. *Domain*: the model, the repository protocol, and a use case only where there's a rule. *Data*: the repository and the API client. (A library gets *API*, *core*, *I/O* instead.)
 - **Seven to nine cards.** Never more than nine. Leave out what the scope doesn't need (offline cache, outbox, socket, shared store) and say "I'll add that if we go there".
-- **Name the endpoints.** Say each one, put them on the API card, and write them in the contract. Per-user data (likes, read state) usually has its own endpoint.
+- **Name the endpoints.** Say each one, put them on the API card, and write them in the contract. Per-user data (likes, read state) may have its own endpoint; say the cost of the extra request.
 - **One repository per source, one composite to combine them.** A posts repository and a likes repository; the composite asks both and returns one `Post`. A use case talks only to the repository it needs.
 - **DTOs stay in the data layer.** The repository maps them to the app's model.
-- **A use case needs a rule.** Liking (last tap wins) gets one. Loading a page is one call, so it doesn't.
+- **A use case needs a rule.** Liking (one request per post at a time, the latest state wins) gets one. Loading a page is one call, so it doesn't.
+- **Every abstraction earns its place.** A protocol for a fake or a smaller caller; nothing for the sake of SOLID. Say what you'd *not* add yet.
+- **Separate required from later.** Required for the prompt, production considerations, optional follow-ups. Grow only when the interviewer asks.
 - **Cards are two lines:** the role in bold, the type name underneath.
 - **Arrow labels are three words at most:** `request → reply`, like "load → posts".
 - **A protocol for each repository the domain uses,** with a dashed "implements" arrow pointing **up** at it. That's dependency inversion on the board.
