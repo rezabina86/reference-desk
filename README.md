@@ -65,6 +65,12 @@ sources:
 Every claim about mechanism should carry a source. Sources render as linked
 chips at the foot of the chapter, and inline links stay inline.
 
+An optional `group: Sliding window` line groups chapters inside a topic (the DSA catalogue uses it).
+Groups appear in the order of their first chapter; the sidebar expands only the group you are in,
+the topic index lists every group, and a title written `N · Name` shows `N` as the problem number.
+File names can use three digits (`021-slug.md`) when a topic has more than 99 chapters. Every code
+block gets a Copy button.
+
 ## Adding a topic
 
 ```bash

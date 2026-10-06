@@ -423,6 +423,8 @@ def load_topics(public=False):
                 "text": re.sub(r"\s+", " ", re.sub(r"[#`*>|\-]", " ", body)).lower()[:24000],
             }
             entry["outline"] = outline_of(entry["html"])
+            if not session_mode and meta.get("group"):
+                entry["group"] = meta["group"]
             if session_mode:
                 m = re.match(r"day-(S?\d+)", name)
                 day = m.group(1) if m else ""

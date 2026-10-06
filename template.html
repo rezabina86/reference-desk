@@ -287,6 +287,15 @@ pre::after{
 .t-kw{color:var(--t-kw)} .t-typ{color:var(--t-typ)} .t-str{color:var(--t-str)}
 .t-com{color:var(--t-com); font-style:italic} .t-num{color:var(--t-num)} .t-atr{color:var(--t-atr)}
 .scroll{overflow-x:auto; margin:0 0 20px; max-width:100%}
+.codewrap{position:relative; margin:0 0 20px}
+.codewrap .scroll{margin:0}
+.codewrap pre::after{right:68px}
+.copy{
+  position:absolute; top:6px; right:8px; z-index:1; padding:2px 9px; border:1px solid var(--rule);
+  border-radius:6px; background:var(--panel); color:var(--muted); cursor:pointer;
+  font-family:var(--mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+}
+.copy:hover{color:var(--accent); border-color:var(--accent)}
 
 table{border-collapse:collapse; width:100%; font-size:13.5px; line-height:1.5}
 th,td{text-align:left; padding:9px 14px 9px 0; border-bottom:1px solid var(--rule-soft); vertical-align:top}
@@ -468,6 +477,20 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 .tree .tp > button{padding:10px 8px}
 .tree .tp .kids a{display:grid}
 .tree .tl a .n{display:inline; color:var(--faint)}
+.tree .tp .kids a.kg{grid-template-columns:14px 1fr auto; color:var(--muted); font-size:12.5px}
+.tree .tp .kids a.kg .chev{color:var(--faint); font-size:9px}
+.tree .tp .kids a.kg .ct{font-family:var(--mono); font-size:10px; color:var(--faint)}
+.tree .tp .kids a.kg.cur{color:var(--ink); font-weight:500}
+.tree .tp .kids a.kc{padding-left:22px}
+.ix-group{margin:28px 0 0}
+.ix-group h3{font-size:13px; font-family:var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--faint); font-weight:400; margin:0 0 4px}
+.chapters a.primer .ch-t{color:var(--accent)}
+.groups-list{list-style:none; margin:0; padding:0; columns:2; column-gap:28px}
+.groups-list li{break-inside:avoid; padding:6px 0; border-top:1px solid var(--rule-soft)}
+.groups-list a{display:flex; justify-content:space-between; gap:10px; text-decoration:none; color:inherit}
+.groups-list a:hover span:first-child{color:var(--accent)}
+.groups-list .ct{font-family:var(--mono); font-size:11px; color:var(--faint)}
+@media (max-width:620px){ .groups-list{columns:1} }
 
 
 /* ------------------------------------------------------- mermaid boards */
@@ -528,6 +551,26 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function topicCount(t) {
+    var gs = groupsOf(t);
+    return gs ? gs.reduce(function (a, g) { return a + problemCount(g); }, 0) : t.chapters.length;
+  }
+  function groupsOf(t) {
+    var gs = [], by = {};
+    t.chapters.forEach(function (c, i) {
+      if (!c.group) return;
+      if (!by[c.group]) { by[c.group] = { name: c.group, items: [] }; gs.push(by[c.group]); }
+      by[c.group].items.push({ c: c, i: i });
+    });
+    return gs.length ? gs : null;
+  }
+  function splitTitle(c) {
+    var m = /^(\d+) · (.*)$/.exec(c.title);
+    return m ? { n: m[1], t: m[2] } : { n: '', t: c.title };
+  }
+  function problemCount(g) {
+    return g.items.filter(function (x) { return splitTitle(x.c).n; }).length;
+  }
   function topicBy(slug) { return DATA.topics.filter(function (t) { return t.slug === slug; })[0]; }
 
   document.getElementById('foot').textContent = 'Built ' + DATA.built;
@@ -576,14 +619,27 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 
     html += others.map(function (t) {
       var open = route.topic === t.slug;
-      var kids = !open ? '' : '<div class="kids">' + t.chapters.map(function (c, i) {
+      var gs = open && groupsOf(t);
+      var kids = !open ? '' : gs ? '<div class="kids">' + gs.map(function (g) {
+        var cur = g.items.some(function (x) { return x.c.slug === route.chapter; });
+        var count = problemCount(g);
+        var head = '<a class="kg' + (cur ? ' cur' : '') + '" href="#/' + t.slug + '/' + g.items[0].c.slug + '">' +
+          '<span class="chev">' + (cur ? '▾' : '▸') + '</span><span>' + esc(g.name) + '</span>' +
+          '<span class="ct">' + (count || '') + '</span></a>';
+        if (!cur) return head;
+        return head + g.items.map(function (x) {
+          var st = splitTitle(x.c), on = route.chapter === x.c.slug;
+          return '<a class="kc' + (on ? ' on' : '') + '" href="#/' + t.slug + '/' + x.c.slug + '">' +
+                 '<span class="num">' + esc(st.n) + '</span><span>' + esc(st.t) + '</span></a>';
+        }).join('');
+      }).join('') + '</div>' : '<div class="kids">' + t.chapters.map(function (c, i) {
         var on = route.chapter === c.slug;
         return '<a class="' + (on ? 'on' : '') + '" href="#/' + t.slug + '/' + c.slug + '">' +
                '<span class="num">' + pad(i + 1) + '</span><span>' + esc(c.title) + '</span></a>';
       }).join('') + '</div>';
       return '<div class="tp' + (open ? ' open' : '') + '"><button data-topic="' + esc(t.slug) + '">' +
         '<span class="chev">' + (open ? '▾' : '▸') + '</span><span class="nm">' + esc(t.title) + '</span>' +
-        '<span class="ct">' + t.chapters.length + '</span></button>' + kids + '</div>';
+        '<span class="ct">' + topicCount(t) + '</span></button>' + kids + '</div>';
     }).join('');
 
     tree.innerHTML = html;
@@ -599,7 +655,8 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
   /* ---------------------------------------------------------------- home */
   function home() {
     var cards = DATA.topics.map(function (t) {
-      var list = t.chapters.map(function (c, i) {
+      var gs = groupsOf(t);
+      var list = gs ? '' : t.chapters.map(function (c, i) {
         return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
           '<span class="num">' + pad(i + 1) + '</span>' +
           '<span class="ch-t">' + esc(c.title) + '</span>' +
@@ -610,8 +667,11 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
         '<p class="tagline">' + esc(t.tagline || '') + '</p>' +
         '<h2><a href="#/' + t.slug + '">' + esc(t.title) + '</a></h2>' +
         '<p class="blurb">' + esc(t.summary || '') + '</p>' +
-        '<ul class="chapters">' + list + '</ul>' +
-        '<div class="facts"><span><b>' + t.chapters.length + '</b> chapters</span>' +
+        (gs ? '<ul class="groups-list">' + gs.map(function (g) {
+          return '<li><a href="#/' + t.slug + '/' + g.items[0].c.slug + '"><span>' + esc(g.name) + '</span>' +
+                 '<span class="ct">' + (problemCount(g) || '') + '</span></a></li>';
+        }).join('') + '</ul>' : '<ul class="chapters">' + list + '</ul>') +
+        '<div class="facts"><span><b>' + (gs ? topicCount(t) : t.chapters.length) + '</b> ' + (gs ? 'problems' : 'chapters') + '</span>' +
         '<span><b>' + t.minutes + '</b> min end to end</span>' +
         '<span><b>' + t.sources.length + '</b> sources</span></div></section>';
     }).join('');
@@ -654,6 +714,25 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 
   /* ---------------------------------------------------------- topic index */
   function topicIndex(t) {
+    var gs = groupsOf(t);
+    if (gs) {
+      view.innerHTML =
+        '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + topicCount(t) +
+        ' problems · ' + gs.filter(problemCount).length + ' topics</span></div>' +
+        '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
+        gs.map(function (g) {
+          return '<section class="ix-group"><h3>' + esc(g.name) + '</h3><ul class="chapters">' +
+            g.items.map(function (x) {
+              var st = splitTitle(x.c);
+              return '<li><a class="' + (st.n ? '' : 'primer') + '" href="#/' + t.slug + '/' + x.c.slug + '">' +
+                '<span class="num">' + esc(st.n) + '</span><span class="ch-t">' + esc(st.t) + '</span>' +
+                '<span class="ch-m">' + esc(x.c.minutes) + ' min</span>' +
+                '<span class="ch-s">' + esc(x.c.summary) + '</span></a></li>';
+            }).join('') + '</ul></section>';
+        }).join('');
+      document.title = t.title + ' · The Reference Desk';
+      return;
+    }
     var list = t.chapters.map(function (c, i) {
       return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
         '<span class="num">' + pad(i + 1) + '</span><span class="ch-t">' + esc(c.title) + '</span>' +
@@ -699,7 +778,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 
     view.innerHTML = '<article>' + prog +
       '<div class="eyebrow"><a href="#/' + t.slug + '">' + esc(t.title) + '</a><span class="dot"></span>' +
-      'Chapter ' + pad(idx + 1) + ' of ' + pad(t.chapters.length) +
+      (c.group ? esc(c.group) + (splitTitle(c).n ? ' · problem ' + splitTitle(c).n + ' of ' + topicCount(t) : '') : 'Chapter ' + pad(idx + 1) + ' of ' + pad(t.chapters.length)) +
       '<span class="dot"></span>' + esc(c.minutes) + ' min</div>' +
       '<h1 class="title">' + esc(c.title) + '</h1>' +
       '<p class="lede">' + esc(c.summary) + '</p>' +
@@ -707,6 +786,39 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     document.title = c.title + ' · The Reference Desk';
     paintOutline(c);
     renderBoards();
+    addCopyButtons();
+  }
+
+  function copyFallback(text) {
+    var area = document.createElement('textarea');
+    area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';
+    document.body.appendChild(area); area.select();
+    try { document.execCommand('copy'); } finally { document.body.removeChild(area); }
+  }
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(function () { copyFallback(text); });
+    }
+    copyFallback(text);
+    return Promise.resolve();
+  }
+
+  function addCopyButtons() {
+    view.querySelectorAll('.scroll > pre[data-lang]').forEach(function (pre) {
+      var scroll = pre.parentNode, wrap = document.createElement('div');
+      wrap.className = 'codewrap';
+      scroll.parentNode.insertBefore(wrap, scroll);
+      wrap.appendChild(scroll);
+      var button = document.createElement('button');
+      button.type = 'button'; button.className = 'copy'; button.textContent = 'Copy';
+      button.addEventListener('click', function () {
+        copyText(pre.innerText).then(function () {
+          button.textContent = 'Copied';
+          setTimeout(function () { button.textContent = 'Copy'; }, 1500);
+        });
+      });
+      wrap.appendChild(button);
+    });
   }
 
 
