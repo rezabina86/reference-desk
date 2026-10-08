@@ -287,6 +287,125 @@ Why each piece:
   row its tap target; borderless keeps the heart tap separate from the navigation.
 :::
 
+::: Now write the tests
+> "Good. Now write me a few tests for the store — the ones you'd want before merging."
+
+What I'd test, and why:
+
+1. **A refresh doesn't move a heart.** The list comes back in a new order, with new data and a new
+   restaurant. The heart must stay on pizza and only pizza. That's QA's "wrong restaurant gets the
+   heart", and keying by `id` is what fixes it.
+2. **Toggle turns a favourite on, then off.** The basic contract.
+3. **A toggle is saved straight away**, not on some later "back" or "background" event.
+4. **Favourites survive a relaunch.** A new store built from the same persistence reads them back.
+   That's the "gone after a relaunch" bug.
+5. **A toggle tells readers to redraw.** This is how the list hears about a tap on the detail
+   screen. `withObservationTracking` does in a test what SwiftUI does in `body`: it records what was
+   read and calls back when it changes.
+6. **The real `UserDefaults` persistence round-trips.** One test against the real thing.
+
+I wouldn't unit-test the views: they hold no logic, they just read the store. Whether the heart
+looks right is a job for a preview.
+
+**The seam.** The store takes `FavoritesPersisting` in `init`, so the tests pass a *fake* — a tiny
+in-memory stand-in that remembers what was "saved". No disk, nothing left behind, same result every
+run. For the last test a real `UserDefaults` is fine: it's fast and local. I give it its own suite
+name, so it never touches the app's real defaults, and delete it at the end.
+
+```swift
+import Foundation
+import Observation
+import Testing
+
+// A fake: keeps the "saved" ids in memory instead of on disk.
+final class InMemoryFavorites: FavoritesPersisting {
+    var stored: Set<Restaurant.ID> = []
+    func load() -> Set<Restaurant.ID> { stored }
+    func save(_ ids: Set<Restaurant.ID>) { stored = ids }
+}
+
+@MainActor
+struct FavoritesStoreTests {
+    @Test func refreshDoesNotMoveTheHeart() {
+        // Given pizza is a favourite
+        let store = FavoritesStore(persistence: InMemoryFavorites())
+        store.toggle("pizza")
+
+        // When a refresh brings the list back in a new order, with new data
+        let refreshed = [
+            Restaurant(id: "sushi", name: "Sushi", rating: 4.8),
+            Restaurant(id: "ramen", name: "Ramen", rating: 4.5),
+            Restaurant(id: "pizza", name: "Pizza", rating: 4.1),
+        ]
+
+        // Then the heart is still on pizza, and only on pizza
+        #expect(refreshed.filter { store.isFavorite($0.id) }.map(\.name) == ["Pizza"])
+    }
+
+    @Test func toggleTurnsAFavouriteOnAndOff() {
+        let store = FavoritesStore(persistence: InMemoryFavorites())
+
+        store.toggle("pizza")
+        #expect(store.isFavorite("pizza"))
+
+        store.toggle("pizza")
+        #expect(!store.isFavorite("pizza"))
+    }
+
+    @Test func toggleSavesStraightAway() {
+        let persistence = InMemoryFavorites()
+        let store = FavoritesStore(persistence: persistence)
+
+        store.toggle("pizza")
+        store.toggle("sushi")
+
+        #expect(persistence.stored == ["pizza", "sushi"])
+    }
+
+    @Test func favouritesSurviveARelaunch() {
+        // Given favourites saved by one store
+        let persistence = InMemoryFavorites()
+        FavoritesStore(persistence: persistence).toggle("pizza")
+
+        // When the app relaunches and builds a new store
+        let relaunched = FavoritesStore(persistence: persistence)
+
+        // Then it reads them back
+        #expect(relaunched.ids == ["pizza"])
+    }
+
+    @Test func toggleTellsReadersToRedraw() async {
+        // Given a "list row" that has read pizza's heart
+        let store = FavoritesStore(persistence: InMemoryFavorites())
+
+        // When the "detail screen" toggles it, the row is told to redraw
+        await confirmation { redraw in
+            withObservationTracking {
+                _ = store.isFavorite("pizza")
+            } onChange: {
+                redraw()
+            }
+            store.toggle("pizza")
+        }
+    }
+
+    @Test func userDefaultsPersistenceRoundTrips() throws {
+        // A private suite: real UserDefaults, but not the app's own, and deleted afterwards.
+        let suite = "FavoritesStoreTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        FavoritesStore(persistence: UserDefaultsFavoritesPersistence(defaults: defaults)).toggle("ramen")
+        let relaunched = FavoritesStore(persistence: UserDefaultsFavoritesPersistence(defaults: defaults))
+
+        #expect(relaunched.ids == ["ramen"])
+    }
+}
+```
+
+Ran with Swift 6.4: 6 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"How would the views get the store without passing it everywhere?"* — `.environment(store)` at
   the root and `@Environment(FavoritesStore.self) private var favorites` where needed. Fine for an

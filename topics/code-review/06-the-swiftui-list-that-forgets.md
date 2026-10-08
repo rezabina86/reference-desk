@@ -150,7 +150,7 @@ struct TransactionsScreen: View {
         case .loaded(let items):
             // Needs a NavigationStack above with .navigationDestination(for: Transaction.self),
             // or tapping a row does nothing.
-            List(filtered(items)) { item in
+            List(Self.filtered(items, by: query)) { item in
                 NavigationLink(value: item) {
                     LabeledContent(item.title) {
                         Text(item.date, format: .dateTime.day().month().year())
@@ -160,7 +160,7 @@ struct TransactionsScreen: View {
         }
     }
 
-    private func filtered(_ items: [Transaction]) -> [Transaction] {
+    static func filtered(_ items: [Transaction], by query: String) -> [Transaction] {
         query.isEmpty ? items : items.filter { $0.title.localizedStandardContains(query) }
     }
 }
@@ -174,6 +174,153 @@ The filter stays in `body` on purpose: a page of transactions is small. Point 7 
 
 `@Observable` and `ContentUnavailableView` need iOS 17. On iOS 16, keep `ObservableObject` with
 `@StateObject` and a plain empty-state view — the fixes are the same.
+:::
+
+::: Now write the tests
+> "Good. Now write me a few tests for the model and the search — the ones you'd want before
+> merging."
+
+What I'd test, and why:
+
+1. **A cancelled load leaves the screen alone.** Push a detail screen mid-load and SwiftUI cancels
+   `.task`; URLSession throws `URLError(.cancelled)`. Without the `Task.isCancelled` check, the user
+   comes back to "Couldn't load transactions". That's the subtle bug in this fix, so it gets the
+   first test.
+2. **A reload keeps the list on screen.** Coming back from a detail screen runs `load()` again. The
+   list must stay visible while it waits — no flash to a spinner — and then update in place.
+3. **Success shows the list, failure shows the error.** The old code turned a network error into
+   an empty list. These two pin the new states.
+4. **Search ignores case and accents.** "coffee" finds "Coffee", "cafe" finds "Café". This was one
+   of the reported bugs.
+
+I wouldn't unit-test the view itself. `List`, `.task` and `.searchable` are Apple's code, and
+"does this row look right" is a job for a preview or a UI test, not a unit test.
+
+**The seam.** A *seam* is a place where a test can swap in its own piece. Here it's
+`TransactionsFetching`: the model takes it in `init`, so the tests pass a *fake* — a small
+stand-in that answers however the test wants, with no network. One fake answers at once. The other
+waits until the test says "answer now", so the test can cancel or check the screen *while* the load
+is in flight. No sleeps, so the tests are *deterministic*: same result every run. The filter was a
+private method on the view; I made it `static` and gave it the query as a parameter, so a test can
+call it without building a view.
+
+```swift
+import Foundation
+import Testing
+
+// A fake that answers at once.
+struct StubFetcher: TransactionsFetching {
+    let result: Result<[Transaction], any Error>
+    func fetch() async throws -> [Transaction] { try result.get() }
+}
+
+// A fake that waits until the test says "answer now".
+actor ControlledFetcher: TransactionsFetching {
+    private var pending: CheckedContinuation<[Transaction], any Error>?
+    private var callWaiter: CheckedContinuation<Void, Never>?
+
+    func fetch() async throws -> [Transaction] {
+        try await withCheckedThrowingContinuation { continuation in
+            pending = continuation
+            callWaiter?.resume()
+            callWaiter = nil
+        }
+    }
+
+    func waitUntilCalled() async {
+        if pending != nil { return }
+        await withCheckedContinuation { callWaiter = $0 }
+    }
+
+    func finish(with result: Result<[Transaction], any Error>) {
+        pending?.resume(with: result)
+        pending = nil
+    }
+}
+
+func transaction(_ title: String) -> Transaction {
+    Transaction(id: UUID(), title: title, date: .now)
+}
+
+extension TransactionsModel.State {
+    var items: [Transaction]? {
+        if case .loaded(let items) = self { items } else { nil }
+    }
+    var isLoading: Bool {
+        if case .loading = self { true } else { false }
+    }
+    var isFailed: Bool {
+        if case .failed = self { true } else { false }
+    }
+}
+
+@MainActor
+struct TransactionsModelTests {
+    @Test func cancelledLoadLeavesStateUntouched() async {
+        // Given a load that is waiting for the network
+        let fetcher = ControlledFetcher()
+        let model = TransactionsModel(api: fetcher)
+        let task = Task { await model.load() }
+        await fetcher.waitUntilCalled()
+
+        // When the screen goes away and URLSession reports the cancel as an error
+        task.cancel()
+        await fetcher.finish(with: .failure(URLError(.cancelled)))
+        await task.value
+
+        // Then no error screen appears
+        #expect(model.state.isLoading)
+    }
+
+    @Test func reloadKeepsTheListOnScreen() async {
+        // Given a list that has loaded once
+        let coffee = transaction("Coffee"), rent = transaction("Rent")
+        let fetcher = ControlledFetcher()
+        let model = TransactionsModel(api: fetcher)
+        let first = Task { await model.load() }
+        await fetcher.waitUntilCalled()
+        await fetcher.finish(with: .success([coffee]))
+        await first.value
+
+        // When it loads again, as it does on coming back from a detail screen
+        let second = Task { await model.load() }
+        await fetcher.waitUntilCalled()
+
+        // Then the old list stays while we wait, and is replaced in place
+        #expect(model.state.items == [coffee])
+        await fetcher.finish(with: .success([coffee, rent]))
+        await second.value
+        #expect(model.state.items == [coffee, rent])
+    }
+
+    @Test func successfulLoadShowsTheList() async {
+        let coffee = transaction("Coffee")
+        let model = TransactionsModel(api: StubFetcher(result: .success([coffee])))
+
+        await model.load()
+
+        #expect(model.state.items == [coffee])
+    }
+
+    @Test func failedLoadShowsAnError() async {
+        let model = TransactionsModel(api: StubFetcher(result: .failure(URLError(.notConnectedToInternet))))
+
+        await model.load()
+
+        #expect(model.state.isFailed)
+    }
+
+    @Test func searchIgnoresCaseAndAccents() {
+        let items = [transaction("Coffee"), transaction("Café Central"), transaction("Rent")]
+
+        #expect(TransactionsScreen.filtered(items, by: "coffee").map(\.title) == ["Coffee"])
+        #expect(TransactionsScreen.filtered(items, by: "cafe").map(\.title) == ["Café Central"])
+        #expect(TransactionsScreen.filtered(items, by: "").count == 3)
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 5 tests, all passed.
 :::
 
 ::: What I'd ask next

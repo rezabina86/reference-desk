@@ -285,6 +285,191 @@ Why each piece:
   `instantiateViewController(identifier:creator:)`), so a test can use `FakePricing`.
 :::
 
+::: Now write the tests
+> "Good. Now write me tests for the race and the wiring — the things QA found."
+
+**What I'd test, and why**
+
+1. **Prices come back in the order asked, even when replies don't.** The fake answers c, then a,
+   then b; the cart still gets a, b, c. That's the ordering half of the race fix.
+2. **The count matches the items after Add and Clear** — "3 items" after three, "0 items" after
+   Clear. This catches the off-by-one label *and* Clear being wired to Add.
+3. **Tapping Add twice quickly prices once** — the "adds everything twice" report.
+4. **Clear cancels an add still in flight** — a slow price must not refill a cart the user just
+   emptied.
+
+I wouldn't try to unit-test the crash itself. A data race is a matter of luck; Thread Sanitizer
+finds it reliably, a unit test doesn't. The fix makes it impossible by construction (one writer on
+the main actor), and these tests pin the behaviour around it.
+
+**The seam.** `Pricing` is injected through `init(coder:pricing:)`, so the test passes a *fake*
+price list that holds each request until the test answers it — that's how it picks the order
+replies arrive in. The controller only has a coder initialiser, so the test builds it the way a
+storyboard would: an empty coder, then the outlets connected by key. Small *spies* — real
+`UIButton`/`UILabel` subclasses that also report every change — let the test wait for "the add
+finished" instead of sleeping. Each suite has a one-minute `.timeLimit`, so a test that waits for
+something that never happens fails instead of hanging the run.
+
+```swift
+import Testing
+import UIKit
+
+// A fake price list. Each SKU waits until the test answers it, so the test picks the order.
+actor GatedPricing: Pricing {
+    private(set) var asked: [String] = []
+    private var waiting: [String: CheckedContinuation<CartItem, Never>] = [:]
+    nonisolated let arrivals: AsyncStream<String>
+    private let arrived: AsyncStream<String>.Continuation
+
+    init() { (arrivals, arrived) = AsyncStream.makeStream() }
+
+    func price(for sku: String) async -> CartItem {
+        asked.append(sku)
+        return await withCheckedContinuation { continuation in
+            waiting[sku] = continuation
+            arrived.yield(sku)                 // tells the test this SKU is now waiting
+        }
+    }
+
+    func answer(_ sku: String) {
+        waiting.removeValue(forKey: sku)?.resume(returning: CartItem(sku: sku, price: 4.99))
+    }
+}
+
+extension AsyncStream {
+    func take(_ count: Int) async {
+        var iterator = makeAsyncIterator()
+        for _ in 0..<count { _ = await iterator.next() }
+    }
+}
+
+// Spies: real controls that also report every change through a stream.
+final class LabelSpy: UILabel {
+    let texts: AsyncStream<String?>
+    private let changed: AsyncStream<String?>.Continuation
+
+    override init(frame: CGRect) {
+        (texts, changed) = AsyncStream.makeStream()
+        super.init(frame: frame)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var text: String? { didSet { changed.yield(text) } }
+
+    func waitForText(_ expected: String) async {
+        for await text in texts where text == expected { return }
+    }
+}
+
+final class ButtonSpy: UIButton {
+    private let states: AsyncStream<Bool>
+    private let changed: AsyncStream<Bool>.Continuation
+
+    override init(frame: CGRect) {
+        (states, changed) = AsyncStream.makeStream()
+        super.init(frame: frame)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isEnabled: Bool { didSet { changed.yield(isEnabled) } }
+
+    /// Returns once the button was disabled and then enabled again: the add has finished.
+    func waitUntilAddFinishes() async {
+        var wasDisabled = false
+        for await enabled in states {
+            if !enabled { wasDisabled = true } else if wasDisabled { return }
+        }
+    }
+}
+
+@MainActor
+struct CartScreen {
+    let controller: CartViewController
+    let add = ButtonSpy()
+    let clear = UIButton()
+    let count = LabelSpy()
+
+    init(pricing: Pricing, skus: [String]) throws {
+        // The controller only has a coder initialiser, so build it the way a storyboard
+        // would: an empty coder, then the outlets connected by key.
+        let archiver = NSKeyedArchiver(requiringSecureCoding: false)
+        archiver.finishEncoding()
+        let coder = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
+        coder.requiresSecureCoding = false
+        controller = try #require(CartViewController(coder: coder, pricing: pricing))
+        controller.setValue(add, forKey: "addButton")
+        controller.setValue(clear, forKey: "clearButton")
+        controller.setValue(count, forKey: "countLabel")
+        controller.loadViewIfNeeded()          // viewDidLoad wires the buttons
+        controller.selectedSKUs = skus
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+struct PricingTests {
+    @Test func pricesComeBackInTheOrderAsked() async {
+        let pricing = GatedPricing()
+        async let priced = pricing.prices(for: ["a", "b", "c"])
+        await pricing.arrivals.take(3)         // all three are being priced
+
+        // The database answers c first, then a, then b
+        for sku in ["c", "a", "b"] { await pricing.answer(sku) }
+
+        #expect(await priced.map(\.sku) == ["a", "b", "c"])
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+@MainActor
+struct CartViewControllerTests {
+    @Test func countMatchesTheItemsAfterAddAndClear() async throws {
+        let pricing = GatedPricing()
+        let cart = try CartScreen(pricing: pricing, skus: ["a", "b", "c"])
+
+        cart.add.sendActions(for: .touchUpInside)
+        await pricing.arrivals.take(3)
+        for sku in ["a", "b", "c"] { await pricing.answer(sku) }
+        await cart.count.waitForText("3 items")      // not "2 items": the label isn't one behind
+
+        cart.clear.sendActions(for: .touchUpInside)
+        #expect(cart.count.text == "0 items")
+    }
+
+    @Test func tappingAddTwiceQuicklyPricesOnce() async throws {
+        let pricing = GatedPricing()
+        let cart = try CartScreen(pricing: pricing, skus: ["a"])
+
+        cart.add.sendActions(for: .touchUpInside)
+        cart.add.sendActions(for: .touchUpInside)    // a double tap
+        await pricing.arrivals.take(1)
+        await pricing.answer("a")
+        await cart.add.waitUntilAddFinishes()
+
+        #expect(await pricing.asked == ["a"])
+        #expect(cart.count.text == "1 items")
+    }
+
+    @Test func clearCancelsAnAddStillInFlight() async throws {
+        // Given an add waiting for its price
+        let pricing = GatedPricing()
+        let cart = try CartScreen(pricing: pricing, skus: ["a"])
+        cart.add.sendActions(for: .touchUpInside)
+        await pricing.arrivals.take(1)
+
+        // When the user taps Clear, and only then the price comes back
+        cart.clear.sendActions(for: .touchUpInside)
+        await pricing.answer("a")
+        await cart.add.waitUntilAddFinishes()
+
+        // Then the cart stays empty
+        #expect(cart.count.text == "0 items")
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"The old `PricingService` can't change. How do you get `async` from it?"* — Wrap it with
   `withCheckedContinuation`: call the old method and resume the continuation in its completion,

@@ -10,7 +10,7 @@ sources:
 
 *Shape: review this PR · Reported: threading bugs as a review task (DoorDash); async/await is
 the house style at most modern iOS teams · Compiled in Swift 6 mode: Swift 6.2 rejected the snippet, Swift 6.4
-accepts it with one warning; the fix compiles on both and was run against a fake API*
+accepts it with one warning; the fix compiles with Swift 6.4 in Swift 6 mode and was run against a fake API*
 
 > "The user types an amount and we show the converted value. QA says that if you type fast, the
 > number on screen is sometimes for an amount you typed earlier — and after a network error the
@@ -101,16 +101,21 @@ public final class ConverterViewModel {
 
     public private(set) var state: State = .idle
     private let api: RatesAPI
+    private let sleep: @Sendable (Duration) async throws -> Void
     private var current: Task<Void, Never>?
 
-    public init(api: RatesAPI) { self.api = api }
+    public init(api: RatesAPI,
+                sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+        self.api = api
+        self.sleep = sleep
+    }
 
     public func amountChanged(_ amount: Decimal, currency: String) {
         current?.cancel()
         state = .loading
-        current = Task { [api] in
+        current = Task { [api, sleep] in
             do {
-                try await Task.sleep(for: .milliseconds(300))          // debounce
+                try await sleep(.milliseconds(300))                   // debounce
                 let rate = try await api.rate(for: currency)
                 try Task.checkCancellation()
                 state = .loaded((amount * rate).formatted(.currency(code: currency)))
@@ -141,9 +146,172 @@ Why each piece:
   user sees an error for a request they replaced. Don't use `catch is CancellationError` for this:
   a cancelled `URLSession` request throws `URLError(.cancelled)`, which would slip past it and
   overwrite the newer request's `.loading` with an error.
-- **`[api]` capture** — copies the dependency into the task up front. It does *not* stop the task
+- **`sleep` passed in** — the app gets the default, a real `Task.sleep`. A test passes one that
+  returns at once but still stops a cancelled task, so the debounce is tested without waiting.
+- **`[api, sleep]` capture** — copies the dependencies into the task up front. It does *not* stop the task
   retaining the view model: writing `state` captures `self` anyway, which is fine here (see the
   first follow-up).
+:::
+
+::: Now write the tests
+> "Good. Now write me the tests you'd want on this view model before it merges — one for each
+> thing QA reported, and one for the debounce."
+
+What I'd test, and why:
+
+1. **Last request wins.** A slow USD answer arrives after a newer GBP one; the screen must show
+   GBP. This is QA's first bug, so the test stops it coming back.
+2. **A failure ends in `.failed`.** The API throws; the state must leave `.loading`. That's QA's
+   second bug, the spinner that never stops.
+3. **A replaced request never writes `.failed`**, even when it ends with `URLError(.cancelled)`,
+   which is how `URLSession` reports a cancelled request. It's the subtle line in the fix, and the
+   one someone will "simplify" to `catch is CancellationError`.
+4. **Fast typing makes one call.** Five keystrokes, one request, for the last amount. That's the
+   debounce.
+
+I wouldn't test the currency formatting itself — that's Apple's code. I build the expected
+string with the same `.formatted(.currency(code:))` call, so the tests pass in any locale.
+
+**The seam.** A *seam* is a place where a test can swap in its own piece. Here there are two, both
+passed in through `init`. The API is a *fake*: a small stand-in that records each request and
+holds it open until the test answers, so the test decides the order answers arrive in. The
+`sleep` is the other one. The app gets a real 300 ms `Task.sleep`; the tests pass one that returns
+at once but still stops a cancelled task. No test waits on a clock, so every run does the same
+thing in the same order — the tests are *deterministic*. (The first version of the fix created the
+sleep inside the task. I added the `sleep` parameter for these tests; the app's behaviour doesn't
+change.)
+
+```swift
+import Foundation
+import Testing
+
+/// A fake API: it records each request and suspends until the test answers it.
+@MainActor
+final class ControlledRatesAPI: RatesAPI {
+    private(set) var requests: [String] = []
+    private var pending: [String: CheckedContinuation<Decimal, Error>] = [:]
+    private var waiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
+
+    func rate(for currency: String) async throws -> Decimal {
+        requests.append(currency)
+        for waiter in waiters where requests.count >= waiter.count { waiter.resume.resume() }
+        waiters.removeAll { requests.count >= $0.count }
+        return try await withCheckedThrowingContinuation { pending[currency] = $0 }
+    }
+
+    /// Returns once `count` requests have reached the API.
+    func waitForRequests(_ count: Int) async {
+        if requests.count >= count { return }
+        await withCheckedContinuation { waiters.append((count, $0)) }
+    }
+
+    func answer(_ currency: String, with rate: Decimal) {
+        pending.removeValue(forKey: currency)?.resume(returning: rate)
+    }
+
+    func fail(_ currency: String, with error: Error) {
+        pending.removeValue(forKey: currency)?.resume(throwing: error)
+    }
+}
+
+/// Stands in for the 300 ms wait: no real time passes, but a cancelled task still stops here,
+/// exactly as a cancelled `Task.sleep` does.
+let instantDebounce: @Sendable (Duration) async throws -> Void = { _ in try Task.checkCancellation() }
+
+/// Gives the view model's task a turn on the main actor, up to a fixed number of times.
+@MainActor
+func settle(until done: () -> Bool = { false }, yields: Int = 100) async {
+    for _ in 0..<yields where !done() { await Task.yield() }
+}
+
+@MainActor
+struct ConverterViewModelTests {
+
+    @Test
+    func lastRequestWins() async {
+        // Given a slow USD request already waiting on the network
+        let api = ControlledRatesAPI()
+        let viewModel = ConverterViewModel(api: api, sleep: instantDebounce)
+        viewModel.amountChanged(100, currency: "USD")
+        await api.waitForRequests(1)
+
+        // When the user changes to GBP, GBP answers first, then the old USD answer arrives
+        viewModel.amountChanged(100, currency: "GBP")
+        await api.waitForRequests(2)
+        api.answer("GBP", with: Decimal(string: "0.85")!)
+        await settle(until: { viewModel.state != .loading })
+        api.answer("USD", with: Decimal(string: "1.10")!)
+        await settle()
+
+        // Then the screen shows the GBP answer, not the late USD one
+        let expected = (Decimal(100) * Decimal(string: "0.85")!).formatted(.currency(code: "GBP"))
+        #expect(viewModel.state == .loaded(expected))
+    }
+
+    @Test
+    func failureEndsInFailedState() async {
+        // Given a request in flight
+        let api = ControlledRatesAPI()
+        let viewModel = ConverterViewModel(api: api, sleep: instantDebounce)
+        viewModel.amountChanged(10, currency: "USD")
+        await api.waitForRequests(1)
+
+        // When the API fails
+        api.fail("USD", with: URLError(.notConnectedToInternet))
+        await settle(until: { viewModel.state != .loading })
+
+        // Then the spinner stops and the error is shown
+        #expect(viewModel.state == .failed(URLError(.notConnectedToInternet).localizedDescription))
+    }
+
+    @Test
+    func replacedRequestNeverWritesFailed() async {
+        // Given a USD request, replaced by a GBP request while it was in flight
+        let api = ControlledRatesAPI()
+        let viewModel = ConverterViewModel(api: api, sleep: instantDebounce)
+        viewModel.amountChanged(10, currency: "USD")
+        await api.waitForRequests(1)
+        viewModel.amountChanged(10, currency: "GBP")
+        await api.waitForRequests(2)
+
+        // When the old request ends the way URLSession ends a cancelled request
+        api.fail("USD", with: URLError(.cancelled))
+        await settle()
+
+        // Then the newer request still owns the screen
+        #expect(viewModel.state == .loading)
+
+        // And its answer lands normally
+        api.answer("GBP", with: 2)
+        await settle(until: { viewModel.state != .loading })
+        #expect(viewModel.state == .loaded(Decimal(20).formatted(.currency(code: "GBP"))))
+    }
+
+    @Test
+    func fastTypingMakesOneCall() async {
+        // Given the user types 1, 1.5, 2, 5, 5.5 faster than the debounce
+        let api = ControlledRatesAPI()
+        let viewModel = ConverterViewModel(api: api, sleep: instantDebounce)
+        for amount in ["1", "1.5", "2", "5", "5.5"] {
+            viewModel.amountChanged(Decimal(string: amount)!, currency: "USD")
+        }
+
+        // When the one surviving request is answered
+        await api.waitForRequests(1)
+        api.answer("USD", with: 1)
+        await settle(until: { viewModel.state != .loading })
+
+        // Then only one call reached the API, for the last amount
+        #expect(api.requests == ["USD"])
+        #expect(viewModel.state == .loaded(Decimal(string: "5.5")!.formatted(.currency(code: "USD"))))
+    }
+}
+```
+
+`settle` gives the view model's task a few turns on the main actor after the fake answers. It's
+bounded by a count, not a time, so a slow machine can't make it flaky.
+
+Ran with Swift 6.4: 4 tests, all passed.
 :::
 
 ::: What I'd ask next

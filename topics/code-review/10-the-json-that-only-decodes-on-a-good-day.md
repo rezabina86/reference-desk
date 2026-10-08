@@ -284,6 +284,121 @@ Why each piece:
   that's exactly how this was run.
 :::
 
+::: Now write the tests
+> "Good. Now write me a few tests — start with the response that crashed in production."
+
+**What I'd test, and why**
+
+1. **The real response decodes, with the right keys, dates and prices** — this is the reported
+   crash. The JSON from the bug report becomes a *fixture*: saved test input the test reads every
+   time, so the crash can't quietly come back.
+2. **The item with a `null` price is skipped and recorded in `skipped`** — one bad item must not
+   sink the menu, and the error is kept so it can be logged.
+3. **A missing `description` decodes as `nil`** — the field really is optional.
+4. **A response with no `store_id` throws** — the lossy decode is only for items. A broken page
+   should still fail loudly.
+5. **The view model goes to `.failed` when loading throws** — a bad response shows an error
+   screen, not a crash.
+6. **The total is exactly 17.49** — `Decimal`, not `Double`, so no `17.490000000000002`.
+
+I wouldn't test `URLSession` or `JSONDecoder` themselves; they are Apple's. The interesting logic
+is in our `init(from:)` and the view model.
+
+**The seam.** Decoding is a plain static function, `MenuService.decode(_:)`, so the fixture goes
+straight in — no network, nothing to fake. For the view model the seam is the `MenuLoading`
+protocol: a *fake* loader returns whatever page or error the test chooses.
+
+```swift
+import Testing
+import Foundation
+
+/// The response from the chapter, kept as a fixture.
+let sampleMenu = Data("""
+{
+  "store_id": "s-42",
+  "items": [
+    { "item_id": 1, "display_name": "Margherita", "price": 12.99,
+      "created_at": "2026-10-01T18:30:00Z", "description": "Tomato, mozzarella, basil" },
+    { "item_id": 2, "display_name": "Garlic bread", "price": 4.50,
+      "created_at": "2026-10-01T18:31:00Z" },
+    { "item_id": 3, "display_name": "Tiramisu", "price": null,
+      "created_at": "2026-10-01T18:32:00Z", "description": "Mascarpone, coffee" }
+  ]
+}
+""".utf8)
+
+/// A fake loader: hands back whatever result the test chose. No network.
+struct FakeMenuLoader: MenuLoading {
+    let result: Result<MenuPage, any Error>
+
+    func menu(storeID: String) async throws -> MenuPage { try result.get() }
+}
+
+struct MenuDecodingTests {
+    @Test func goodItemsDecodeWithTheRightKeysDatesAndPrices() async throws {
+        let page = try await MenuService.decode(sampleMenu)
+
+        #expect(page.storeID == "s-42")
+        #expect(page.items.map(\.id) == [1, 2])
+        #expect(page.items.map(\.name) == ["Margherita", "Garlic bread"])
+        #expect(page.items[0].price == Decimal(string: "12.99"))
+        #expect(page.items[0].createdAt == (try Date("2026-10-01T18:30:00Z", strategy: .iso8601)))
+    }
+
+    @Test func nullPriceItemIsSkippedAndRecorded() async throws {
+        let page = try await MenuService.decode(sampleMenu)
+
+        #expect(!page.items.contains { $0.id == 3 })
+        #expect(page.skipped.count == 1)
+        guard case DecodingError.valueNotFound(_, let context) = try #require(page.skipped.first) else {
+            Issue.record("Expected valueNotFound, got \(page.skipped)")
+            return
+        }
+        #expect(context.codingPath.last?.stringValue == "price")
+    }
+
+    @Test func missingDescriptionIsNil() async throws {
+        let page = try await MenuService.decode(sampleMenu)
+
+        #expect(page.items[0].description == "Tomato, mozzarella, basil")
+        #expect(page.items[1].description == nil)
+    }
+
+    @Test func responseWithoutStoreIDThrows() async {
+        let noStore = Data(#"{ "items": [] }"#.utf8)
+
+        await #expect(throws: DecodingError.self) { try await MenuService.decode(noStore) }
+    }
+}
+
+@MainActor
+struct MenuViewModelTests {
+    @Test func loaderErrorEndsInFailed() async {
+        let viewModel = MenuViewModel(loader: FakeMenuLoader(result: .failure(URLError(.badServerResponse))))
+
+        await viewModel.load(storeID: "s-42")
+
+        guard case .failed = viewModel.state else {
+            Issue.record("Expected .failed, got \(viewModel.state)")
+            return
+        }
+        #expect(viewModel.total == 0)
+    }
+
+    @Test func totalIsExactly1749() async throws {
+        let page = try await MenuService.decode(sampleMenu)
+        let viewModel = MenuViewModel(loader: FakeMenuLoader(result: .success(page)))
+
+        await viewModel.load(storeID: "s-42")
+
+        #expect(viewModel.total == Decimal(string: "17.49"))
+    }
+}
+```
+
+Ran with Swift 6.4: 6 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"Why not just make every field optional?"* — Then the decode never fails, and every screen is
   full of `if let`. Optional should mean "the server legitimately leaves this out", not "I didn't

@@ -263,6 +263,187 @@ Why each piece:
   show stale flags.
 :::
 
+::: Now write the tests
+> "Good. Now write me a few tests for the importer — the ones that would have caught this before
+> production."
+
+What I'd test, and why:
+
+1. **Duplicates become one row each, and every returned ID works.** 20 URLs, 5 of them twice, must
+   give 15 rows, and all 20 returned IDs must open in the `viewContext`. My first version of the fix
+   got this wrong, so this test comes first.
+2. **The screen sees new photos without a refetch.** That's the "album shows nothing until you
+   relaunch" bug. The test holds the album object the screen already has and checks its photos fill
+   in.
+3. **`markAllSeen` reaches the screen.** A batch update skips every context. The test reads the
+   photos as unseen first, so they are really in memory, then checks the same objects say "seen".
+4. **A failed download throws and saves nothing for that URL.** The old code swallowed errors with
+   `try?`. Now the caller hears about it.
+
+The crash itself — a context used on the wrong queue — isn't something a `#expect` can see.
+Core Data catches that: I add `-com.apple.CoreData.ConcurrencyDebug 1` to the test scheme's
+launch arguments, so any wrong-queue access traps during the run. I wouldn't test Core Data's own
+merging or SQLite; I test that my code asks for them.
+
+**The seam.** `PhotoDownloading` is injected, so the tests use a *fake* downloader — a stand-in
+that answers at once with no network, and can fail for one URL. The container is passed in too, so
+each test builds its own fresh store. I use a real SQLite file in a temp folder, not the in-memory
+store: `NSBatchUpdateRequest` only works on SQLite. The model is built in code, so the tests need no
+`.xcdatamodeld` file.
+
+```swift
+import CoreData
+import Testing
+
+// A fake downloader: no network, answers at once, and can fail for one URL.
+struct FakeDownloader: PhotoDownloading {
+    var failing: URL? = nil
+    func data(from url: URL) async throws -> Data {
+        if url == failing { throw URLError(.badServerResponse) }
+        return Data(url.absoluteString.utf8)
+    }
+}
+
+// The model, built in code: Album <->> Photo. Built once, shared by every container.
+@MainActor let model: NSManagedObjectModel = {
+    let album = NSEntityDescription(), photo = NSEntityDescription()
+    album.name = "Album"
+    photo.name = "Photo"
+
+    func attribute(_ name: String, _ type: NSAttributeDescription.AttributeType) -> NSAttributeDescription {
+        let attribute = NSAttributeDescription()
+        attribute.name = name
+        attribute.type = type
+        return attribute
+    }
+    let remoteURL = attribute("remoteURL", .string)
+    let imageData = attribute("imageData", .binaryData)
+    let isSeen = attribute("isSeen", .boolean)
+    isSeen.defaultValue = false
+
+    let photos = NSRelationshipDescription(), toAlbum = NSRelationshipDescription()
+    photos.name = "photos"
+    photos.destinationEntity = photo
+    photos.maxCount = 0                       // to-many
+    photos.deleteRule = .cascadeDeleteRule
+    toAlbum.name = "album"
+    toAlbum.destinationEntity = album
+    toAlbum.maxCount = 1
+    photos.inverseRelationship = toAlbum
+    toAlbum.inverseRelationship = photos
+
+    album.properties = [attribute("name", .string), photos]
+    photo.properties = [remoteURL, imageData, isSeen, toAlbum]
+    let model = NSManagedObjectModel()
+    model.entities = [album, photo]
+    return model
+}()
+
+// A real SQLite store in a fresh temp folder: batch updates don't run on the in-memory store.
+@MainActor
+func makeContainer() throws -> NSPersistentContainer {
+    let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let container = NSPersistentContainer(name: "Photos", managedObjectModel: model)
+    container.persistentStoreDescriptions = [
+        NSPersistentStoreDescription(url: folder.appending(path: "Photos.sqlite"))
+    ]
+    var loadError: (any Error)?
+    container.loadPersistentStores { _, error in loadError = error }   // synchronous for SQLite
+    if let loadError { throw loadError }
+    return container
+}
+
+@MainActor
+func makeAlbum(in context: NSManagedObjectContext) throws -> NSManagedObject {
+    let album = NSManagedObject(entity: model.entitiesByName["Album"]!, insertInto: context)
+    album.setValue("Holiday", forKey: "name")
+    try context.save()                         // a saved object has a permanent ID
+    return album
+}
+
+// 20 URLs, 15 different: photos 0...4 appear twice.
+let urls = (0..<15).map { URL(string: "https://example.com/\($0).jpg")! }
+    + (0..<5).map { URL(string: "https://example.com/\($0).jpg")! }
+
+@MainActor
+func photos(of album: NSManagedObject) -> Set<NSManagedObject> {
+    album.value(forKey: "photos") as? Set<NSManagedObject> ?? []
+}
+
+@MainActor
+struct PhotoImporterTests {
+    @Test func importingDuplicatesGivesOneRowPerURL() async throws {
+        // Given an album and an importer
+        let container = try makeContainer()
+        let album = try makeAlbum(in: container.viewContext)
+        let importer = PhotoImporter(container: container, downloader: FakeDownloader())
+
+        // When 20 URLs arrive, 5 of them twice
+        let ids = try await importer.importPhotos(urls, into: album.objectID)
+
+        // Then there is one row per URL, and every returned ID points at one of them
+        let count = try container.viewContext.count(for: NSFetchRequest(entityName: "Photo"))
+        #expect(count == 15)
+        #expect(ids.count == 20)
+        #expect(Set(ids).count == 15)
+        for id in ids {
+            #expect(!id.isTemporaryID)
+            #expect(throws: Never.self) { try container.viewContext.existingObject(with: id) }
+        }
+    }
+
+    @Test func screenSeesImportedPhotosWithoutRefetching() async throws {
+        // Given an album the screen already holds
+        let container = try makeContainer()
+        let album = try makeAlbum(in: container.viewContext)
+        let importer = PhotoImporter(container: container, downloader: FakeDownloader())
+
+        // When the import saves on the background context
+        _ = try await importer.importPhotos(urls, into: album.objectID)
+        await container.viewContext.perform {}    // let merges already queued on main run first
+
+        // Then the screen's own album object has the photos
+        #expect(photos(of: album).count == 15)
+    }
+
+    @Test func markAllSeenReachesTheScreen() async throws {
+        // Given imported photos the screen has already read as unseen
+        let container = try makeContainer()
+        let album = try makeAlbum(in: container.viewContext)
+        let importer = PhotoImporter(container: container, downloader: FakeDownloader())
+        _ = try await importer.importPhotos(urls, into: album.objectID)
+        await container.viewContext.perform {}
+        #expect(photos(of: album).allSatisfy { $0.value(forKey: "isSeen") as? Bool == false })
+
+        // When the batch update runs
+        try await importer.markAllSeen()
+
+        // Then the same in-memory objects now say "seen"
+        #expect(photos(of: album).count == 15)
+        #expect(photos(of: album).allSatisfy { $0.value(forKey: "isSeen") as? Bool == true })
+    }
+
+    @Test func failedDownloadThrowsAndSavesNothingForThatURL() async throws {
+        let container = try makeContainer()
+        let album = try makeAlbum(in: container.viewContext)
+        let broken = urls[3]
+        let importer = PhotoImporter(container: container, downloader: FakeDownloader(failing: broken))
+
+        await #expect(throws: URLError(.badServerResponse)) {
+            try await importer.importPhotos(urls, into: album.objectID)
+        }
+
+        let request = NSFetchRequest<NSManagedObject>(entityName: "Photo")
+        request.predicate = NSPredicate(format: "remoteURL == %@", broken.absoluteString)
+        #expect(try container.viewContext.count(for: request) == 0)
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode) with `-com.apple.CoreData.ConcurrencyDebug 1`: 4 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"Why not `performBackgroundTask` for each download?"* — Each call makes a new context, so you
   are back to many writers saving at once and racing on "does it exist?". Fine for independent

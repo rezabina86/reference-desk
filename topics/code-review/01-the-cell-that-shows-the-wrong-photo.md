@@ -203,6 +203,188 @@ calls `viewWillDisappear` then `viewWillAppear` again, but never `viewDidDisappe
 reset, that creates a second timer and a second observer, and the first ones are never removed.
 :::
 
+::: Now write the tests
+> "Good. Now write me a few tests — one for the wrong photo, and one that proves the leak is gone."
+
+**What I'd test, and why**
+
+1. **A late reply for the old URL never shows.** Configure the cell for A, reuse it for B, then let
+   A's photo arrive. The cell must not show A. This is the reported bug, so it goes first.
+2. **Reuse clears the old photo** — no stale image while the new one loads.
+3. **A load that finishes after reuse is dropped** — the cell scrolled off before its photo came back.
+4. **The cell asks for pixels, not points** — at 3× scale a 100 × 80 row needs a 300 × 240 image.
+   That's the downsampling bug from the review.
+5. **The screen is freed after it closes.** A *weak reference* (one that doesn't keep the object
+   alive) becomes `nil` only if nothing else holds the screen — so the test fails if the timer or
+   observer still does.
+6. **A closed screen stops refreshing, and a cancelled swipe-back keeps one observer.** One app
+   wake-up must mean one refresh, not two.
+
+I wouldn't test `Timer` or `NotificationCenter` themselves, or the image loader's cache — that has
+its own tests.
+
+**The seam.** The cell takes an `ImageLoading` in `configure`, so the test passes a *fake*: a
+stand-in that records what it was asked and holds each load until the test says which photo
+arrives, and when. That's how the test makes A arrive *after* B was asked for — every run, no
+timing. The outlet is private, so the test connects it by key, the way a storyboard does. The
+chapter shows the controller fix as a fragment; for the test I put it in a minimal
+`FeedViewController` whose `refresh()` just counts calls (`refreshCount`), so the test can see how
+many refreshes one notification causes. UIKit's `beginAppearanceTransition` drives the appear and
+disappear callbacks by hand.
+
+```swift
+import Testing
+import UIKit
+
+// A fake loader: it records what it was asked for, and each load waits
+// until the test says which photo arrives, and when.
+@MainActor
+final class FakeImageLoader: ImageLoading {
+    private(set) var requestedPixels: [CGSize] = []
+    private var waiting: [URL: CheckedContinuation<UIImage, any Error>] = [:]
+
+    func image(for url: URL, fittingPixels size: CGSize) async throws -> UIImage {
+        requestedPixels.append(size)
+        return try await withCheckedThrowingContinuation { waiting[url] = $0 }
+    }
+
+    func finish(_ url: URL, with image: UIImage) {
+        waiting.removeValue(forKey: url)?.resume(returning: image)
+    }
+}
+
+extension PhotoCell {
+    // A storyboard connects outlets by key. The test does the same.
+    static func make() -> PhotoCell {
+        let cell = PhotoCell(style: .default, reuseIdentifier: "PhotoCell")
+        cell.setValue(UIImageView(), forKey: "photoView")
+        return cell
+    }
+
+    var shownImage: UIImage? { (value(forKey: "photoView") as? UIImageView)?.image }
+}
+
+/// Lets the main actor run what is queued, so a finished load can reach the cell. No clock.
+func settle() async {
+    for _ in 0..<10 { await Task.yield() }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+@MainActor
+struct PhotoCellTests {
+    let urlA = URL(string: "https://example.com/a.jpg")!
+    let urlB = URL(string: "https://example.com/b.jpg")!
+    let photoA = UIImage(systemName: "a.circle")!
+    let photoB = UIImage(systemName: "b.circle")!
+    let rowSize = CGSize(width: 100, height: 80)
+
+    @Test func lateReplyForTheOldURLNeverShows() async {
+        // Given a cell configured for A, then reused for B before A arrived
+        let loader = FakeImageLoader()
+        let cell = PhotoCell.make()
+        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
+        cell.configure(with: urlB, loader: loader, displaySize: rowSize)
+        await settle()                      // both loads are now in flight
+
+        // When A's photo arrives late
+        loader.finish(urlA, with: photoA)
+        await settle()
+
+        // Then the cell shows nothing yet, and B's photo once it arrives
+        #expect(cell.shownImage == nil)
+        loader.finish(urlB, with: photoB)
+        await settle()
+        #expect(cell.shownImage === photoB)
+    }
+
+    @Test func reuseClearsTheOldPhoto() async {
+        let loader = FakeImageLoader()
+        let cell = PhotoCell.make()
+        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
+        await settle()
+        loader.finish(urlA, with: photoA)
+        await settle()
+        #expect(cell.shownImage === photoA)
+
+        cell.prepareForReuse()
+
+        #expect(cell.shownImage == nil)
+    }
+
+    @Test func loadThatFinishesAfterReuseIsDropped() async {
+        let loader = FakeImageLoader()
+        let cell = PhotoCell.make()
+        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
+        await settle()
+
+        cell.prepareForReuse()              // scrolled off before the photo came back
+        loader.finish(urlA, with: photoA)
+        await settle()
+
+        #expect(cell.shownImage == nil)
+    }
+
+    @Test func asksForPixelsNotPoints() async {
+        let loader = FakeImageLoader()
+        let cell = PhotoCell.make()
+        cell.traitOverrides.displayScale = 3
+
+        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
+        await settle()
+
+        #expect(loader.requestedPixels == [CGSize(width: 300, height: 240)])
+        loader.finish(urlA, with: photoA)
+    }
+}
+
+extension UIViewController {
+    // UIKit's own way to drive the appear and disappear callbacks by hand.
+    func appear() { beginAppearanceTransition(true, animated: false); endAppearanceTransition() }
+    func disappear() { beginAppearanceTransition(false, animated: false); endAppearanceTransition() }
+}
+
+@MainActor
+struct FeedViewControllerTests {
+    @Test func screenIsReleasedAfterItCloses() {
+        weak var weakScreen: FeedViewController?
+        autoreleasepool {
+            let screen = FeedViewController()
+            screen.appear()                    // starts the timer and the observer
+            screen.disappear()
+            weakScreen = screen
+        }
+        #expect(weakScreen == nil)
+    }
+
+    @Test func closedScreenStopsRefreshing() {
+        let screen = FeedViewController()
+        screen.appear()
+        screen.disappear()
+
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+
+        #expect(screen.refreshCount == 0)
+    }
+
+    @Test func cancelledSwipeBackKeepsOneObserver() {
+        let screen = FeedViewController()
+        screen.appear()
+        // A swipe-back the user let go of: will-disappear, then will-appear again.
+        screen.beginAppearanceTransition(false, animated: true)
+        screen.beginAppearanceTransition(true, animated: true)
+        screen.endAppearanceTransition()
+
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+
+        #expect(screen.refreshCount == 1)
+        screen.disappear()
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 7 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"Where would you put the cache, and what's its limit?"* — In the loader, an `NSCache` with a
   `totalCostLimit` in bytes; it also evicts under memory pressure.

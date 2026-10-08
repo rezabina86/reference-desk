@@ -304,6 +304,204 @@ Why each piece:
 - **Injected loaders** — a test can feed fixed data and check the screen without a network.
 :::
 
+::: Now write the tests
+> "Good. Now write me a few tests. I know you can't unit-test 'it's smooth' — so what *can* you test?"
+
+**What I'd test, and why**
+
+1. **The screen loads once and shows every article, with one reload.** The old code reloaded the
+   table once per article; a *spy* table that counts `reloadData()` calls pins "once". It also
+   checks the favourite tick.
+2. **A failed load shows no rows and doesn't crash** — the old `try!` crashed on open.
+3. **Reusing a cell cancels its thumbnail download** — fast scrolling must not keep downloading
+   rows that are gone.
+4. **A thumbnail shows when it arrives** — the placeholder is replaced, the title kept.
+
+What a unit test can't prove is the point of the chapter: that the work happens *off* the main
+thread and the scroll stays smooth. That's measured with Instruments (Time Profiler, Hangs) on a
+real device, before and after. The tests here pin the behaviour that makes it possible.
+
+**The seam.** The screen takes `ArticlesLoading` and `ThumbnailLoading` in `init`, so the tests pass
+*fakes*: a loader with a fixed answer that counts its calls, and a thumbnail loader that holds each
+download until the test answers it and reports when one is cancelled. The screen keeps its tasks
+private, so the tests wait for what a user would see — the table reloaded, the image set — with a
+helper that gives the main actor a turn up to a fixed number of times. No clock, so it can't be
+flaky; and each suite has a one-minute `.timeLimit` as a backstop. One detail worth knowing: the
+spy table is swapped in *after* `loadViewIfNeeded()`. Assigning `tableView` first creates the view
+without calling `viewDidLoad`, and nothing would load.
+
+```swift
+import Testing
+import UIKit
+
+// Fakes: fixed answers, no network, no disk.
+actor FakeArticlesLoader: ArticlesLoading {
+    private(set) var loadCount = 0
+    private let result: Result<[Article], any Error>
+    private let saved: Set<String>
+
+    init(_ result: Result<[Article], any Error>, favourites: Set<String> = []) {
+        self.result = result
+        saved = favourites
+    }
+
+    func articles() async throws -> [Article] {
+        loadCount += 1
+        return try result.get()
+    }
+
+    func favourites() async -> Set<String> { saved }
+}
+
+struct NoThumbnails: ThumbnailLoading {
+    func thumbnail(for url: URL, fittingPixels size: CGSize) async throws -> UIImage? { nil }
+}
+
+// Each thumbnail waits until the test answers it, and reports when it is cancelled.
+actor GatedThumbnails: ThumbnailLoading {
+    nonisolated let requests: AsyncStream<URL>
+    nonisolated let cancellations: AsyncStream<URL>
+    private let requested: AsyncStream<URL>.Continuation
+    private let cancelled: AsyncStream<URL>.Continuation
+    private var waiting: [URL: CheckedContinuation<UIImage?, any Error>] = [:]
+
+    init() {
+        (requests, requested) = AsyncStream.makeStream()
+        (cancellations, cancelled) = AsyncStream.makeStream()
+    }
+
+    func thumbnail(for url: URL, fittingPixels size: CGSize) async throws -> UIImage? {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiting[url] = continuation
+                requested.yield(url)
+            }
+        } onCancel: {
+            Task { await self.cancel(url) }
+        }
+    }
+
+    func answer(_ url: URL, with image: UIImage) {
+        waiting.removeValue(forKey: url)?.resume(returning: image)
+    }
+
+    private func cancel(_ url: URL) {
+        cancelled.yield(url)
+        waiting.removeValue(forKey: url)?.resume(throwing: CancellationError())
+    }
+}
+
+final class TableSpy: UITableView {
+    private(set) var reloadCount = 0
+    override func reloadData() {
+        reloadCount += 1
+        super.reloadData()
+    }
+}
+
+extension AsyncStream {
+    func first() async -> Element? {
+        var iterator = makeAsyncIterator()
+        return await iterator.next()
+    }
+}
+
+/// The screen and the cell keep their tasks private, so the test waits for what the user would
+/// see instead: it gives the main actor a turn, up to a fixed number of times, until the condition
+/// holds. A count of turns, not a clock, so a slow machine can't make it flaky or hang.
+@MainActor
+func waitUntil(maxYields: Int = 1_000, _ condition: () async -> Bool) async {
+    for _ in 0..<maxYields {
+        if await condition() { return }
+        await Task.yield()
+    }
+}
+
+func makeArticle(_ id: String) -> Article {
+    Article(id: id, title: "Article \(id)", publishedAt: Date(timeIntervalSince1970: 0),
+            thumbnailURL: URL(string: "https://example.com/\(id).jpg")!)
+}
+
+struct LoadFailed: Error {}
+
+@Suite(.timeLimit(.minutes(1)))
+@MainActor
+struct ArticlesViewControllerTests {
+    @Test func loadsOnceAndShowsEveryArticle() async throws {
+        // Given three articles, one of them a favourite
+        let loader = FakeArticlesLoader(.success(["1", "2", "3"].map(makeArticle)), favourites: ["2"])
+        let screen = ArticlesViewController(loader: loader, thumbnails: NoThumbnails())
+
+        // When the screen loads (the spy table goes in after viewDidLoad, which starts the load;
+        // assigning tableView first would create the view and skip viewDidLoad)
+        screen.loadViewIfNeeded()
+        let table = TableSpy()
+        table.register(ArticleCell.self, forCellReuseIdentifier: ArticleCell.reuseID)
+        screen.tableView = table
+        await waitUntil { table.reloadCount > 0 }
+
+        // Then it asked once, reloaded once, and shows three rows with the favourite ticked
+        #expect(await loader.loadCount == 1)
+        #expect(table.reloadCount == 1)
+        #expect(screen.tableView(table, numberOfRowsInSection: 0) == 3)
+        let second = screen.tableView(table, cellForRowAt: IndexPath(row: 1, section: 0))
+        #expect(second.accessoryType == .checkmark)
+    }
+
+    @Test func failedLoadShowsNoRowsAndDoesNotCrash() async {
+        let loader = FakeArticlesLoader(.failure(LoadFailed()))
+        let screen = ArticlesViewController(loader: loader, thumbnails: NoThumbnails())
+
+        screen.loadViewIfNeeded()
+        let table = TableSpy()
+        screen.tableView = table
+        await waitUntil { await loader.loadCount == 1 }
+        await waitUntil(maxYields: 50) { false }   // let the failure finish landing
+
+        #expect(screen.tableView(table, numberOfRowsInSection: 0) == 0)
+        #expect(table.reloadCount == 0)
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+@MainActor
+struct ArticleCellTests {
+    @Test func reuseCancelsTheThumbnailDownload() async {
+        // Given a cell waiting for its thumbnail
+        let thumbnails = GatedThumbnails()
+        let cell = ArticleCell(style: .default, reuseIdentifier: ArticleCell.reuseID)
+        let article = makeArticle("1")
+        cell.configure(with: article, isFavourite: false, thumbnails: thumbnails)
+        _ = await thumbnails.requests.first()
+
+        // When the cell is reused
+        cell.prepareForReuse()
+
+        // Then the download is cancelled
+        #expect(await thumbnails.cancellations.first() == article.thumbnailURL)
+    }
+
+    @Test func thumbnailShowsWhenItArrives() async {
+        let thumbnails = GatedThumbnails()
+        let cell = ArticleCell(style: .default, reuseIdentifier: ArticleCell.reuseID)
+        let article = makeArticle("1")
+        let photo = UIImage(systemName: "star")!
+        cell.configure(with: article, isFavourite: false, thumbnails: thumbnails)
+        _ = await thumbnails.requests.first()
+
+        await thumbnails.answer(article.thumbnailURL, with: photo)
+        await waitUntil { (cell.contentConfiguration as? UIListContentConfiguration)?.image === photo }
+
+        let content = cell.contentConfiguration as? UIListContentConfiguration
+        #expect(content?.image === photo)
+        #expect(content?.text == "Article 1")
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"Why `@concurrent`? Isn't an `async` function already off the main thread?"* — It depends.
   Under the classic Swift 6 rules, a `nonisolated async` function runs on the background pool.

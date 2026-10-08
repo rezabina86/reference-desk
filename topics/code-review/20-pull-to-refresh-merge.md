@@ -207,6 +207,170 @@ Why each piece:
   load-more, and paging by cursor means a refresh can't shift the page's position.
 :::
 
+::: Now write the tests
+> "Good. Now show me the tests — for the merge, and for the race you found."
+
+What I'd test, and why:
+
+1. **The prompt's example.** `[A,B,C,D]` plus `[D,E,F]` gives `[D,E,F,A,B,C]`. Because the merge
+   is a pure function — same input, same output, no state — the interviewer's example becomes a
+   test as written.
+2. **An edited story appears once, with its new content.** The fresh D has 99 likes; the result
+   has one D, on top, with 99. This is the duplicate bug from the review.
+3. **Duplicates inside the fresh page are dropped.** Servers send overlapping pages.
+4. **Empty inputs.** First load (nothing on screen) and "nothing new" (empty page) both leave the
+   other list as it was.
+5. **A refresh drops an in-flight load-more.** The old page arrives after the refresh and must not
+   land. That's the page-in-the-middle bug.
+6. **Load-more still works after that refresh.** Cancelling must not leave load-more stuck, the
+   way `isLoadingMore` could in the original.
+
+I wouldn't time the merge in a unit test. Timing on a shared CI machine is noisy, so it's a
+benchmark to run by hand, not a pass/fail check.
+
+**The seam.** The merge needs none: it's a pure function. The view model takes its `FeedAPI`
+through `init`, so the tests pass a *fake* — a small stand-in whose `page(after:)` records the
+cursor and holds the request open until the test hands over the page. That lets the test refresh
+*while* a page is in flight, every time, with no sleeps.
+
+```swift
+import Testing
+
+func story(_ id: String, likes: Int = 0) -> Story {
+    Story(id: id, title: "Story \(id)", likes: likes)
+}
+
+struct FeedMergeTests {
+
+    @Test
+    func freshStoriesGoOnTopWithoutDuplicates() {
+        // Given A, B, C, D on screen and D, E, F from the server (the prompt's example)
+        let onScreen = ["A", "B", "C", "D"].map { story($0) }
+        let fetched = ["D", "E", "F"].map { story($0) }
+
+        // When they are merged
+        let merged = FeedMerge.merging(top: fetched, bottom: onScreen)
+
+        // Then the screen shows D, E, F, A, B, C
+        #expect(merged.map(\.id) == ["D", "E", "F", "A", "B", "C"])
+    }
+
+    @Test
+    func anEditedStoryAppearsOnceWithItsNewContent() {
+        // Given D on screen with 0 likes, and the server's D with 99
+        let onScreen = [story("A"), story("D", likes: 0)]
+        let fetched = [story("D", likes: 99)]
+
+        // When they are merged
+        let merged = FeedMerge.merging(top: fetched, bottom: onScreen)
+
+        // Then D shows once, on top, with the new like count
+        #expect(merged == [story("D", likes: 99), story("A")])
+    }
+
+    @Test
+    func duplicatesInsideTheFreshPageAreDropped() {
+        // Given a server page that repeats E
+        let merged = FeedMerge.merging(top: ["E", "D", "E"].map { story($0) },
+                                       bottom: ["A", "D"].map { story($0) })
+
+        // Then each story appears once, first copy kept
+        #expect(merged.map(\.id) == ["E", "D", "A"])
+    }
+
+    @Test
+    func emptyInputs() {
+        let some = ["A", "B"].map { story($0) }
+        #expect(FeedMerge.merging(top: [Story](), bottom: []) == [])
+        #expect(FeedMerge.merging(top: some, bottom: []) == some)   // first load
+        #expect(FeedMerge.merging(top: [], bottom: some) == some)   // nothing new
+    }
+}
+
+/// A fake feed server: `latest()` answers at once with whatever the test set;
+/// `page(after:)` records the cursor and waits until the test hands over the page.
+@MainActor
+final class ControlledFeedAPI: FeedAPI {
+    var latestStories: [Story] = []
+    private(set) var pageCursors: [String] = []
+    private var pendingPage: CheckedContinuation<[Story], Error>?
+
+    func latest() async throws -> [Story] { latestStories }
+
+    func page(after cursor: Story.ID) async throws -> [Story] {
+        pageCursors.append(cursor)
+        return try await withCheckedThrowingContinuation { pendingPage = $0 }
+    }
+
+    func deliverPage(_ stories: [Story]) {
+        pendingPage?.resume(returning: stories)
+        pendingPage = nil
+    }
+}
+
+/// Gives the view model's task a turn on the main actor, up to a fixed number of times.
+@MainActor
+func settle(until done: () -> Bool = { false }, yields: Int = 100) async {
+    for _ in 0..<yields where !done() { await Task.yield() }
+}
+
+@MainActor
+struct FeedViewModelTests {
+
+    @Test
+    func refreshDropsAnInFlightLoadMore() async {
+        // Given A, B, C, D on screen and a slow load-more waiting for its page
+        let api = ControlledFeedAPI()
+        let viewModel = FeedViewModel(api: api)
+        api.latestStories = ["A", "B", "C", "D"].map { story($0) }
+        await viewModel.refresh()
+        viewModel.loadMore()
+        await settle(until: { !api.pageCursors.isEmpty })
+
+        // When the user refreshes, and then the old page arrives
+        api.latestStories = [story("D", likes: 99), story("E"), story("F")]
+        await viewModel.refresh()
+        api.deliverPage([story("X"), story("Y")])
+        await settle()
+
+        // Then the stale page never lands
+        #expect(viewModel.stories.map(\.id) == ["D", "E", "F", "A", "B", "C"])
+        #expect(viewModel.stories.first?.likes == 99)
+    }
+
+    @Test
+    func loadMoreAfterARefreshAppends() async {
+        // Given a refresh that replaced an in-flight load-more
+        let api = ControlledFeedAPI()
+        let viewModel = FeedViewModel(api: api)
+        api.latestStories = ["A", "B"].map { story($0) }
+        await viewModel.refresh()
+        viewModel.loadMore()
+        await settle(until: { api.pageCursors.count == 1 })
+        api.latestStories = ["C"].map { story($0) }
+        await viewModel.refresh()
+        api.deliverPage([story("stale")])
+        await settle()
+
+        // When the user scrolls to the bottom again
+        viewModel.loadMore()
+        await settle(until: { api.pageCursors.count == 2 })
+        api.deliverPage([story("X"), story("Y")])
+        await settle(until: { viewModel.stories.count == 5 })
+
+        // Then the page is asked for after the last story on screen (B) and appended at the end
+        #expect(api.pageCursors == ["B", "B"])
+        #expect(viewModel.stories.map(\.id) == ["C", "A", "B", "X", "Y"])
+    }
+}
+```
+
+`settle` gives the view model's task a few turns on the main actor after the fake answers. It's
+bounded by a count, not a time, so a slow machine can't make it flaky.
+
+Ran with Swift 6.4: 6 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"How would you improve the efficiency?"* (Meta's follow-up) — Three levels. **The algorithm:**
   the set of ids above takes it from O(n × m) to O(n + m). **Memory and work:** the fresh page is

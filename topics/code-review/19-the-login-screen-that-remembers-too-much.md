@@ -414,6 +414,189 @@ Why each piece:
 - **`logout()` clears memory and keychain** — `authorized(_:)` adds nothing after logout.
 :::
 
+::: Now write the tests
+> "Good. Now write me the tests that would have stopped this PR — the security ones first."
+
+**What I'd test, and why**
+
+1. **A 401 and a 404 show the same message** — the reported leak: the screen must not tell anyone
+   which emails have an account.
+2. **A 429 locks the button until `Retry-After` has passed** — checked at 59 seconds (still
+   locked) and 61 seconds (open again).
+3. **A double tap sends one request** — two `login()` calls at once, one request on the wire.
+4. **"Remember me" stores only the token, and the password is cleared** — and without "remember
+   me" nothing is written at all.
+5. **The request is a `POST` with a JSON body over HTTPS, with nothing in the URL** — the password
+   must never appear in a URL, where proxies and logs keep it.
+6. **Logout clears memory and the keychain** — and requests stop getting an `Authorization`
+   header.
+
+I wouldn't unit-test the real `KeychainStore`. It is a thin wrapper over Apple's `SecItem` calls,
+and the real keychain needs a signed app on a device or simulator. I'd cover it with one test in
+the app target, or check it by hand, as here. The `https` `precondition` isn't tested either: a
+failed precondition stops the whole test run, so there is nothing to assert after it.
+
+**The seam.** Three of them, all through `init`: `HTTPClient` (a *fake* server that replays canned
+replies and records requests), `KeychainStoreType` (an in-memory dictionary instead of the real
+keychain), and `now` (a clock the test moves by hand, so "61 seconds later" takes no time at all).
+
+```swift
+import Testing
+import Foundation
+import Synchronization
+
+/// A fake server: plays back canned replies in order and records every request.
+actor FakeHTTPClient: HTTPClient {
+    struct Reply: Sendable {
+        var status: Int
+        var body = ""
+        var headers: [String: String] = [:]
+    }
+
+    private var replies: [Reply]
+    private(set) var requests: [URLRequest] = []
+
+    init(_ replies: Reply...) { self.replies = replies }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests.append(request)
+        guard !replies.isEmpty else { throw URLError(.notConnectedToInternet) }
+        let reply = replies.removeFirst()
+        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status,
+                                       httpVersion: nil, headerFields: reply.headers)!
+        return (Data(reply.body.utf8), response)
+    }
+}
+
+/// The real keychain needs a signed app on a device or simulator, and it is Apple's code,
+/// not ours. Behind KeychainStoreType, a dictionary stands in for it.
+final class InMemoryKeychain: KeychainStoreType {
+    private let items = Mutex<[String: Data]>([:])
+
+    var contents: [String: Data] { items.withLock { $0 } }
+
+    func set(_ data: Data, for account: String) throws { items.withLock { $0[account] = data } }
+    func data(for account: String) throws -> Data? { items.withLock { $0[account] } }
+    func remove(_ account: String) throws { items.withLock { _ = $0.removeValue(forKey: account) } }
+}
+
+/// A clock the test moves by hand.
+final class TestClock {
+    var now = Date(timeIntervalSince1970: 0)
+}
+
+@MainActor
+struct LoginViewModelTests {
+    let keychain = InMemoryKeychain()
+    let clock = TestClock()
+
+    func makeViewModel(_ server: FakeHTTPClient) -> (LoginViewModel, SessionStore) {
+        let session = SessionStore(keychain: keychain)
+        let auth = AuthService(baseURL: URL(string: "https://api.example.com")!, http: server)
+        let viewModel = LoginViewModel(auth: auth, session: session, now: { [clock] in clock.now })
+        viewModel.email = "ana@example.com"
+        viewModel.password = "p@ss+w0rd&x"
+        return (viewModel, session)
+    }
+
+    @Test func unknownEmailAndWrongPasswordLookTheSame() async {
+        let server = FakeHTTPClient(.init(status: 404), .init(status: 401))
+        let (viewModel, _) = makeViewModel(server)
+
+        await viewModel.login()
+        let unknownEmail = viewModel.state
+        await viewModel.login()
+        let wrongPassword = viewModel.state
+
+        #expect(unknownEmail == .failed("Email or password is incorrect."))
+        #expect(wrongPassword == unknownEmail)
+    }
+
+    @Test func tooManyAttemptsLocksOutUntilRetryAfterPasses() async {
+        let server = FakeHTTPClient(.init(status: 429, headers: ["Retry-After": "60"]))
+        let (viewModel, _) = makeViewModel(server)
+
+        await viewModel.login()
+
+        #expect(viewModel.state == .lockedOut(until: Date(timeIntervalSince1970: 60)))
+        #expect(!viewModel.canSubmit)
+        clock.now = Date(timeIntervalSince1970: 59)
+        #expect(!viewModel.canSubmit)
+        clock.now = Date(timeIntervalSince1970: 61)
+        #expect(viewModel.canSubmit)
+    }
+
+    @Test func doubleTapSendsOneRequest() async {
+        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
+        let (viewModel, _) = makeViewModel(server)
+
+        async let firstTap: Void = viewModel.login()
+        async let secondTap: Void = viewModel.login()
+        _ = await (firstTap, secondTap)
+
+        #expect(await server.requests.count == 1)
+        #expect(viewModel.state == .loggedIn)
+    }
+
+    @Test func rememberMeStoresOnlyTheTokenAndClearsThePassword() async {
+        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
+        let (viewModel, session) = makeViewModel(server)
+        viewModel.rememberMe = true
+
+        await viewModel.login()
+
+        #expect(viewModel.state == .loggedIn)
+        #expect(viewModel.password.isEmpty)
+        #expect(session.token == "t-123")
+        #expect(keychain.contents == ["session-token": Data("t-123".utf8)])
+    }
+
+    @Test func withoutRememberMeTheTokenStaysInMemory() async {
+        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
+        let (viewModel, session) = makeViewModel(server)
+
+        await viewModel.login()
+
+        #expect(session.token == "t-123")
+        #expect(keychain.contents.isEmpty)
+    }
+
+    @Test func credentialsGoInAJSONPostBodyOverHTTPS() async throws {
+        let server = FakeHTTPClient(.init(status: 401))
+        let (viewModel, _) = makeViewModel(server)
+
+        await viewModel.login()
+
+        let request = try #require(await server.requests.first)
+        let url = try #require(request.url)
+        #expect(url.absoluteString == "https://api.example.com/v1/login")
+        #expect(url.query == nil)
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        let body = try JSONDecoder().decode([String: String].self, from: try #require(request.httpBody))
+        #expect(body == ["email": "ana@example.com", "password": "p@ss+w0rd&x"])
+    }
+
+    @Test func logoutClearsMemoryAndKeychain() async {
+        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
+        let (viewModel, session) = makeViewModel(server)
+        viewModel.rememberMe = true
+        await viewModel.login()
+
+        viewModel.logout()
+
+        #expect(viewModel.state == .idle)
+        #expect(session.token == nil)
+        #expect(keychain.contents.isEmpty)
+        let request = session.authorized(URLRequest(url: URL(string: "https://api.example.com/me")!))
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+}
+```
+
+Ran with Swift 6.4: 7 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"How would two of our apps share the login?"* — The PhonePe question. Put both apps in the same
   *keychain access group* (the Keychain Sharing capability, same team ID) and set

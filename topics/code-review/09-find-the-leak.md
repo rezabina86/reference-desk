@@ -330,6 +330,97 @@ Why each piece:
   object, call it after the screen is gone, and `unowned` crashes.
 :::
 
+::: Now write the tests
+> "Good. How do I know it doesn't come back next sprint? Write me the tests."
+
+**What I'd test, and why**
+
+1. **The screen is freed after it loads.** `loadViewIfNeeded()` runs `viewDidLoad`, so every
+   closure is wired; then a *weak reference* — one that doesn't keep the object alive — must be
+   `nil`. Any one of the five loops makes it fail.
+2. **The view model is freed with the screen.** This catches loop 5 (child → parent), which leaks
+   the view models even when the screen itself is freed.
+3. **The child doesn't keep its parent alive** — even while something else still holds the child,
+   and calling it afterwards is safe.
+4. **The view model doesn't own its delegate** — the `weak var delegate` fix, pinned.
+
+Not unit-tested: the alert's Retry closure. Presenting an alert needs a real window on screen, so
+its `[weak self]` is checked in review and with the Memory Graph, not here.
+
+**The seam.** Leak tests need no fakes — just a weak reference and an `autoreleasepool`, which makes
+UIKit's deferred releases happen before the check (otherwise a screen that doesn't leak can still be
+alive at the `#expect`). The view model is private, so the test reads it with `Mirror`, Swift's
+built-in way to look at an object's stored properties, rather than widening the screen's API for a
+test. These replace the single test shown above with a small suite.
+
+```swift
+import Testing
+import UIKit
+
+extension ProfileViewController {
+    // The view model is private. Mirror lets the test reach it without changing the screen.
+    var viewModelForTest: ProfileViewModel? { Mirror(reflecting: self).descendant("viewModel") as? ProfileViewModel }
+}
+
+@MainActor
+final class DelegateSpy: ProfileViewModelDelegate {
+    func profileDidLoad(name: String) {}
+}
+
+@MainActor
+struct ProfileLeakTests {
+    @Test func screenIsReleasedAfterItLoads() {
+        weak var weakScreen: ProfileViewController?
+        autoreleasepool {
+            let screen = ProfileViewController()
+            screen.loadViewIfNeeded()          // runs viewDidLoad, so every closure is wired
+            weakScreen = screen
+        }
+        #expect(weakScreen == nil)
+    }
+
+    @Test func viewModelIsReleasedWithTheScreen() {
+        weak var weakViewModel: ProfileViewModel?
+        autoreleasepool {
+            let screen = ProfileViewController()
+            screen.loadViewIfNeeded()
+            weakViewModel = screen.viewModelForTest
+        }
+        #expect(weakViewModel == nil)
+    }
+
+    @Test func childDoesNotKeepItsParentAlive() {
+        // Given someone still holds the child, say an image download
+        var child: AvatarViewModel?
+        weak var weakParent: ProfileViewModel?
+        autoreleasepool {
+            let parent = ProfileViewModel()
+            weakParent = parent
+            child = parent.avatar
+        }
+
+        // Then the parent is freed anyway, and the child copes with that
+        #expect(weakParent == nil)
+        child?.downloadFailed()
+        #expect(child != nil)
+    }
+
+    @Test func viewModelDoesNotOwnItsDelegate() {
+        let viewModel = ProfileViewModel()
+        weak var weakDelegate: DelegateSpy?
+        autoreleasepool {
+            let delegate = DelegateSpy()
+            viewModel.delegate = delegate
+            weakDelegate = delegate
+        }
+        #expect(weakDelegate == nil)
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"How do you find a leak like this in a real app?"* — Open and close the screen a few times, then
   press Debug Memory Graph in Xcode. Leaked objects get a purple warning badge; select one and the

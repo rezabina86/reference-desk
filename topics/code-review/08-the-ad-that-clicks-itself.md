@@ -273,6 +273,148 @@ Why each piece:
 - **Injected `tracker` and `openURL`.** A test can tap and assert exactly one `adClicked`.
 :::
 
+::: Now write the tests
+> "Good. Now write me the tests that would have caught the inflated click numbers."
+
+**What I'd test, and why**
+
+1. **One tap after three configures clicks only the last ad.** The cell is reused for ads a, b and
+   c; one tap opens c, once. This is the pile-up bug, so it goes first.
+2. **A cell waiting for reuse opens nothing** — `prepareForReuse` really clears the handler.
+3. **An impression is logged once per ad per session** — scrolling past three times counts once; a
+   refresh starts a new session.
+4. **A tap after a refresh opens the ad where it is now** — the ad moved from row 1 to row 0; the
+   click reports position 0 and opens the right URL. That's the stale-`indexPath` bug.
+5. **A tap on an ad the refresh removed does nothing** — no click, no open, and no out-of-range crash.
+
+I wouldn't test the layout or UIKit's touch handling; `sendActions(for: .touchUpInside)` stands in
+for the finger.
+
+**The seam.** The screen takes an `AdTracking` and an `openURL` closure in `init`, so the test passes
+*fakes*: a tracker that writes down every event, and a closure that records which URL it was asked
+to open. Nothing reaches a real ad SDK or Safari. The button is private, so the test finds it with
+`Mirror` — Swift's built-in way to look at an object's stored properties — instead of making it
+public just for tests. (With the fix in a separate module you'd mark it `internal` and use
+`@testable import`.) `Ad`, `Post` and `FeedItem` are small stand-ins for the app's models.
+
+```swift
+import Testing
+import UIKit
+
+// A fake tracker: it only writes down what it was told.
+@MainActor
+final class FakeAdTracker: AdTracking {
+    enum Event: Equatable {
+        case impression(Ad.ID, position: Int)
+        case click(Ad.ID, position: Int)
+    }
+    private(set) var events: [Event] = []
+
+    func adImpression(_ ad: Ad, position: Int) { events.append(.impression(ad.id, position: position)) }
+    func adClicked(_ ad: Ad, position: Int) { events.append(.click(ad.id, position: position)) }
+}
+
+extension AdCell {
+    // The button is private. Mirror lets the test reach it without changing the cell.
+    var ctaButtonForTest: UIButton? { Mirror(reflecting: self).descendant("ctaButton") as? UIButton }
+}
+
+func makeAd(_ id: String) -> Ad {
+    Ad(id: id, headline: "Ad \(id)", callToAction: "Open", url: URL(string: "https://ads.example.com/\(id)")!)
+}
+
+@MainActor
+struct AdCellTests {
+    @Test func oneTapAfterThreeConfiguresClicksOnlyTheLastAd() throws {
+        // Given one cell reused for three ads
+        let cell = AdCell(style: .default, reuseIdentifier: AdCell.reuseID)
+        var opened: [Ad.ID] = []
+        for id in ["a", "b", "c"] {
+            cell.configure(with: makeAd(id)) { opened.append(id) }
+        }
+
+        // When the user taps the button once
+        try #require(cell.ctaButtonForTest).sendActions(for: .touchUpInside)
+
+        // Then exactly one ad opens: the one on screen
+        #expect(opened == ["c"])
+    }
+
+    @Test func cellWaitingForReuseOpensNothing() throws {
+        let cell = AdCell(style: .default, reuseIdentifier: AdCell.reuseID)
+        var opened: [Ad.ID] = []
+        cell.configure(with: makeAd("a")) { opened.append("a") }
+
+        cell.prepareForReuse()
+        try #require(cell.ctaButtonForTest).sendActions(for: .touchUpInside)
+
+        #expect(opened.isEmpty)
+    }
+}
+
+@MainActor
+struct FeedViewControllerTests {
+    let tracker = FakeAdTracker()
+    let post = FeedItem.post(Post(title: "Hello"))
+    let adA = makeAd("a")
+
+    func makeFeed(opening opened: @escaping (URL) -> Void = { _ in }) -> FeedViewController {
+        let feed = FeedViewController(tracker: tracker, openURL: opened)
+        feed.loadViewIfNeeded()                // registers the cells
+        return feed
+    }
+
+    @Test func impressionIsLoggedOncePerAdPerSession() {
+        let feed = makeFeed()
+        feed.didRefresh(with: [post, .ad(adA)])
+        let row1 = IndexPath(row: 1, section: 0)
+
+        // The ad scrolls on screen three times
+        for _ in 0..<3 {
+            feed.tableView(feed.tableView, willDisplay: UITableViewCell(), forRowAt: row1)
+        }
+        #expect(tracker.events == [.impression("a", position: 1)])
+
+        // A refresh starts a new session, so the ad counts once more
+        feed.didRefresh(with: [post, .ad(adA)])
+        feed.tableView(feed.tableView, willDisplay: UITableViewCell(), forRowAt: row1)
+        #expect(tracker.events == [.impression("a", position: 1), .impression("a", position: 1)])
+    }
+
+    @Test func tapAfterRefreshOpensTheAdWhereItIsNow() throws {
+        // Given an ad cell configured while the ad was in row 1
+        var opened: [URL] = []
+        let feed = makeFeed { opened.append($0) }
+        feed.didRefresh(with: [post, .ad(adA)])
+        let cell = try #require(feed.tableView(feed.tableView, cellForRowAt: IndexPath(row: 1, section: 0)) as? AdCell)
+
+        // When a refresh moves the ad to row 0, and then the user taps
+        feed.didRefresh(with: [.ad(adA), post])
+        try #require(cell.ctaButtonForTest).sendActions(for: .touchUpInside)
+
+        // Then the same ad opens, with its current position
+        #expect(tracker.events == [.click("a", position: 0)])
+        #expect(opened == [adA.url])
+    }
+
+    @Test func tapOnAnAdThatARefreshRemovedDoesNothing() throws {
+        var opened: [URL] = []
+        let feed = makeFeed { opened.append($0) }
+        feed.didRefresh(with: [post, .ad(adA)])
+        let cell = try #require(feed.tableView(feed.tableView, cellForRowAt: IndexPath(row: 1, section: 0)) as? AdCell)
+
+        feed.didRefresh(with: [post])          // the ad is gone, and the feed is shorter
+        try #require(cell.ctaButtonForTest).sendActions(for: .touchUpInside)
+
+        #expect(tracker.events.isEmpty)        // and no out-of-range crash
+        #expect(opened.isEmpty)
+    }
+}
+```
+
+Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 5 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"How would you have found this without reading the code?"* — Put a breakpoint in `openAd` and
   tap once. If it's hit three times, look at the backtrace: three separate closures. Or log

@@ -452,6 +452,196 @@ Why each piece:
   harness above is the test the original couldn't have.
 :::
 
+::: Now write the tests
+> "Good. You have ten minutes left — write me the tests you'd ask for on each PR before you
+> approve it."
+
+**What I'd test, and why**
+
+1. **PR 1: ten chunks of a tenth each complete** — the reported bug. Adding `0.1` ten times never
+   equalled `1.0`, so the upload never finished.
+2. **PR 1: a retried chunk is counted once** — a chunk that reports twice must not push progress
+   past the truth. One more test checks the fraction follows bytes, not chunk count.
+3. **PR 2: a hundred concurrent requests for one URL render once** — the actor and its `inFlight`
+   table are the fix; this proves duplicate requests join the first render.
+4. **PR 2: a failed render (`nil`) is not cached** — otherwise one bad read hides the thumbnail
+   forever.
+5. **PR 3: cached orders show first, then fresh ones; offline with a cache keeps them; offline
+   with nothing shows the error** — the three states the screen promises.
+6. **PR 3: the screen view is tracked once, with no email** — the privacy fix.
+
+I ran all of this with SwiftPM, without UIKit. I left out `DocumentCell` and
+`OrderHistoryViewController`: they are thin, they only show what the cache and the view model give
+them, and they aren't unit-tested. I'd check those on screen.
+
+**The seam.** PR 1 needs none — it's a plain value type. PR 2's cache is generic over the image
+type and takes its `render` function in `init`, so the test uses a `FakeImage` and a renderer that
+counts its calls; no `UIImage` needed. PR 3's view model takes `OrderRepository` and
+`AnalyticsTracking` protocols, so a *fake* repository returns cached or fresh orders or throws, and
+a fake tracker records events.
+
+```swift
+import Testing
+import Foundation
+import Synchronization
+
+// MARK: - PR 1
+
+struct UploadProgressTests {
+    @Test func tenChunksOfATenthEachComplete() {
+        // The bug: 0.1 added ten times is 0.9999999999999999, so `== 1.0` never fired.
+        var progress = UploadProgress(chunkByteCounts: Array(repeating: 100, count: 10))
+
+        for index in 0..<10 { progress.markChunkUploaded(at: index) }
+
+        #expect(progress.isComplete)
+        #expect(progress.fractionCompleted == 1.0)
+    }
+
+    @Test func retriedChunkIsCountedOnce() {
+        var progress = UploadProgress(chunkByteCounts: [100, 100, 100, 100])
+
+        progress.markChunkUploaded(at: 0)
+        progress.markChunkUploaded(at: 1)
+        progress.markChunkUploaded(at: 2)
+        progress.markChunkUploaded(at: 2)   // the retry reports again
+
+        #expect(!progress.isComplete)
+        #expect(progress.fractionCompleted == 0.75)
+    }
+
+    @Test func fractionFollowsBytesNotChunks() {
+        var progress = UploadProgress(chunkByteCounts: [300, 100])
+
+        progress.markChunkUploaded(at: 0)
+
+        #expect(progress.fractionCompleted == 0.75)
+    }
+}
+
+// MARK: - PR 2
+
+/// Stands in for UIImage: the cache is generic, so the test needs no UIKit.
+struct FakeImage: Sendable, Equatable {
+    let url: URL
+}
+
+/// Counts renders and can be told to fail (return nil) for the first few.
+final class FakeRenderer: Sendable {
+    private let state: Mutex<(renders: Int, failuresLeft: Int)>
+
+    init(failFirst failures: Int = 0) { state = Mutex((0, failures)) }
+
+    var renders: Int { state.withLock { $0.renders } }
+
+    func render(_ url: URL) async -> FakeImage? {
+        let fails = state.withLock { state -> Bool in
+            state.renders += 1
+            guard state.failuresLeft > 0 else { return false }
+            state.failuresLeft -= 1
+            return true
+        }
+        await Task.yield()   // a real render suspends; give other callers a chance to pile up
+        return fails ? nil : FakeImage(url: url)
+    }
+}
+
+struct ThumbnailCacheTests {
+    let url = URL(fileURLWithPath: "/docs/invoice.pdf")
+
+    @Test func concurrentRequestsForOneURLRenderOnce() async {
+        let renderer = FakeRenderer()
+        let cache = ThumbnailCache<FakeImage> { await renderer.render($0) }
+
+        let images = await withTaskGroup(of: FakeImage?.self) { group in
+            for _ in 0..<100 { group.addTask { [url] in await cache.thumbnail(for: url) } }
+            return await group.reduce(into: []) { $0.append($1) }
+        }
+
+        #expect(images.count == 100)
+        #expect(images.allSatisfy { $0 == FakeImage(url: url) })
+        #expect(renderer.renders == 1)
+    }
+
+    @Test func failedRenderIsNotCached() async {
+        let renderer = FakeRenderer(failFirst: 1)
+        let cache = ThumbnailCache<FakeImage> { await renderer.render($0) }
+
+        let first = await cache.thumbnail(for: url)
+        let second = await cache.thumbnail(for: url)
+
+        #expect(first == nil)
+        #expect(second == FakeImage(url: url))
+        #expect(renderer.renders == 2)
+    }
+}
+
+// MARK: - PR 3
+
+/// A fake repository: each call returns what the test set, or throws.
+struct FakeOrderRepository: OrderRepository {
+    var cached: Result<[Order], URLError> = .success([])
+    var fresh: Result<[Order], URLError> = .success([])
+
+    func cachedOrders() async throws -> [Order] { try cached.get() }
+    func refreshOrders() async throws -> [Order] { try fresh.get() }
+}
+
+final class FakeAnalytics: AnalyticsTracking {
+    private let recorded = Mutex<[AnalyticsEvent]>([])
+
+    var events: [AnalyticsEvent] { recorded.withLock { $0 } }
+
+    func track(_ event: AnalyticsEvent) { recorded.withLock { $0.append(event) } }
+}
+
+@MainActor
+struct OrderHistoryViewModelTests {
+    let old = Order(id: "o-1", total: 10)
+    let new = Order(id: "o-2", total: 25)
+    let analytics = FakeAnalytics()
+
+    /// Records every state the view model publishes, in order.
+    func states(after repository: FakeOrderRepository) async -> [OrderHistoryViewModel.State] {
+        let viewModel = OrderHistoryViewModel(repository: repository, analytics: analytics)
+        var published: [OrderHistoryViewModel.State] = []
+        viewModel.onChange = { published.append($0) }
+        await viewModel.load()
+        return published
+    }
+
+    @Test func showsCachedOrdersThenFreshOnes() async {
+        let repository = FakeOrderRepository(cached: .success([old]), fresh: .success([old, new]))
+
+        #expect(await states(after: repository) == [.loaded([old]), .loaded([old, new])])
+    }
+
+    @Test func offlineWithACacheKeepsTheCachedOrders() async {
+        let repository = FakeOrderRepository(cached: .success([old]),
+                                             fresh: .failure(URLError(.notConnectedToInternet)))
+
+        #expect(await states(after: repository) == [.loaded([old])])
+    }
+
+    @Test func offlineWithNothingCachedFails() async {
+        let repository = FakeOrderRepository(cached: .success([]),
+                                             fresh: .failure(URLError(.notConnectedToInternet)))
+
+        #expect(await states(after: repository) == [.failed("Couldn't load your orders.")])
+    }
+
+    @Test func screenViewIsTrackedOnceWithNoPersonalData() async {
+        _ = await states(after: FakeOrderRepository(fresh: .success([new])))
+
+        // The event is an enum case with no payload, so an email has nowhere to go.
+        #expect(analytics.events == [.orderHistoryViewed])
+    }
+}
+```
+
+Ran with Swift 6.4: 9 tests, all passed.
+:::
+
 ::: What I'd ask next
 - *"The author pushes back: 'the refactor is out of scope, it works'. What do you do?"* — Separate
   the must-fix from the nice-to-have. The wrong-queue Core Data write and the email in the URL block

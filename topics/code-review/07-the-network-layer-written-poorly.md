@@ -273,10 +273,11 @@ final class ProfileViewModel {
 
     init(api: APIClient) { self.api = api }
 
-    func load(userID: Int) {
+    @discardableResult
+    func load(userID: Int) -> Task<Void, Never> {
         loadTask?.cancel()
         state = .loading
-        loadTask = Task {
+        let task = Task {
             do throws(APIError) {
                 let user = try await api.user(id: userID)
                 state = .loaded(user.name)
@@ -286,6 +287,8 @@ final class ProfileViewModel {
                 state = .failed(Self.message(for: error))
             }
         }
+        loadTask = task
+        return task   // handed back so a caller (or a test) can await it
     }
 
     func cancel() { loadTask?.cancel() }
@@ -340,7 +343,156 @@ Why each piece:
 - **One decoder, built in `init`** — one configuration for every endpoint, and immutable, so sharing
   it across threads is safe.
 - **`@MainActor` view model with a stored `Task`** — UI state is on main by construction, a new load
-  cancels the old one, and a cancelled request writes nothing.
+  cancels the old one, and a cancelled request writes nothing. `load` also returns the task, so a
+  test can `await` it instead of guessing how long to wait.
+:::
+
+::: Now write the tests
+> "Good. Now write me the tests you'd want before this merges — one for each of the three user
+> reports, and the retry."
+
+**What I'd test, and why**
+
+1. **A 500 is retried, then reported as `badStatus(500)`** — this is the search crash. The test
+   proves an HTML error page never reaches the decoder, and that the retry stops after three tries.
+2. **A 404 is not retried** — retrying something that won't change just makes the user wait.
+3. **A garbage 200 becomes a decoding error** — the other half of the crash: a bad body throws,
+   it doesn't trap.
+4. **503, then 200, succeeds on the second attempt** — the retry actually rescues a blip.
+5. **The search query is encoded** — `&` and `=` must not turn into extra parameters. The same
+   test checks the 15-second timeout.
+6. **The view model ends in `.failed` with the right message** — the spinner-forever report. Every
+   path has to land in a final state.
+
+I wouldn't test `URLSession` itself or the real backoff timing — the first is Apple's code, and the
+second is just numbers in `RetryPolicy`.
+
+**The seam.** A *seam* is a place where the test can swap a real part for a fake. Here it is
+`HTTPTransport`: the *fake* below replays canned answers (any status, any body) and records each
+request, so nothing touches the network. The backoff really sleeps, so the tests pass a 1 ms
+`baseDelay` through `RetryPolicy`. One gap I closed: `load(userID:)` started its `Task` and kept it
+private, so a test could only guess when it had finished. It now returns the task (two lines,
+shown in the fix above), and the test simply awaits it — *deterministic*, meaning it gives the same
+result on every run, with no timing involved.
+
+```swift
+import Testing
+import Foundation
+
+/// A fake transport: plays back canned replies in order (the last one repeats)
+/// and records every request it was sent.
+actor FakeTransport: HTTPTransport {
+    enum Reply: Sendable {
+        case status(Int, String)
+        case failure(URLError.Code)
+    }
+
+    private var replies: [Reply]
+    private(set) var requests: [URLRequest] = []
+
+    init(_ replies: Reply...) { self.replies = replies }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        requests.append(request)
+        let reply = replies.count > 1 ? replies.removeFirst() : replies[0]
+        switch reply {
+        case .failure(let code):
+            throw URLError(code)
+        case .status(let code, let body):
+            let response = HTTPURLResponse(url: request.url!, statusCode: code,
+                                           httpVersion: nil, headerFields: nil)!
+            return (Data(body.utf8), response)
+        }
+    }
+}
+
+let ada = #"{"id": 1, "name": "Ada"}"#
+
+/// A 1 ms base delay keeps the real backoff, just fast.
+func makeClient(_ transport: FakeTransport, maxAttempts: Int = 3) -> APIClient {
+    APIClient(baseURL: URL(string: "https://api.example.com")!,
+              transport: transport,
+              retry: RetryPolicy(maxAttempts: maxAttempts, baseDelay: .milliseconds(1)))
+}
+
+struct APIClientTests {
+    @Test func serverErrorIsRetriedThenReportedAsBadStatus() async {
+        // Given a server that always answers 500 with an HTML page
+        let transport = FakeTransport(.status(500, "<html>Oops</html>"))
+        let client = makeClient(transport)
+
+        // When / Then: it never reaches the decoder, and it tried three times
+        await #expect(throws: APIError.badStatus(500)) { try await client.user(id: 1) }
+        #expect(await transport.requests.count == 3)
+    }
+
+    @Test func notFoundIsNotRetried() async {
+        let transport = FakeTransport(.status(404, ""))
+        let client = makeClient(transport)
+
+        await #expect(throws: APIError.badStatus(404)) { try await client.user(id: 1) }
+        #expect(await transport.requests.count == 1)
+    }
+
+    @Test func garbageBodyBecomesADecodingErrorNotACrash() async {
+        let transport = FakeTransport(.status(200, "not json"))
+        let client = makeClient(transport)
+
+        let error = await #expect(throws: APIError.self) { try await client.user(id: 1) }
+
+        guard case .decoding = error else {
+            Issue.record("Expected a decoding error, got \(String(describing: error))")
+            return
+        }
+        #expect(await transport.requests.count == 1)
+    }
+
+    @Test func serviceUnavailableThenOKSucceedsOnTheSecondAttempt() async throws {
+        let transport = FakeTransport(.status(503, ""), .status(200, ada))
+        let client = makeClient(transport)
+
+        let user = try await client.user(id: 1)
+
+        #expect(user == User(id: 1, name: "Ada"))
+        #expect(await transport.requests.count == 2)
+    }
+
+    @Test func searchQueryIsEncoded() async throws {
+        let transport = FakeTransport(.status(200, "[]"))
+        let client = makeClient(transport)
+
+        _ = try await client.searchUsers(matching: "tom & admin=true")
+
+        let request = try #require(await transport.requests.first)
+        #expect(request.url?.absoluteString
+                == "https://api.example.com/users?q=tom%20%26%20admin%3Dtrue")
+        #expect(request.timeoutInterval == 15)
+    }
+}
+
+@MainActor
+struct ProfileViewModelTests {
+    @Test func serverOutageEndsInFailedWithAFriendlyMessage() async {
+        let transport = FakeTransport(.status(500, "<html>Oops</html>"))
+        let viewModel = ProfileViewModel(api: makeClient(transport, maxAttempts: 1))
+
+        await viewModel.load(userID: 1).value
+
+        #expect(viewModel.state == .failed("The server didn't respond. Try again."))
+    }
+
+    @Test func successEndsInLoadedWithTheName() async {
+        let transport = FakeTransport(.status(200, ada))
+        let viewModel = ProfileViewModel(api: makeClient(transport))
+
+        await viewModel.load(userID: 1).value
+
+        #expect(viewModel.state == .loaded("Ada"))
+    }
+}
+```
+
+Ran with Swift 6.4: 7 tests, all passed.
 :::
 
 ::: What I'd ask next

@@ -79,7 +79,17 @@ How to use a chapter:
 4. **Check yourself** against *The key* (or *Answers*). Count what you found, and in what order.
 5. **Read *The idea behind it*** for anything you missed. It explains the concept from scratch,
    in plain words, so it sticks.
-6. **Read the fix**, then answer *What I'd ask next* out loud before opening it.
+6. **Read the fix.**
+7. **Write the tests.** Many rounds end with "good — now write a few unit tests for your fix".
+   Write yours before opening *Now write the tests*, then compare which behaviours you covered.
+   (Print puzzles have no fix, so they skip this step.)
+8. **Answer *What I'd ask next*** out loud before opening it.
+
+To run the snippets with autocomplete, make an iOS **App** project in Xcode with a unit-test
+target, and add one file per chapter. Paste the snippet, wrap code you want to run in
+`#Playground { … }` (`import Playgrounds`, Xcode 26 or later), pick an iPhone simulator, and open
+the canvas (⌥⌘↩). A standalone `.swift` file or a macOS target won't work for UIKit snippets: they
+build for the Mac, where `import UIKit` fails with "No such module".
 
 Every chapter names the interview where its question was reported, or says plainly that it wasn't.
 Foundation-only snippets and fixes were compiled and run with Swift 6 (each chapter names the exact
