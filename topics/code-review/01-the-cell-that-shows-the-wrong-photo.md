@@ -2,6 +2,7 @@
 title: 01 · The cell that shows the wrong photo
 summary: A feed screen with an image cell, a refresh timer and a notification observer — review it.
 minutes: 20
+group: Review this PR
 sources:
 - Glassdoor · Delivery Hero Senior iOS — "what is a retain cycle, and in which scenarios" | https://www.glassdoor.com/Interview/Delivery-Hero-Senior-IOS-Developer-Interview-Questions-EI_IE504556.0,13_KO14,34.htm
 - Apple · Timer — a target-based timer keeps a strong reference to its target | https://developer.apple.com/documentation/foundation/timer
@@ -10,7 +11,7 @@ sources:
 ---
 
 *Shape: review this PR · Reported: retain-cycle scenarios (Delivery Hero), UIKit code review
-(fintech manager rounds) · UIKit — the fix typechecks against the iOS 18 SDK in Swift 6 mode; behaviour checked by hand*
+(fintech manager rounds) · UIKit — the fix typechecks against the iOS SDK (iOS 18 target) in Swift 6 mode; behaviour checked by hand*
 
 > "This is a feed screen a teammate opened a PR for. Users say photos sometimes appear in the wrong
 > rows, and memory grows every time they open and close the feed. Review it — ten minutes."
@@ -69,6 +70,13 @@ final class FeedViewController: UIViewController, UITableViewDataSource {
 }
 ```
 
+::: A hint, if you're stuck
+- Table cells are reused. What happens if a download finishes after its cell has moved to another row?
+- Who keeps a `Timer` alive, and what does the timer keep alive?
+- Where is the only `invalidate()`, and when does that code run?
+- How much memory does a decoded 12-megapixel photo take?
+:::
+
 ::: The key — what I expect a senior to find
 1. **Wrong photo in a row (the reported bug).** Cells are reused. A slow download for row 3
    finishes after the cell has been reused for row 40 and writes row 3's image into it. Nothing
@@ -96,6 +104,26 @@ final class FeedViewController: UIViewController, UITableViewDataSource {
     or an image-loading dependency.
 14. **Timer fires while off screen** — start it in `viewWillAppear`, stop it in
     `viewDidDisappear`.
+:::
+
+::: The idea behind it
+Two ideas carry this whole snippet: cell reuse and retain cycles.
+
+A table view doesn't make one cell per row. It makes just enough to fill the screen, and when a row
+scrolls off, its cell is *reused* for the row scrolling on — like a café reusing the same few
+tables for a stream of guests. Anything you started for the old guest, such as a download, can
+finish after the new guest has sat down. So a cell must cancel, or ignore, old work when it is
+reused.
+
+The leak is a *retain cycle*. Swift frees an object when nothing holds a *strong* reference to it
+any more — that's ARC, automatic reference counting. A repeating timer is held by the run loop, and
+it holds its target strongly. So the screen can't be freed while the timer exists, and the only code
+that stops the timer is in `deinit`, which only runs once the screen is freed. Each waits for the
+other. A block-based notification observer does the same: NotificationCenter keeps the block, and
+the block keeps `self`.
+
+The cure has two parts. Hold `self` *weakly* (`[weak self]`) — a reference that doesn't keep the
+object alive. And stop timers and observers when the screen goes away, not in `deinit`.
 :::
 
 ::: The fix

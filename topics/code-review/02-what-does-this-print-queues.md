@@ -2,6 +2,7 @@
 title: 02 · What does this print? — queues
 summary: Four short GCD puzzles on serial vs concurrent and sync vs async, including the one that crashes.
 minutes: 15
+group: What does this print?
 sources:
 - Glassdoor · Revolut Senior iOS — live coding that needs GCD concurrency "very well" | https://www.glassdoor.com/Interview/Revolut-Senior-IOS-Developer-Interview-Questions-EI_IE1176471.0,7_KO8,28.htm
 - Apple · DispatchQueue — sync on the current serial queue deadlocks | https://developer.apple.com/documentation/dispatch/dispatchqueue
@@ -55,6 +56,12 @@ DispatchQueue.main.sync { print("inside") }
 print("after")
 ```
 
+::: A hint, if you're stuck
+- There are two separate questions. Does the queue run one block at a time (serial) or several (concurrent)? Does the caller wait (sync) or not (async)?
+- For each line, ask: who is waiting for whom?
+- "It usually prints first" and "it's guaranteed to print first" are different answers.
+:::
+
 ::: Answers
 **A — `1 2 3 4`, then `5` and `6` in either order.**
 `2` is queued before `3` on the same serial queue, and a serial queue runs one block at a time in
@@ -72,6 +79,24 @@ instruction. `after` never prints.
 inner block doesn't need the outer one to finish. No deadlock.
 
 **D — crash.** Same as B: the main queue is serial and you are already on it.
+:::
+
+::: The idea behind it
+A *queue* is a line of work waiting to run. A *serial* queue runs one block at a time, in order —
+one cashier. A *concurrent* queue may run several at once — several cashiers. That's one question,
+and it's about the queue.
+
+The other question is about you, the caller. `async` means "put my work in the line and walk away".
+`sync` means "stand here until my work is done".
+
+Mix the two up and you get the classic *deadlock*. On a serial queue, a block calls `sync` onto the
+same queue. It waits for the queue to be free — but the queue is busy running that very block. Each
+waits for the other, forever. On the main queue that would freeze the app, so Apple's dispatch
+library spots it and crashes instead, which is easier to debug.
+
+Ordering follows from the same picture. Inside one serial queue, order is guaranteed: one cashier,
+one line. Across different queues nothing is guaranteed unless something waits. A result that
+"always" comes out in one order on your machine is a race that hasn't lost yet.
 :::
 
 ::: What I'm really scoring

@@ -2,6 +2,7 @@
 title: 05 · A cache for any type
 summary: A generic cache built on a protocol with an associated type — review it, then build the version you'd ship.
 minutes: 30
+group: Review, then extend
 sources:
 - Glassdoor · Revolut Senior iOS — "given a protocol with associated type, code a cache system for that type" | https://www.glassdoor.ie/Interview/Revolut-Senior-IOS-Developer-Interview-Questions-EI_IE1176471.0,7_KO8,28.htm
 - Glassdoor · Revolut Senior iOS — pair-programming task on caching | https://www.glassdoor.com/Interview/Revolut-Senior-IOS-Developer-Interview-Questions-EI_IE1176471.0,7_KO8,28.htm
@@ -9,8 +10,8 @@ sources:
 ---
 
 *Shape: review, then extend · Reported: Revolut asked for exactly this cache, by protocol with an
-associated type · Compiled with Swift 6.2: the snippet fails in Swift 6 mode, the fix passes and
-was run*
+associated type · Compiled in Swift 6 mode: Swift 6.2 rejected the snippet, Swift 6.4
+only warns; the fix compiles on both and was run*
 
 > "Here's a cache a teammate wrote. It's called from several places at once. Review it — then tell
 > me what you'd change before we put account data in it."
@@ -45,9 +46,18 @@ DispatchQueue.concurrentPerform(iterations: 1_000) { i in
 }
 ```
 
+::: A hint, if you're stuck
+- Several callers at once: what does a `Dictionary` do when two threads write to it together?
+- What stops this cache from growing forever, or from showing this morning's balance tonight?
+- Ten callers ask for the same missing key at the same moment. How many network calls?
+- What happens to the cache when the user logs out?
+:::
+
 ::: The key
 1. **Data race.** `Dictionary` isn't thread-safe; concurrent writes can corrupt it or crash during
-   a resize. Swift 6 refuses to compile the call site — verified. (On a one-core test machine the
+   a resize. In Swift 6 mode, Swift 6.2 refused to compile the call site; Swift 6.4 only warns
+   (*capture of 'cache' with non-Sendable type*) — both verified. Treat that warning as an error.
+   (On a one-core test machine the
    race didn't visibly misbehave, which is the point: races pass tests and crash in production.)
 2. **No size limit.** The cache grows forever; on a phone that ends in a memory-pressure kill.
 3. **No expiry.** A balance cached at 9:00 is shown at 17:00 as if current.
@@ -58,6 +68,25 @@ DispatchQueue.concurrentPerform(iterations: 1_000) { i in
    banking app.
 7. **`Double` for a balance.** Use `Decimal`.
 8. **`Cacheable` isn't `Sendable`**, so values can't safely cross threads under Swift 6.
+:::
+
+::: The idea behind it
+A cache is a small, fast memory of answers you've already fetched, so you don't fetch them again.
+Three questions make one safe: who can touch it at the same time, how big it may grow, and how long
+an answer stays true.
+
+Swift's `Dictionary` isn't safe to change from two threads at once. That's a *data race*, and it
+can corrupt memory or crash. An *actor* fixes it: an actor is an object that lets only one caller
+inside at a time, and the compiler enforces that.
+
+Actors have one catch, called *reentrancy*. Whenever the actor waits (`await`), it lets the next
+caller in. So "check the cache, wait for the network, store the answer" isn't one unbroken step — a
+second caller can slip in during the wait, see nothing cached, and start the same download. The fix
+is to remember the download that's already running and let later callers wait for that one.
+
+A count limit and an expiry time stop it growing forever or serving stale data. And `removeAll` on
+logout — which also stops downloads that are still running — keeps one user's data from reaching
+the next.
 :::
 
 ::: The version I'd ship (Swift 6, verified)

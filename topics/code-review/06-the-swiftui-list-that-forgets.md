@@ -2,13 +2,14 @@
 title: 06 · The SwiftUI list that forgets
 summary: A SwiftUI transactions screen that reloads, loses its data and stutters — review it.
 minutes: 20
+group: Review this PR
 sources:
 - Apple · StateObject — the view owns the object and keeps it across updates | https://developer.apple.com/documentation/swiftui/stateobject
 - Apple · SwiftUI View — the task modifier is cancelled when the view disappears | https://developer.apple.com/documentation/swiftui/view
 ---
 
 *Shape: review this PR · **Likely**, not reported: no first-hand report names a SwiftUI snippet,
-but most scale-ups now build new screens in SwiftUI · SwiftUI — the fix typechecks against the iOS 18 SDK in Swift 6 mode; behaviour checked by hand*
+but most scale-ups now build new screens in SwiftUI · SwiftUI — the fix typechecks against the iOS SDK (iOS 18 target) in Swift 6 mode; behaviour checked by hand*
 
 > "Users say the list sometimes empties itself and reloads when they come back from a detail
 > screen, the search is case-sensitive, and scrolling stutters on long accounts. Review it."
@@ -51,6 +52,13 @@ final class TransactionsModel: ObservableObject {
 }
 ```
 
+::: A hint, if you're stuck
+- When the parent view redraws, does this view create a new `TransactionsModel`? Who owns it?
+- `.onAppear` fires again when you come back from a detail screen. What does `load()` do then?
+- Two transactions both called "Coffee": what does `id: \.title` mean to SwiftUI?
+- What work runs every single time `body` is evaluated?
+:::
+
 ::: The key
 1. **The model is recreated.** `@ObservedObject` with a default value doesn't own the object;
    every time the parent re-renders, a fresh empty `TransactionsModel` is created. That's the list
@@ -74,6 +82,23 @@ final class TransactionsModel: ObservableObject {
 9. **Tap gesture instead of a button.** `onTapGesture` gives VoiceOver no button trait and no
    highlight. Use `Button` or a `NavigationLink`.
 10. **Global `TransactionsAPI.fetch()`** — not injectable, so the model can't be tested.
+:::
+
+::: The idea behind it
+In SwiftUI a view is a cheap description that gets thrown away and rebuilt all the time. Anything
+that must survive that — like your data model — needs an *owner* that SwiftUI keeps alive for you.
+
+`@StateObject` (or `@State` holding an `@Observable` model) says "this view owns it; keep it across
+redraws". `@ObservedObject` says "someone else owns it; I only watch it". Create the object right
+there under `@ObservedObject` and every redraw makes a brand-new, empty model — the list "forgets".
+
+*Identity* is the other half. SwiftUI matches rows between redraws by their `id`. If two rows share
+an id, SwiftUI can't tell them apart, so state, animations and taps end up on the wrong row. Use a
+real unique id.
+
+And because `body` can run many times a second, anything expensive inside it — a new
+`DateFormatter`, filtering a long list — runs every time. Keep `body` a cheap description and do the
+work once, somewhere else.
 :::
 
 ::: The fix

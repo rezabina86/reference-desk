@@ -2,6 +2,7 @@
 title: 00 · How the code-review round works
 summary: What the interviewer is scoring when they hand you a Swift snippet, and the order to say things in.
 minutes: 15
+group: Start here
 sources:
 - Glassdoor · Delivery Hero Senior iOS — retain-cycle scenarios, small snippets | https://www.glassdoor.com/Interview/Delivery-Hero-Senior-IOS-Developer-Interview-Questions-EI_IE504556.0,13_KO14,34.htm
 - Glassdoor · Revolut Senior iOS — escaping closures, GCD, cache with associated type | https://www.glassdoor.com/Interview/Revolut-Senior-IOS-Developer-Interview-Questions-EI_IE1176471.0,7_KO8,28.htm
@@ -15,13 +16,14 @@ I'd trust them to review my team's pull requests on a Tuesday afternoon. That me
 do they find what would hurt users, do they find it fast, and can they explain it so the author
 learns something.
 
-## The three shapes it comes in
+## The four shapes it comes in
 
 | Shape | What you're given | What I'm scoring |
 |---|---|---|
 | **Review this PR** | 40–80 lines of plausible production code | How many real problems, in what order |
 | **What does this print?** | 10–20 lines of closures, queues or value types | Whether your mental model of Swift is exact |
 | **Find the bug** | A small project or screen that misbehaves | Whether you reason before you poke |
+| **Review, then extend** | A review, then "now add X" on the same code | Whether your fix holds up when the code has to grow |
 
 Delivery Hero, Revolut and European fintech scale-ups have all been reported using at least one
 of these. At one fintech, a Senior iOS candidate had the round stopped after ten minutes for finding too few issues — so treat
@@ -65,7 +67,21 @@ doing the wrong job in the wrong place.
 
 ## The chapters in this section
 
-Each chapter is one snippet in the shape interviewers actually use. The snippet is visible; my
-answer key, the fixed code and the follow-ups I'd ask are collapsed. Timer on, out loud, then open.
-Foundation-only snippets and fixes were compiled and run with Swift 6.2; UIKit and SwiftUI ones are
-marked: their fixes typecheck against the iOS SDK, but their runtime behaviour was checked by hand.
+Each chapter is one snippet in the shape interviewers actually use, and the chapters are grouped
+by shape. The snippet is visible; everything else is collapsed, so you can try first. Timer on, out
+loud, then open.
+
+How to use a chapter:
+
+1. **Read the prompt and the snippet.** Say out loud what the code is trying to do.
+2. **Set a timer** — ten minutes for a review, five for a print puzzle — and list what you find.
+3. **Stuck?** Open *A hint, if you're stuck*. It nudges without giving the answer away.
+4. **Check yourself** against *The key* (or *Answers*). Count what you found, and in what order.
+5. **Read *The idea behind it*** for anything you missed. It explains the concept from scratch,
+   in plain words, so it sticks.
+6. **Read the fix**, then answer *What I'd ask next* out loud before opening it.
+
+Every chapter names the interview where its question was reported, or says plainly that it wasn't.
+Foundation-only snippets and fixes were compiled and run with Swift 6 (each chapter names the exact
+version); UIKit, SwiftUI and Core Data ones are marked: their fixes typecheck against the iOS SDK,
+but their runtime behaviour was checked by hand.

@@ -2,6 +2,7 @@
 title: 03 · What does this print? — closures and values
 summary: Value vs reference semantics, capture lists, loop captures and defer — five lines of output to predict.
 minutes: 15
+group: What does this print?
 sources:
 - Glassdoor · Revolut Senior iOS — escaping vs non-escaping closures | https://www.glassdoor.com/Interview/Revolut-Senior-IOS-Developer-Interview-Questions-EI_IE1176471.0,7_KO8,28.htm
 - Glassdoor · Delivery Hero Senior iOS — retain-cycle scenarios | https://www.glassdoor.com/Interview/Delivery-Hero-Senior-IOS-Developer-Interview-Questions-EI_IE504556.0,13_KO14,34.htm
@@ -46,6 +47,12 @@ func f() -> Int {
 print("returned", f())                           // ⑥
 ```
 
+::: A hint, if you're stuck
+- Is `Counter` a value type or a reference type? What does `b = a` copy?
+- A closure without a capture list sees the variable. With `[x]` it takes a copy — but a copy of what, for a class?
+- When exactly does `defer` run, compared with `return`?
+:::
+
 ::: Answers (verified output)
 ```text
 0 1
@@ -69,6 +76,22 @@ returned 2
 - **⑥** `return n` evaluates `2` first, then `defer` runs and changes `n` to `12` — too late to
   affect the returned value. Prints `defer 12` before `returned 2`, because `f()` must finish
   before the outer `print` can.
+:::
+
+::: The idea behind it
+Swift has two kinds of types. A *value type* (a struct or an enum) behaves like a photocopy:
+assign it and you get an independent copy. A *reference type* (a class) behaves like a house
+address: copy it and you have two slips of paper pointing at the same house. Paint the house through
+one slip and the other slip sees the new colour.
+
+Closures *capture* the outside variables they use. By default they capture the variable itself, so
+they see any later change to it. A *capture list* like `[x]` takes a copy at the moment the closure
+is created. But copying a class reference copies the address, not the house — so the closure still
+sees changes made to the object. That is exactly why `[weak self]` works: it changes *how* the
+closure holds the address (without keeping the house standing), not what's inside.
+
+`defer` runs when the function is on its way out — after the return value has already been worked
+out. Changing a variable in `defer` can't change what was returned.
 :::
 
 ::: What I'm really scoring
