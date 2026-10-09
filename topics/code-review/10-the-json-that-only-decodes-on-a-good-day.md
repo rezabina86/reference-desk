@@ -1,7 +1,7 @@
 ---
 title: 10 · The JSON that only decodes on a good day
 summary: A menu model and a getItemData() decoder that crash the app the first time the backend sends something slightly different — find why.
-minutes: 15
+minutes: 20
 group: Find the bug
 sources:
 - Glassdoor · DoorDash iOS — a getItemData() stub, "deserialize the JSON into native Swift objects" | https://www.glassdoor.com/Interview/DoorDash-Interview-RVW57524208.htm
@@ -10,10 +10,8 @@ sources:
 ---
 
 *Shape: find the bug · Reported: DoorDash — fill in a `getItemData()` stub that deserialises JSON
-into Swift objects; Swiggy — the candidate was asked to justify a single force unwrap · Compiled
-and run with Swift 6.4: the snippet is rejected in Swift 6 mode, compiles cleanly in Swift 5 mode
-and crashes on the sample; the fix compiles in Swift 6 mode with zero warnings and was run against
-the same JSON*
+into Swift objects; Swiggy — the candidate was asked to justify a single force unwrap · Verified:
+the snippet crashes on the sample and the fix's tests pass, Swift 6.4*
 
 > "This is the menu screen's model. It worked in the demo. In production it crashes on launch for
 > some stores and not others. Here's the code, and here's a real response from one of the stores
@@ -83,17 +81,10 @@ final class MenuViewModel {
 :::
 
 ::: The key — what I expect a senior to find
-I ran the snippet against the JSON above. In Swift 5 mode it compiles cleanly and dies on the
-first line of the decode:
-
-```text
-Fatal error: 'try!' expression unexpectedly raised an error: DecodingError.keyNotFound:
-Key 'storeId' not found in keyed decoding container. Debug description: No value associated
-with key CodingKeys(stringValue: "storeId", intValue: nil) ("storeId").
-```
-
-That's only the first error. Fixing them one at a time with a `do`/`catch` harness shows the rest,
-each hiding behind the one before (real output, trimmed to the error type and path):
+Run against the JSON above, it dies on the first line of the decode: *'try!' expression
+unexpectedly raised an error: DecodingError.keyNotFound … "storeId"*. That's only the first error.
+Fixing them one at a time shows the rest, each hiding behind the one before (real output, trimmed
+to the error type and path):
 
 ```text
 1 as written                -> keyNotFound   'storeId'
@@ -102,38 +93,43 @@ each hiding behind the one before (real output, trimmed to the error type and pa
 4 + optional description    -> valueNotFound Expected Double, found null.  Path: items[2].price
 ```
 
-That's why it "works for some stores": a store whose items all have descriptions and prices
-gets further than one that doesn't. The answer key, by severity:
+That's why it "works for some stores": a store whose items all have descriptions and prices gets
+further than one that doesn't. By severity, the reported crash first:
 
-1. **`try!` turns bad data into a crash.** Any decoding error kills the app. Data from a server is
-   input, and input can be wrong; the function must `throw` and the screen must show an error.
-   This is the Swiggy question: one force unwrap is only defensible when a failure means a
-   programmer bug, never when it depends on the network.
-2. **`data!` crashes on any network failure.** When the request fails, `data` is `nil`. The error
-   and the HTTP status are both ignored too, so a 500 with an HTML body goes straight to the
-   decoder.
-3. **snake_case keys, camelCase properties, no mapping.** The synthesised coding keys are the
-   property names, so the decoder looks for `storeId` and the JSON has `store_id`. Use explicit
-   `CodingKeys`, or `keyDecodingStrategy = .convertFromSnakeCase` — not both on the same type.
-4. **The date decodes as a `Double`.** The default `dateDecodingStrategy` is `.deferredToDate`,
-   which reads a number of seconds since 2001. An ISO-8601 string fails with "expected Double".
-   Set `.iso8601`.
-5. **A field that's sometimes missing is declared non-optional.** Item 2 has no `description`, so
-   the whole response fails. Make it `String?` (the synthesised decoder then uses
-   `decodeIfPresent`) or give it a default in a custom `init(from:)`.
-6. **One bad element fails the whole array.** Item 3 has `"price": null`. An item with no price
-   can't be sold, so dropping it is right; losing the whole menu isn't. Decode each element
-   separately and keep the ones that work — and log the ones that don't.
-7. **Data race on `self`.** The completion handler runs on a background queue and captures the
-   non-`Sendable` view model. Swift 6 rejects it — verified: *sending 'self' risks causing data
-   races*. In Swift 5 mode it compiles with no warning at all.
-8. **Decoding runs on the main thread.** The whole parse happens inside `DispatchQueue.main.async`.
-   A menu of a few hundred items with nested options can take long enough to drop frames.
-9. **Money as `Double`.** Binary floating point can't hold 12.99 exactly. Verified: `12.99 + 4.50`
-   prints `17.490000000000002`. Totals drift and comparisons fail. Use `Decimal`, or integer cents
-   from the server.
-10. **Built-in dependencies.** `URLSession.shared` and a URL string inside the method mean nothing
-    here can be tested without the network. `storeID` is also pasted into the path unescaped.
+1. **`try!` turns bad data into a crash (the reported bug).** Server data is input, and input can
+   be wrong. `getItemData` must `throw`, and the screen must show an error. This is the Swiggy
+   question: a force unwrap is only fine when failure means a programmer bug, never the network.
+2. **snake_case keys, camelCase properties, no mapping.** The decoder looks for `storeId`; the JSON
+   has `store_id`. Set `keyDecodingStrategy = .convertFromSnakeCase`, or write `CodingKeys`.
+3. **The date decodes as a `Double`.** The default strategy reads seconds since 2001, so an ISO-8601
+   string fails with "expected Double". Set `dateDecodingStrategy = .iso8601`.
+4. **A field that's sometimes missing is non-optional.** Item 2 has no `description`, so the whole
+   response fails. Make it `String?`.
+5. **One bad element fails the whole array.** Item 3 has `"price": null`. Dropping an item that
+   can't be sold is right; losing the whole menu isn't. Decode each element on its own and keep the
+   ones that work.
+6. **`data!` crashes on any network failure.** No connection means `data` is `nil`. The error and
+   the HTTP status are ignored too, so a 500 with an HTML body goes straight to the decoder.
+7. **`storeID` is pasted into the URL unescaped.** Since iOS 17, `URL(string:)` escapes a space
+   instead of returning `nil`, so the `!` rarely fires now. But an id with `/` or `?` silently
+   changes the path or adds a query (checked: `s/42?x=1` became a query). Use
+   `appending(components:)`, which escapes each part.
+8. **Data race on `self`.** The completion handler runs on a background queue and captures a
+   non-`Sendable` view model. Swift 6.4 warns: *capture of 'self' with non-Sendable type
+   'MenuViewModel' in a '@Sendable' closure*. Swift 5 mode says nothing. Make the view model
+   `@MainActor`.
+9. **No cancellation.** Switch stores quickly and the slower, older response can land last and
+   overwrite the new menu. Keep the task and cancel it on the next `load`.
+10. **Decoding runs on the main thread.** The parse sits inside `DispatchQueue.main.async`. A large
+    menu drops frames. Decode in the callback, then hop to main with the result.
+11. **Money as `Double`.** `12.99 + 4.50` prints `17.490000000000002` (checked). Totals drift and
+    comparisons fail. Use `Decimal`, or integer cents from the server.
+12. **`items` is publicly writable.** Any caller can replace the menu behind the view model's back.
+    Make it `private(set)`.
+13. **`Codable` where `Decodable` is enough.** Nothing encodes these types. Claiming `Encodable`
+    promises a round trip nobody tests.
+14. **Built-in dependencies.** `URLSession.shared` and a hard-coded host inside the method mean
+    `load` can't be tested without the network. Inject a loader.
 :::
 
 ::: The idea behind it
@@ -159,129 +155,84 @@ one torn label. A sensible one sets that box aside, writes it down, and lets the
 :::
 
 ::: The fix
+Same types, same `URLSession` and completion handler. Only the lines behind the findings change.
+
 ```swift
 import Foundation
 
-struct MenuItem: Decodable, Sendable, Identifiable {
-    let id: Int
-    let name: String
-    let price: Decimal
+struct MenuResponse: Decodable {                        // key 13
+    let storeId: String
+    let items: [Lossy<MenuItem>]                        // key 5
+}
+
+struct MenuItem: Decodable {
+    let itemId: Int
+    let displayName: String
+    let price: Decimal                                  // key 11
     let createdAt: Date
-    let description: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case id = "item_id"
-        case name = "display_name"
-        case price
-        case createdAt = "created_at"
-        case description
-    }
+    let description: String?                           // key 4
 }
 
-struct MenuPage: Decodable, Sendable {
-    let storeID: String
-    let items: [MenuItem]
-    let skipped: [any Error]   // log these (they carry the coding path), don't show them
-
-    private enum CodingKeys: String, CodingKey {
-        case storeID = "store_id"
-        case items
-    }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        storeID = try container.decode(String.self, forKey: .storeID)
-        let results = try container.decode([Lossy<MenuItem>].self, forKey: .items).map(\.result)
-        items = results.compactMap { try? $0.get() }
-        skipped = results.compactMap { if case .failure(let error) = $0 { error } else { nil } }
-    }
+/// Decodes one element; a bad one becomes nil instead of failing the array.
+struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: any Decoder) throws { value = try? T(from: decoder) }
 }
 
-/// Decodes one array element without letting its failure sink the whole array.
-struct Lossy<Wrapped: Decodable & Sendable>: Decodable, Sendable {
-    let result: Result<Wrapped, any Error>
-
-    init(from decoder: any Decoder) throws {
-        result = Result { try Wrapped(from: decoder) }
-    }
-}
-
-protocol MenuLoading: Sendable {
-    func menu(storeID: String) async throws -> MenuPage
-}
-
-struct MenuService: MenuLoading {
-    let session: URLSession
-    let baseURL: URL
-
-    func menu(storeID: String) async throws -> MenuPage {
-        let url = baseURL.appending(components: "stores", storeID, "menu")
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
-        return try await Self.decode(data)
-    }
-
-    /// `@concurrent` = always off the caller's actor, so a big payload never decodes on main.
-    @concurrent
-    static func decode(_ data: Data) async throws -> MenuPage {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(MenuPage.self, from: data)
-    }
-}
-
-@MainActor
+@MainActor                                              // key 8
 final class MenuViewModel {
-    enum State { case loading, loaded([MenuItem]), failed(any Error) }
+    private(set) var items: [MenuItem] = []             // key 12
+    var onUpdate: (() -> Void)?
+    var onError: ((any Error) -> Void)?                 // key 1
 
-    private(set) var state: State = .loading
-    private let loader: any MenuLoading
+    func load(storeID: String) {
+        let url = URL(string: "https://api.example.com/stores")!
+            .appending(components: storeID, "menu")     // key 7
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            let result = Result {                       // keys 6, 10: checked and decoded off main
+                guard let data, let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode) else {
+                    throw error ?? URLError(.badServerResponse)
+                }
+                return try MenuViewModel.getItemData(data)
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let items): self?.items = items; self?.onUpdate?()
+                case .failure(let error): self?.onError?(error)
+                }
+            }
+        }.resume()
+    }
 
-    init(loader: any MenuLoading) { self.loader = loader }
-
-    func load(storeID: String) async {
-        do {
-            state = .loaded(try await loader.menu(storeID: storeID).items)
-        } catch {
-            state = .failed(error)
-        }
+    nonisolated static func getItemData(_ data: Data) throws -> [MenuItem] {   // key 1
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase                       // key 2
+        decoder.dateDecodingStrategy = .iso8601                                   // key 3
+        return try decoder.decode(MenuResponse.self, from: data).items.compactMap(\.value)
     }
 
     var total: Decimal {
-        guard case .loaded(let items) = state else { return 0 }
-        return items.reduce(0) { $0 + $1.price }
+        items.reduce(0) { $0 + $1.price }
     }
 }
 ```
 
-Run against the same JSON through a fake `MenuLoading` that reads the file (real output):
-
-```text
-skipped: DecodingError.valueNotFound: Expected value of type NSDecimal. Path: items[2].price. Debug description: Cannot get value of type NSDecimal -- found null value instead
-1 Margherita 12.99 2026-10-01 18:30:00 +0000 Tomato, mozzarella, basil
-2 Garlic bread 4.5 2026-10-01 18:31:00 +0000 —
-total: €17.49
-```
+**Said out loud, not coded:** log the skipped items (keep the error, not just `nil`); cancel the
+previous task when the store changes; `async`/`await` with a `MenuLoading` protocol so `load` is
+testable; one `State` enum instead of two callbacks; integer cents from the backend.
 
 Why each piece:
 
-- **Explicit `CodingKeys`** — they also let the model use Swift names (`id`, `name`, `storeID`)
-  instead of whatever the server chose. I picked them over `.convertFromSnakeCase` because that
-  strategy turns `store_id` into `storeId`, not `storeID`.
-- **`.iso8601`** — matches what the server actually sends.
-- **`description: String?`** — states the truth: some items don't have one.
-- **`Lossy` with a `Result`** — each element is decoded inside its own `init`, so a failure is
-  caught there and the array's position still moves on. Keeping the error, not just dropping it,
-  means you can log it and notice when the backend starts sending broken items.
-- **`Decimal` for price** — the total is exactly 17.49.
-- **`throws` everywhere, a `State` enum** — a bad response becomes an error screen, not a crash.
-- **`@concurrent` on `decode`** — the parse runs on the global executor whatever the caller is.
-  A plain `nonisolated async` function does that today, but with the newer "run on the caller's
-  actor" default (Xcode 26's Approachable Concurrency setting) it would run on main.
-- **`MenuLoading` protocol and an injected `URLSession`** — the view model is tested with a fake;
-  that's exactly how this was run.
+- **`.convertFromSnakeCase`** — the property names stay as they are; `store_id` becomes `storeId`,
+  which is exactly what the model already says.
+- **`Lossy`** — each element runs its own `init(from:)`, so a failure is caught there and the
+  array still moves on to the next element.
+- **Decode in the callback, then hop to main** — the parse runs on URLSession's queue, and only a
+  `Sendable` `Result` crosses to the main thread. `getItemData` is `nonisolated static` so the
+  background closure may call it.
+- **`URL(string:)!` stays** — on a constant it can only fail through a typo, a programmer bug. The
+  user's input goes through `appending(components:)`.
 :::
 
 ::: Now write the tests
@@ -289,30 +240,22 @@ Why each piece:
 
 **What I'd test, and why**
 
-1. **The real response decodes, with the right keys, dates and prices** — this is the reported
-   crash. The JSON from the bug report becomes a *fixture*: saved test input the test reads every
-   time, so the crash can't quietly come back.
-2. **The item with a `null` price is skipped and recorded in `skipped`** — one bad item must not
-   sink the menu, and the error is kept so it can be logged.
+1. **The response that crashed now decodes** — the right keys, dates and prices, and a total of
+   exactly 17.49. The JSON from the bug report becomes a *fixture*: saved test input the test reads
+   every time, so the crash can't quietly come back.
+2. **The item with a `null` price is skipped** — one bad item must not sink the menu.
 3. **A missing `description` decodes as `nil`** — the field really is optional.
 4. **A response with no `store_id` throws** — the lossy decode is only for items. A broken page
-   should still fail loudly.
-5. **The view model goes to `.failed` when loading throws** — a bad response shows an error
-   screen, not a crash.
-6. **The total is exactly 17.49** — `Decimal`, not `Double`, so no `17.490000000000002`.
+   should still fail loudly, as an error and not a crash.
 
-I wouldn't test `URLSession` or `JSONDecoder` themselves; they are Apple's. The interesting logic
-is in our `init(from:)` and the view model.
-
-**The seam.** Decoding is a plain static function, `MenuService.decode(_:)`, so the fixture goes
-straight in — no network, nothing to fake. For the view model the seam is the `MenuLoading`
-protocol: a *fake* loader returns whatever page or error the test chooses.
+No seam needed: `getItemData` is a static function, so the fixture goes straight in. I wouldn't
+test `URLSession` or `JSONDecoder` themselves; they are Apple's.
 
 ```swift
-import Testing
 import Foundation
+import Testing
 
-/// The response from the chapter, kept as a fixture.
+/// The response from the bug report, kept as a fixture.
 let sampleMenu = Data("""
 {
   "store_id": "s-42",
@@ -327,92 +270,53 @@ let sampleMenu = Data("""
 }
 """.utf8)
 
-/// A fake loader: hands back whatever result the test chose. No network.
-struct FakeMenuLoader: MenuLoading {
-    let result: Result<MenuPage, any Error>
-
-    func menu(storeID: String) async throws -> MenuPage { try result.get() }
-}
-
 struct MenuDecodingTests {
-    @Test func goodItemsDecodeWithTheRightKeysDatesAndPrices() async throws {
-        let page = try await MenuService.decode(sampleMenu)
+    @Test func theResponseThatCrashedDecodes() throws {
+        let items = try MenuViewModel.getItemData(sampleMenu)
 
-        #expect(page.storeID == "s-42")
-        #expect(page.items.map(\.id) == [1, 2])
-        #expect(page.items.map(\.name) == ["Margherita", "Garlic bread"])
-        #expect(page.items[0].price == Decimal(string: "12.99"))
-        #expect(page.items[0].createdAt == (try Date("2026-10-01T18:30:00Z", strategy: .iso8601)))
+        #expect(items.map(\.displayName) == ["Margherita", "Garlic bread"])
+        #expect(items[0].createdAt == (try Date("2026-10-01T18:30:00Z", strategy: .iso8601)))
+        #expect(items.reduce(0) { $0 + $1.price } == Decimal(string: "17.49"))
     }
 
-    @Test func nullPriceItemIsSkippedAndRecorded() async throws {
-        let page = try await MenuService.decode(sampleMenu)
+    @Test func itemWithNullPriceIsSkipped() throws {
+        let items = try MenuViewModel.getItemData(sampleMenu)
 
-        #expect(!page.items.contains { $0.id == 3 })
-        #expect(page.skipped.count == 1)
-        guard case DecodingError.valueNotFound(_, let context) = try #require(page.skipped.first) else {
-            Issue.record("Expected valueNotFound, got \(page.skipped)")
-            return
-        }
-        #expect(context.codingPath.last?.stringValue == "price")
+        #expect(items.map(\.itemId) == [1, 2])
     }
 
-    @Test func missingDescriptionIsNil() async throws {
-        let page = try await MenuService.decode(sampleMenu)
+    @Test func missingDescriptionIsNil() throws {
+        let items = try MenuViewModel.getItemData(sampleMenu)
 
-        #expect(page.items[0].description == "Tomato, mozzarella, basil")
-        #expect(page.items[1].description == nil)
+        #expect(items[0].description == "Tomato, mozzarella, basil")
+        #expect(items[1].description == nil)
     }
 
-    @Test func responseWithoutStoreIDThrows() async {
+    @Test func responseWithoutStoreIDThrows() {
         let noStore = Data(#"{ "items": [] }"#.utf8)
 
-        await #expect(throws: DecodingError.self) { try await MenuService.decode(noStore) }
-    }
-}
-
-@MainActor
-struct MenuViewModelTests {
-    @Test func loaderErrorEndsInFailed() async {
-        let viewModel = MenuViewModel(loader: FakeMenuLoader(result: .failure(URLError(.badServerResponse))))
-
-        await viewModel.load(storeID: "s-42")
-
-        guard case .failed = viewModel.state else {
-            Issue.record("Expected .failed, got \(viewModel.state)")
-            return
-        }
-        #expect(viewModel.total == 0)
-    }
-
-    @Test func totalIsExactly1749() async throws {
-        let page = try await MenuService.decode(sampleMenu)
-        let viewModel = MenuViewModel(loader: FakeMenuLoader(result: .success(page)))
-
-        await viewModel.load(storeID: "s-42")
-
-        #expect(viewModel.total == Decimal(string: "17.49"))
+        #expect(throws: DecodingError.self) { try MenuViewModel.getItemData(noStore) }
     }
 }
 ```
 
-Ran with Swift 6.4: 6 tests, all passed.
+Ran with Swift 6.4: 4 tests, all passed.
 :::
 
 ::: What I'd ask next
 - *"Why not just make every field optional?"* — Then the decode never fails, and every screen is
   full of `if let`. Optional should mean "the server legitimately leaves this out", not "I didn't
   check."
-- *"The server sends dates with milliseconds — `2026-10-01T18:30:00.123Z`. Still fine?"* — On this
-  Mac's Foundation, `.iso8601` accepted it (I checked). Older OS versions have rejected fractional
-  seconds with that strategy, so test on your minimum iOS, and fall back to
-  `.custom` with `Date.ISO8601FormatStyle(includingFractionalSeconds: true)` if needed.
-- *"How would you test this without a server?"* — Commit the JSON as a test fixture and decode it
-  in a Swift Testing `@Test`, including a fixture with a broken item. Cheaper and faster than any
-  mock of `URLSession`.
-- *"Is `Decimal` from JSON always exact?"* — On this Mac, `12.99` decoded exactly. If the backend
-  can, send money as integer minor units (`1299`) plus a currency code, and the question goes away
-  on every OS.
+- *"The server sends dates with milliseconds — `2026-10-01T18:30:00.123Z`. Still fine?"* — With
+  Swift 6.4's Foundation, `.iso8601` accepted it (I checked). Older OS versions have rejected
+  fractional seconds with that strategy, so test on your minimum iOS, and fall back to `.custom`
+  with `Date.ISO8601FormatStyle(includingFractionalSeconds: true)` if needed.
+- *"Is `Decimal` from JSON always exact?"* — With Swift 6.4's Foundation, `12.99` decoded exactly,
+  which is why the 17.49 check passes. Older Foundation versions went through `Double` first and
+  gave `12.990000000000002`; there, compare in cents. Better still, have the backend send integer
+  minor units (`1299`) plus a currency code, and the question goes away on every OS.
+- *"How would you log the skipped items?"* — Make `Lossy` keep a `Result` instead of an optional,
+  and log each failure's coding path. You'll notice when the backend starts sending broken items.
 - *"When is a lossy decode the wrong call?"* — When a partial list is worse than none: a list of
   payment methods, a cart total, anything a user signs off on. Then fail loudly.
 :::

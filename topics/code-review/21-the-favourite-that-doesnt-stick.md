@@ -9,10 +9,8 @@ sources:
 ---
 
 *Shape: review, then extend · Reported: Swiggy — a favourite button on the detail screen "with a
-mirrored version on the first screen… all synchronized" · UIKit snippet typechecks cleanly against
-the iOS SDK (iOS 18 target) in both Swift 5 and Swift 6 mode (the bugs are logic, not compiler-visible). The fix:
-SwiftUI views typecheck against the iOS SDK (iOS 18 target) in Swift 6 mode with zero warnings; the store and its
-persistence were compiled and run with Swift 6.4 in a harness; on-screen behaviour checked by hand*
+mirrored version on the first screen… all synchronized" · Verified: fix and tests run on the iOS
+Simulator in Swift 6 mode (Swift 6.4)*
 
 > "A list of restaurants, each with a heart. Tap a row, you get the detail screen, which also has a
 > heart. QA says: favourite something on the detail screen, go back — sometimes the list is right,
@@ -92,33 +90,44 @@ final class RestaurantDetailViewController: UIViewController {
 :::
 
 ::: The key — what I expect a senior to find
-1. **The wrong restaurant gets the heart.** The callback captured `indexPath` when the row was
-   tapped. If the list re-sorts or refreshes while the detail is open, row 0 is now a different
-   restaurant, and that one is changed. If the list got shorter, it's an out-of-range crash. A
-   two-line simulation of "copy, toggle, re-sort, write back by index" printed
-   `["sushi=true", "pizza=false"]` — sushi got pizza's heart. Identify by `id`, never by position.
-2. **The detail screen edits a copy.** `Restaurant` is a struct, so the detail gets its own copy.
-   Toggling there changes nothing the list can see. The callback papers over it — but only on the
-   back button.
-3. **Changes flow back only one way, and only sometimes.** `onFavouriteChanged` fires in
-   `viewWillDisappear` when popping. Push a menu screen from the detail and the list stays stale;
-   open the same detail from search or a deep link and there's no callback at all, so the change is
-   simply lost. On iPad in a split view both screens are visible and visibly disagree.
-4. **A refresh wipes favourites.** `reload(with:)` replaces the array with the server's copy, and
-   its `isFavourite` knows nothing about local taps. That's QA's "doesn't stick".
-5. **Nothing is persisted.** Relaunch and every favourite is gone.
-6. **Two — really, N — sources of truth.** Every copy of a `Restaurant` holds its own
-   `isFavourite`. The fix isn't more syncing code; it's one owner.
-7. **The detail opens with the wrong heart.** `updateButton()` only runs after a tap, so a
-   favourited restaurant shows an empty heart until you tap it — which then un-favourites it.
-8. **`sender.tag` as a row index.** Same stale-position bug as 1 for the list's own button, and it
-   breaks the moment there's a second section.
-9. **`var restaurant: Restaurant!`** — push the screen without setting it and it crashes. Pass it in
+The data-source methods are left out of the snippet; I'd say out loud that I assume
+`cellForRowAt` sets each heart's `tag` and image.
+
+1. **The wrong restaurant gets the heart — or a crash.** QA's bug, and the worst one. The callback
+   captured `indexPath` when the row was tapped. If the array changes while the detail is open — a
+   background reload, a push or socket update, an iPad split view — row 0 is now another restaurant,
+   and that one gets the heart. If the list got shorter, the write is out of range and the app
+   crashes. Find the restaurant by `id`, never by position.
+2. **`var restaurant: Restaurant!`** — push the detail without setting it and it crashes. Pass it in
    `init`.
-10. **Server data and user state in one model.** Name and rating come from the API; "my favourite"
-    is the user's. Keep them apart, keyed by `id`.
-11. **No accessibility label on the heart** — VoiceOver reads "heart, button" and never says whether
+3. **One missing field blanks the whole list.** `isFavourite` is a non-optional `Bool` in a
+   `Decodable` type. If the API doesn't send it — and why would the server know my local hearts? —
+   decoding the array throws `keyNotFound` and the user sees nothing. Take it out of the model.
+4. **The detail screen edits a copy.** `Restaurant` is a struct, so the detail gets its own copy.
+   Toggling there changes nothing the list can see. The callback papers over it, but only on "back".
+5. **Changes flow back only one way, and only sometimes.** `onFavouriteChanged` fires in
+   `viewWillDisappear` when popping. Push another screen from the detail and the list stays stale.
+   Open the same detail from search or a deep link and there's no callback at all.
+6. **A refresh wipes favourites.** `reload(with:)` replaces the array with the server's copy, which
+   knows nothing about local taps. That's QA's "doesn't stick".
+7. **Nothing is persisted.** Relaunch and every favourite is gone.
+8. **The detail opens with the wrong heart.** `updateButton()` only runs after a tap, so a favourite
+   shows an empty heart until you tap it — which then un-favourites it.
+9. **The detail's heart can't be tapped.** `favouriteButton` is never added to the view and never
+   gets a target. Maybe that's elided; I'd ask, because as written it does nothing.
+10. **`sender.tag` as a row index.** The same stale-position bug as 1, for the list's own button, and
+    it breaks the moment there's a second section. Ask the table which row the button is in.
+11. **N sources of truth.** Every copy of a `Restaurant` holds its own `isFavourite`, and server data
+    is mixed with user state. The fix isn't more syncing code; it's one owner, keyed by `id`.
+12. **No accessibility label on the heart.** VoiceOver reads "heart, button" and never says whether
     it's on.
+13. **Ties follow the server's order.** Swift's `sort` is stable, so equal ratings keep the order they
+    arrived in — and after a refresh that order can change, so rows swap. Add a tie-breaker (name,
+    then `id`) if the order should hold still.
+14. **`rating` is `var` for no reason.** Server data the app never edits should be `let`.
+15. **Not a bug: `self` in the `didSelectRowAt` closure.** The detail holds the closure, the
+    navigation stack holds the detail, and the list holds neither — so there's no cycle, and it
+    goes away on pop. Saying "this is fine, and here's why" scores too.
 :::
 
 ::: The idea behind it
@@ -132,292 +141,202 @@ Nobody can edit your copy behind your back. But "is this a favourite?" is state 
 *share*. Copy it into each screen and you've made two answers to one question, and now something
 must keep them equal. That something is the buggy callback.
 
-The fix is a *single source of truth*: one object owns the answer, everyone else asks it. It's a
-reference type, so both screens hold the same one. It's *observable* — screens get told when it
-changes, so they redraw without being called. And it's keyed by `id`, so the order of any list
-doesn't matter.
+The fix is a *single source of truth*: one object owns the answer, and everyone else asks it when
+they draw. It's a reference type, so both screens hold the same one. It's keyed by `id`, so the
+order of any list doesn't matter. And it saves on every change, so a relaunch reads the same answer.
 
 Think of a shared calendar versus everyone writing the meeting time on a sticky note. Move the
 meeting and the sticky notes are all wrong. The calendar just shows the new time.
 :::
 
-::: The version I'd ship
-The store — the only place that knows what is a favourite:
-
+::: The fix
 ```swift
-import Foundation
-import Observation
-
-struct Restaurant: Identifiable, Hashable, Sendable, Decodable {
+struct Restaurant: Decodable {
     let id: String
     let name: String
-    let rating: Double
+    let rating: Double                                   // key 3, 11, 14: no isFavourite
 }
 
-protocol FavoritesPersisting {      // used only from the main-actor store
-    func load() -> Set<Restaurant.ID>
-    func save(_ ids: Set<Restaurant.ID>)
-}
-
-struct UserDefaultsFavoritesPersistence: FavoritesPersisting {
-    private let defaults: UserDefaults
-    private let key = "favorites.restaurantIDs"
-
-    init(defaults: UserDefaults) { self.defaults = defaults }
-
-    func load() -> Set<Restaurant.ID> { Set(defaults.stringArray(forKey: key) ?? []) }
-    func save(_ ids: Set<Restaurant.ID>) { defaults.set(ids.sorted(), forKey: key) }
-}
-
-/// The one place that knows what is a favourite. Both screens read and write it.
+/// The one place that knows what is a favourite. Both screens ask it.
 @MainActor
-@Observable
-final class FavoritesStore {
-    private(set) var ids: Set<Restaurant.ID>
-    @ObservationIgnored private let persistence: FavoritesPersisting
+final class FavouritesStore {                            // key 4–7, 11
+    private let defaults: UserDefaults
+    private let key = "favourites.restaurantIDs"
+    private var ids: Set<String>
 
-    init(persistence: FavoritesPersisting) {
-        self.persistence = persistence
-        self.ids = persistence.load()
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        ids = Set(defaults.stringArray(forKey: key) ?? [])
     }
 
-    func isFavorite(_ id: Restaurant.ID) -> Bool { ids.contains(id) }
+    func isFavourite(_ id: String) -> Bool { ids.contains(id) }
 
-    func toggle(_ id: Restaurant.ID) {
+    func toggle(_ id: String) {
         if ids.remove(id) == nil { ids.insert(id) }
-        persistence.save(ids)
+        defaults.set(ids.sorted(), forKey: key)          // key 7: saved on every tap
+    }
+}
+
+final class RestaurantListViewController: UITableViewController {
+    var restaurants: [Restaurant] = []
+    private let favourites: FavouritesStore
+
+    init(favourites: FavouritesStore) {
+        self.favourites = favourites
+        super.init(style: .plain)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewWillAppear(_ animated: Bool) {     // key 5: redraw hearts on the way back
+        super.viewWillAppear(animated)
+        tableView.reloadRows(at: tableView.indexPathsForVisibleRows ?? [], with: .none)
+    }
+
+    // sortByRating() and reload(with:) unchanged
+
+    @objc func favouriteTapped(_ sender: UIButton) {     // key 10: the row under the button, now
+        let point = sender.convert(CGPoint.zero, to: tableView)
+        guard let indexPath = tableView.indexPathForRow(at: point) else { return }
+        favourites.toggle(restaurants[indexPath.row].id)
+        tableView.reloadRows(at: [indexPath], with: .none)
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let detail = RestaurantDetailViewController(      // key 1, 4: no index, no callback
+            restaurant: restaurants[indexPath.row], favourites: favourites)
+        navigationController?.pushViewController(detail, animated: true)
+    }
+}
+
+final class RestaurantDetailViewController: UIViewController {
+    private let restaurant: Restaurant                   // key 2: no `!`
+    private let favourites: FavouritesStore
+    private let favouriteButton = UIButton(type: .system)
+
+    init(restaurant: Restaurant, favourites: FavouritesStore) {
+        self.restaurant = restaurant
+        self.favourites = favourites
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        favouriteButton.addTarget(self, action: #selector(favouriteTapped), for: .touchUpInside)
+        view.addSubview(favouriteButton)                 // key 9 (layout left out)
+        updateButton()                                   // key 8: the right heart on open
+    }
+
+    @objc func favouriteTapped() {
+        favourites.toggle(restaurant.id)
+        updateButton()
+    }
+
+    private func updateButton() {
+        let isFavourite = favourites.isFavourite(restaurant.id)
+        favouriteButton.setImage(UIImage(systemName: isFavourite ? "heart.fill" : "heart"), for: .normal)
+        favouriteButton.accessibilityLabel = isFavourite ? "Remove from favourites" : "Add to favourites"
     }
 }
 ```
 
-The screens — both get the same store:
+**Said out loud, not coded:** make the store `@Observable` (or give it a small observer list) so
+an iPad split view updates live · move both screens to SwiftUI with a `NavigationStack` · a
+tie-breaker in `sortByRating()` · sync favourites with the server later.
 
-```swift
-import SwiftUI
-
-struct RestaurantListView: View {
-    let restaurants: [Restaurant]
-    let favorites: FavoritesStore
-
-    var body: some View {
-        NavigationStack {
-            List(restaurants) { restaurant in
-                NavigationLink(value: restaurant) {
-                    HStack {
-                        Text(restaurant.name)
-                        Spacer()
-                        FavoriteButton(id: restaurant.id, favorites: favorites)
-                    }
-                }
-            }
-            .navigationTitle("Restaurants")
-            .navigationDestination(for: Restaurant.self) { restaurant in
-                RestaurantDetailView(restaurant: restaurant, favorites: favorites)
-            }
-        }
-    }
-}
-
-struct RestaurantDetailView: View {
-    let restaurant: Restaurant          // a copy is fine: nothing here changes
-    let favorites: FavoritesStore       // the shared, changing part is a reference
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text(restaurant.name).font(.largeTitle)
-            FavoriteButton(id: restaurant.id, favorites: favorites)
-                .font(.title)
-        }
-        .navigationTitle(restaurant.name)
-    }
-}
-
-struct FavoriteButton: View {
-    let id: Restaurant.ID
-    let favorites: FavoritesStore
-
-    var body: some View {
-        let isFavorite = favorites.isFavorite(id)       // read in body → tracked
-        Button {
-            favorites.toggle(id)
-        } label: {
-            Image(systemName: isFavorite ? "heart.fill" : "heart")
-        }
-        .buttonStyle(.borderless)                        // tap the heart, not the row
-        .accessibilityLabel(isFavorite ? "Remove from favourites" : "Add to favourites")
-    }
-}
-```
-
-What the store harness printed (an in-memory persistence fake, two functions standing in for the
-list row and the detail, `withObservationTracking` standing in for SwiftUI):
-
-```text
-list row told to redraw
-list:   pizza ♥
-detail: pizza ♥
-ids: ["pizza", "sushi"]
-after relaunch: ["pizza", "sushi"]
-toggle off: ["sushi"] saved: ["sushi"]
-UserDefaults round trip: ["ramen"]
-```
-
-A toggle from the "detail" told the "list row" to redraw, and both read the same answer. A new store
-built from the same persistence — a relaunch — came back with the same favourites, through a real
-`UserDefaults` suite too.
-
-Why each piece:
-
-- **One `FavoritesStore`, keyed by `id`** — the single source of truth. Sorting, refreshing or opening
-  the detail from a deep link can't desync it, because nothing holds a copy of the answer.
-- **`@Observable`, not a delegate, closure or notification** — a *delegate* is one-to-one, and here
-  any number of screens care. A closure is what broke: it captured a position. `NotificationCenter`
-  works for many listeners but is stringly typed and every screen must remember to subscribe and
-  reload. With `@Observable`, a view that *reads* `isFavorite(id)` in `body` is redrawn when `ids`
-  changes — nothing to forget. (UIKit on iOS 26 also tracks `@Observable` reads made in
-  `layoutSubviews()` or `updateProperties()`; on older UIKit I'd give the store a small typed
-  observer list or a Combine publisher, for the same reason.)
-- **`Restaurant` loses `isFavourite`** — server data stays a plain, immutable value. A refresh can
-  replace every restaurant and no heart moves.
-- **`@MainActor` on the store** — UI state, written from taps, read in `body`. Being on main also
-  lets it hold `UserDefaults`, which isn't `Sendable`.
-- **Persistence behind a protocol** — the store doesn't know about `UserDefaults`; the test injects
-  an in-memory fake, and switching to a file or SwiftData later touches one type.
-- **`.buttonStyle(.borderless)`** — inside a `List` row, a default-styled button makes the whole
-  row its tap target; borderless keeps the heart tap separate from the navigation.
+- **Why a class keyed by `id`.** Both screens hold the same object, so there's nothing to copy back
+  and no position to go stale. A refresh can replace every restaurant and no heart moves.
+- **Why `UserDefaults` is injected.** The app passes `.standard`; the tests pass a private suite.
+  That's the only seam, and the tests need nothing more.
+- **Why `viewWillAppear` and not a callback.** However the user got to the detail and back — pop,
+  search, deep link — the list redraws its visible hearts from the store when it reappears.
+- **Why `@MainActor` on the store.** It's UI state, touched from taps, and being on main lets it
+  hold `UserDefaults`, which isn't `Sendable`.
 :::
 
 ::: Now write the tests
 > "Good. Now write me a few tests for the store — the ones you'd want before merging."
 
-What I'd test, and why:
+**What I'd test, and why**
 
-1. **A refresh doesn't move a heart.** The list comes back in a new order, with new data and a new
-   restaurant. The heart must stay on pizza and only pizza. That's QA's "wrong restaurant gets the
-   heart", and keying by `id` is what fixes it.
-2. **Toggle turns a favourite on, then off.** The basic contract.
-3. **A toggle is saved straight away**, not on some later "back" or "background" event.
-4. **Favourites survive a relaunch.** A new store built from the same persistence reads them back.
-   That's the "gone after a relaunch" bug.
-5. **A toggle tells readers to redraw.** This is how the list hears about a tap on the detail
-   screen. `withObservationTracking` does in a test what SwiftUI does in `body`: it records what was
-   read and calls back when it changes.
-6. **The real `UserDefaults` persistence round-trips.** One test against the real thing.
+1. **Favourites survive a relaunch** — QA's "gone after a relaunch". A second store built on the
+   same defaults is what a relaunch looks like.
+2. **Toggle turns a favourite on, then off** — the edge case: the second tap must remove it, on disk
+   too.
+3. **A toggle is saved straight away** — the regression guard. The old code only "saved" on the back
+   button; nothing may wait for a later event again.
 
-I wouldn't unit-test the views: they hold no logic, they just read the store. Whether the heart
-looks right is a job for a preview.
-
-**The seam.** The store takes `FavoritesPersisting` in `init`, so the tests pass a *fake* — a tiny
-in-memory stand-in that remembers what was "saved". No disk, nothing left behind, same result every
-run. For the last test a real `UserDefaults` is fine: it's fast and local. I give it its own suite
-name, so it never touches the app's real defaults, and delete it at the end.
+I use a real `UserDefaults`, not a fake: it's fast and local. Each test gets its own suite name, so
+it never touches the app's defaults, and deletes it at the end. The view controllers hold no logic
+worth a unit test now; they ask the store.
 
 ```swift
 import Foundation
-import Observation
 import Testing
 
-// A fake: keeps the "saved" ids in memory instead of on disk.
-final class InMemoryFavorites: FavoritesPersisting {
-    var stored: Set<Restaurant.ID> = []
-    func load() -> Set<Restaurant.ID> { stored }
-    func save(_ ids: Set<Restaurant.ID>) { stored = ids }
-}
-
 @MainActor
-struct FavoritesStoreTests {
-    @Test func refreshDoesNotMoveTheHeart() {
-        // Given pizza is a favourite
-        let store = FavoritesStore(persistence: InMemoryFavorites())
-        store.toggle("pizza")
-
-        // When a refresh brings the list back in a new order, with new data
-        let refreshed = [
-            Restaurant(id: "sushi", name: "Sushi", rating: 4.8),
-            Restaurant(id: "ramen", name: "Ramen", rating: 4.5),
-            Restaurant(id: "pizza", name: "Pizza", rating: 4.1),
-        ]
-
-        // Then the heart is still on pizza, and only on pizza
-        #expect(refreshed.filter { store.isFavorite($0.id) }.map(\.name) == ["Pizza"])
+struct FavouritesStoreTests {
+    /// Real UserDefaults, but a private suite: not the app's, and deleted afterwards.
+    private func makeDefaults() throws -> (UserDefaults, String) {
+        let suite = "FavouritesStoreTests.\(UUID().uuidString)"
+        return (try #require(UserDefaults(suiteName: suite)), suite)
     }
 
-    @Test func toggleTurnsAFavouriteOnAndOff() {
-        let store = FavoritesStore(persistence: InMemoryFavorites())
-
-        store.toggle("pizza")
-        #expect(store.isFavorite("pizza"))
-
-        store.toggle("pizza")
-        #expect(!store.isFavorite("pizza"))
-    }
-
-    @Test func toggleSavesStraightAway() {
-        let persistence = InMemoryFavorites()
-        let store = FavoritesStore(persistence: persistence)
-
-        store.toggle("pizza")
-        store.toggle("sushi")
-
-        #expect(persistence.stored == ["pizza", "sushi"])
-    }
-
-    @Test func favouritesSurviveARelaunch() {
-        // Given favourites saved by one store
-        let persistence = InMemoryFavorites()
-        FavoritesStore(persistence: persistence).toggle("pizza")
-
-        // When the app relaunches and builds a new store
-        let relaunched = FavoritesStore(persistence: persistence)
-
-        // Then it reads them back
-        #expect(relaunched.ids == ["pizza"])
-    }
-
-    @Test func toggleTellsReadersToRedraw() async {
-        // Given a "list row" that has read pizza's heart
-        let store = FavoritesStore(persistence: InMemoryFavorites())
-
-        // When the "detail screen" toggles it, the row is told to redraw
-        await confirmation { redraw in
-            withObservationTracking {
-                _ = store.isFavorite("pizza")
-            } onChange: {
-                redraw()
-            }
-            store.toggle("pizza")
-        }
-    }
-
-    @Test func userDefaultsPersistenceRoundTrips() throws {
-        // A private suite: real UserDefaults, but not the app's own, and deleted afterwards.
-        let suite = "FavoritesStoreTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+    @Test func favouritesSurviveARelaunch() throws {
+        let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        FavoritesStore(persistence: UserDefaultsFavoritesPersistence(defaults: defaults)).toggle("ramen")
-        let relaunched = FavoritesStore(persistence: UserDefaultsFavoritesPersistence(defaults: defaults))
+        FavouritesStore(defaults: defaults).toggle("pizza")
+        let relaunched = FavouritesStore(defaults: defaults)     // a new store = a relaunch
 
-        #expect(relaunched.ids == ["ramen"])
+        #expect(relaunched.isFavourite("pizza"))
+        #expect(!relaunched.isFavourite("sushi"))
+    }
+
+    @Test func toggleTurnsAFavouriteOnAndOff() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = FavouritesStore(defaults: defaults)
+
+        store.toggle("pizza")
+        #expect(store.isFavourite("pizza"))
+
+        store.toggle("pizza")
+        #expect(!store.isFavourite("pizza"))
+        #expect(!FavouritesStore(defaults: defaults).isFavourite("pizza"))
+    }
+
+    @Test func toggleSavesStraightAway() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let store = FavouritesStore(defaults: defaults)
+        store.toggle("sushi")
+        store.toggle("pizza")
+
+        // No "back" or "background" event happened — it's already on disk.
+        #expect(defaults.stringArray(forKey: "favourites.restaurantIDs") == ["pizza", "sushi"])
     }
 }
 ```
 
-Ran with Swift 6.4: 6 tests, all passed.
+Ran on the iOS Simulator (Swift 6 mode): 3 tests, all passed.
 :::
 
 ::: What I'd ask next
-- *"How would the views get the store without passing it everywhere?"* — `.environment(store)` at
-  the root and `@Environment(FavoritesStore.self) private var favorites` where needed. Fine for an
-  app-wide store; explicit init parameters are clearer in a review and easier to preview.
+- *"On iPad both screens are visible at once. Make the list update live."* — Make the store
+  `@Observable` and read `isFavourite` in the cell's `updateProperties()`; on iOS 26 UIKit tracks
+  that read and redraws the cell when it changes. On older UIKit, give the store a small observer list or post a typed
+  notification, and have the list reload the changed row.
+- *"Now move it to SwiftUI."* — The store becomes `@Observable`, both views read
+  `isFavourite(id)` in `body`, and the heart redraws everywhere with no extra code. Inject it with
+  `.environment(store)` at the root, or as an `init` parameter.
 - *"Favourites must sync with the server."* — Keep the store as the truth the UI reads. Toggle
   optimistically, send the change, and roll back with a message if it fails. On launch, merge server
-  and local sets; decide the conflict rule (last write wins, with a timestamp per id).
-- *"Is `UserDefaults` the right place?"* — For a few hundred ids, yes: it's small, local, and not
-  sensitive. Thousands, or data with more fields, move to a file or SwiftData.
-- *"Why not make `Restaurant` a class so the copy problem goes away?"* — Then every screen can mutate
-  server data behind every other screen's back, and SwiftUI's diffing gets harder. Keep data as
-  values; put shared mutable state in one deliberate reference.
-- *"How would you test it?"* — The store with an in-memory persistence fake, as above: toggle, assert
-  `ids`, build a second store from the same fake, assert it reloaded. The views hold no logic.
+  and local sets, and decide the conflict rule (last write wins, with a timestamp per id).
+- *"Is `UserDefaults` the right place?"* — For a few hundred ids, yes: small, local, not sensitive.
+  Thousands, or records with more fields, move to a file or SwiftData.
+- *"Why not make `Restaurant` a class so the copy problem goes away?"* — Then every screen can change
+  server data behind every other screen's back. Keep data as values; put shared, changing state in
+  one deliberate reference.
 :::

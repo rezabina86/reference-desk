@@ -8,11 +8,10 @@ sources:
 - Apple · SwiftUI View — the task modifier is cancelled when the view disappears | https://developer.apple.com/documentation/swiftui/view
 ---
 
-*Shape: review this PR · **Likely**, not reported: no first-hand report names a SwiftUI snippet,
-but most scale-ups now build new screens in SwiftUI · SwiftUI — the fix typechecks against the iOS SDK (iOS 18 target) in Swift 6 mode; behaviour checked by hand*
+*Shape: review this PR · Reported: not reported — **likely**, as most teams now build new screens in SwiftUI · Verified: the snippet compiles clean in Swift 6 mode, the fix typechecks for iOS 18 and its model tests ran on macOS, Swift 6.4*
 
 > "Users say the list sometimes empties itself and reloads when they come back from a detail
-> screen, the search is case-sensitive, and scrolling stutters on long accounts. Review it."
+> screen, the search is case-sensitive, and typing in search stutters on long accounts. Review it."
 
 ```swift
 struct TransactionsScreen: View {
@@ -56,32 +55,51 @@ final class TransactionsModel: ObservableObject {
 - When the parent view redraws, does this view create a new `TransactionsModel`? Who owns it?
 - `.onAppear` fires again when you come back from a detail screen. What does `load()` do then?
 - Two transactions both called "Coffee": what does `id: \.title` mean to SwiftUI?
-- What work runs every single time `body` is evaluated?
+- Tap the empty space between the title and the date. What happens?
+- What work runs every time you type one letter into the search field?
 :::
 
-::: The key
-1. **The model is recreated.** `@ObservedObject` with a default value doesn't own the object;
-   every time the parent re-renders, a fresh empty `TransactionsModel` is created. That's the list
-   emptying itself. Use `@StateObject` (or an `@Observable` model in `@State`).
-2. **Published state changed off the main actor.** The model isn't `@MainActor`, so `items` is set
-   from a background executor — a runtime warning today, a compile error in Swift 6.
-3. **Reload on every appearance.** `.onAppear` fires again on returning from the detail screen; the
-   request isn't cancelled if the user leaves. Use `.task`, which runs once per appearance and
-   cancels on disappear — and decide whether coming back should reload at all.
-4. **Errors become an empty list.** `try?` plus `?? []` tells the user "no transactions" when the
-   network failed. In a banking app that's alarming. Add an error state.
-5. **Duplicate titles break identity.** `id: \.title` — two "Coffee" rows share an id, so SwiftUI
+::: The key — what I expect a senior to find
+The first item is the reported "list empties itself" bug, so it leads.
+
+1. **The model is recreated.** `@ObservedObject` with a default value doesn't own the object. Every
+   time the parent re-renders, a fresh, empty `TransactionsModel` is made — the list "forgets". Use
+   `@StateObject` (or an `@Observable` model held in `@State`).
+2. **Published state is written off the main thread.** The model isn't `@MainActor`, so the `Task`
+   in `load()` sets `items` from a background thread. At run time that's a purple warning ("Publishing
+   changes from background threads is not allowed"). The compiler doesn't catch it here — this snippet
+   compiles clean in Swift 6 mode, and whether it ever does depends on the Swift version and the
+   target's default isolation. Annotate the model `@MainActor`.
+3. **Loads overlap, and the older one can win.** `.onAppear` fires again on coming back from a
+   detail screen, so a second load starts while the first may still run. Whichever reply arrives
+   last wins, even if it's older. Use `.task`, which cancels its work when the view disappears.
+4. **The request outlives the screen.** The unstructured `Task` holds `self` strongly and nothing
+   cancels it, so the model stays alive and keeps working after the user leaves. `.task` ties the
+   work to the view's lifetime.
+5. **Errors become an empty list.** `try?` plus `?? []` tells the user "no transactions" when the
+   network failed. In a banking app that's alarming. Keep the error and show it.
+6. **Duplicate titles break identity.** `id: \.title` — two "Coffee" rows share an id, so SwiftUI
    mixes up rows, animations and taps. Make `Transaction` `Identifiable` on its real id.
-6. **A `DateFormatter` per render.** Formatters are expensive and `body` runs often. Use
-   `Text(item.date, format: .dateTime.day().month().year())` or a static formatter.
-7. **Filtering inside `body`** runs on every render, for every keystroke and every unrelated state
-   change. Fine for a few hundred rows; for long accounts move it into the model and recompute only
-   when the query or the data changes (or filter server-side).
-8. **Case-sensitive search.** `contains` misses "coffee" for "Coffee". Use
-   `localizedStandardContains`, which also ignores diacritics.
-9. **Tap gesture instead of a button.** `onTapGesture` gives VoiceOver no button trait and no
-   highlight. Use `Button` or a `NavigationLink`.
-10. **Global `TransactionsAPI.fetch()`** — not injectable, so the model can't be tested.
+7. **Tapping the gap does nothing.** `.onTapGesture` on an `HStack` only hit-tests the parts that
+   draw something; the `Spacer` draws nothing, so the middle of the row ignores taps. It also gives
+   VoiceOver no button trait. Use a `Button` (or add `.contentShape(Rectangle())`).
+8. **Search is case-sensitive.** `contains` misses "coffee" for "Coffee". Use
+   `localizedStandardContains`, which also ignores accents — "cafe" finds "Café".
+9. **No loading state.** The first launch shows a blank list, which looks exactly like "you have no
+   transactions". Show a spinner until the first answer.
+10. **No pull to refresh.** The only way to reload is to leave and come back. Add `.refreshable`,
+    which needs an `async` load.
+11. **`load()` isn't `async`.** It starts a task and returns at once, so nobody can await it: not
+    `.task`, not `.refreshable`, not a test. Make it `func load() async`.
+12. **Global `TransactionsAPI.fetch()`.** It can't be swapped, so the model can't be tested without
+    a network. Inject it.
+13. **Typing stutters on long accounts.** Each letter changes `query`, so `body` runs again: it
+    filters the whole array and SwiftUI re-diffs the list. Fine for a page; for thousands of rows,
+    filter in the model, debounce, or search server-side.
+14. **A `DateFormatter` built on every render.** Formatters are slow to create and `body` runs on
+    every keystroke. Use `Text(item.date, format: .dateTime.day().month().year())`.
+15. **Access control.** `items` can be set from outside the model, and `model` is a public-ish
+    `var` a parent could replace. Make them `private(set)` and `private`.
 :::
 
 ::: The idea behind it
@@ -103,237 +121,204 @@ work once, somewhere else.
 
 ::: The fix
 ```swift
-@MainActor
-@Observable
-final class TransactionsModel {
-    enum State { case loading, loaded([Transaction]), failed(String) }
-
-    private(set) var state: State = .loading
-    private let api: TransactionsFetching
-
-    init(api: TransactionsFetching) { self.api = api }
-
-    func load() async {
-        do {
-            state = .loaded(try await api.fetch())
-        } catch {
-            // .task is cancelled when a detail screen is pushed. URLSession reports that as
-            // URLError(.cancelled), not CancellationError, so check the task, not the error.
-            guard !Task.isCancelled else { return }
-            state = .failed(error.localizedDescription)
-        }
-    }
-}
+struct Transaction: Identifiable, Equatable { let id: UUID; let title: String; let date: Date }  // key 6
 
 struct TransactionsScreen: View {
-    @State private var model: TransactionsModel
+    @StateObject private var model: TransactionsModel                 // keys 1, 15
     @State private var query = ""
 
-    init(api: TransactionsFetching) {
-        _model = State(initialValue: TransactionsModel(api: api))
+    init(fetch: @escaping @Sendable () async throws -> [Transaction] = TransactionsAPI.fetch) {
+        _model = StateObject(wrappedValue: TransactionsModel(fetch: fetch))   // key 12
     }
 
     var body: some View {
-        content
-            .searchable(text: $query)
-            .task { await model.load() }
-    }
-
-    @ViewBuilder private var content: some View {
-        switch model.state {
-        case .loading:
-            ProgressView()
-        case .failed(let message):
-            ContentUnavailableView("Couldn't load transactions",
-                                   systemImage: "exclamationmark.triangle",
-                                   description: Text(message))
-        case .loaded(let items):
-            // Needs a NavigationStack above with .navigationDestination(for: Transaction.self),
-            // or tapping a row does nothing.
-            List(Self.filtered(items, by: query)) { item in
-                NavigationLink(value: item) {
-                    LabeledContent(item.title) {
-                        Text(item.date, format: .dateTime.day().month().year())
-                    }
+        List(model.items(matching: query)) { item in                   // keys 6, 8, 13
+            Button { model.select(item) } label: {                     // key 7
+                HStack {
+                    Text(item.title)
+                    Spacer()
+                    Text(item.date, format: .dateTime.day().month().year())   // key 14
                 }
             }
         }
+        .overlay { if let message = model.error { Text(message) } }    // key 5
+        .searchable(text: $query)
+        .task { await model.load() }                                   // keys 3, 4
+    }
+}
+
+@MainActor                                                             // key 2
+final class TransactionsModel: ObservableObject {
+    @Published private(set) var items: [Transaction] = []              // key 15
+    @Published private(set) var error: String?                         // key 5
+    private let fetch: @Sendable () async throws -> [Transaction]
+
+    init(fetch: @escaping @Sendable () async throws -> [Transaction]) { self.fetch = fetch }
+
+    func load() async {                                                // key 11
+        do {
+            items = try await fetch()
+            error = nil
+        } catch {
+            guard !Task.isCancelled else { return }                    // leaving isn't an error
+            self.error = "Couldn't load transactions."
+        }
     }
 
-    static func filtered(_ items: [Transaction], by query: String) -> [Transaction] {
+    func items(matching query: String) -> [Transaction] {             // keys 8, 13
         query.isEmpty ? items : items.filter { $0.title.localizedStandardContains(query) }
     }
+
+    func select(_ item: Transaction) { /* … */ }
 }
 ```
 
-`.task` still runs again when you come back from a detail screen. That's now harmless: `load()`
-never resets the state to `.loading`, so the list stays on screen and refreshes in place. If coming
-back shouldn't refetch at all, start `load()` with `if case .loaded = state { return }`.
+**Said out loud, not coded:** an `@Observable` model in `@State` on iOS 17; a state enum
+(loading, loaded, failed) with a spinner and `ContentUnavailableView` for keys 5 and 9;
+`.refreshable { await model.load() }` (key 10, one line once `load()` is `async`); a debounced or
+server-side search and pagination for very long accounts.
 
-The filter stays in `body` on purpose: a page of transactions is small. Point 7 says when to move it.
+Why each piece:
 
-`@Observable` and `ContentUnavailableView` need iOS 17. On iOS 16, keep `ObservableObject` with
-`@StateObject` and a plain empty-state view — the fixes are the same.
+- **The closure with a default is the one seam.** Production passes `TransactionsAPI.fetch`, tests
+  pass their own closure. No protocol needed for one function.
+- **Check the task, not the error.** Pushing a detail screen cancels `.task`, and URLSession reports
+  that as `URLError(.cancelled)`, not `CancellationError`. `Task.isCancelled` catches both.
+- **`load()` never clears `items`.** `.task` still runs again when you come back. The old list stays
+  on screen and is replaced in place — no flash to empty.
+- **The filter moved into the model as a function of the query.** It's the same work, but it's
+  out of the view and a test can call it.
 :::
 
 ::: Now write the tests
 > "Good. Now write me a few tests for the model and the search — the ones you'd want before
 > merging."
 
-What I'd test, and why:
+**What I'd test, and why**
 
-1. **A cancelled load leaves the screen alone.** Push a detail screen mid-load and SwiftUI cancels
-   `.task`; URLSession throws `URLError(.cancelled)`. Without the `Task.isCancelled` check, the user
-   comes back to "Couldn't load transactions". That's the subtle bug in this fix, so it gets the
-   first test.
-2. **A reload keeps the list on screen.** Coming back from a detail screen runs `load()` again. The
-   list must stay visible while it waits — no flash to a spinner — and then update in place.
-3. **Success shows the list, failure shows the error.** The old code turned a network error into
-   an empty list. These two pin the new states.
-4. **Search ignores case and accents.** "coffee" finds "Coffee", "cafe" finds "Café". This was one
-   of the reported bugs.
+1. **A failed load shows an error, not an empty list.** That's the bug the old `try?` hid.
+2. **A cancelled load shows no error.** Push a detail screen mid-load and SwiftUI cancels `.task`;
+   URLSession throws `URLError(.cancelled)`. Without the `Task.isCancelled` check the user comes back
+   to "Couldn't load transactions". That's the edge case in this fix.
+3. **A reload keeps the list on screen.** Coming back runs `load()` again. The list must stay while
+   it waits, then update in place — the regression test for "the list empties itself".
+4. **Search ignores case and accents.** "coffee" finds "Coffee", "cafe" finds "Café". A reported bug.
 
-I wouldn't unit-test the view itself. `List`, `.task` and `.searchable` are Apple's code, and
-"does this row look right" is a job for a preview or a UI test, not a unit test.
+I wouldn't unit-test the view. `List`, `.task` and `.searchable` are Apple's code, and "does this
+row look right" is a job for a preview or a UI test. The `@StateObject` fix is checked by hand: push
+a detail screen, come back, and the list is still there.
 
-**The seam.** A *seam* is a place where a test can swap in its own piece. Here it's
-`TransactionsFetching`: the model takes it in `init`, so the tests pass a *fake* — a small
-stand-in that answers however the test wants, with no network. One fake answers at once. The other
-waits until the test says "answer now", so the test can cancel or check the screen *while* the load
-is in flight. No sleeps, so the tests are *deterministic*: same result every run. The filter was a
-private method on the view; I made it `static` and gave it the query as a parameter, so a test can
-call it without building a view.
+**The seam.** A *seam* is a place where a test can swap in its own piece. Here it's the `fetch`
+closure. Most tests pass a closure that answers at once. Two need the load to wait *in flight*, so
+`PendingFetch` holds the answer until the test gives it. `waitUntil` yields to other tasks a bounded
+number of times instead of sleeping, so the tests give the same result on every run.
 
 ```swift
 import Foundation
 import Testing
 
-// A fake that answers at once.
-struct StubFetcher: TransactionsFetching {
-    let result: Result<[Transaction], any Error>
-    func fetch() async throws -> [Transaction] { try result.get() }
-}
-
-// A fake that waits until the test says "answer now".
-actor ControlledFetcher: TransactionsFetching {
-    private var pending: CheckedContinuation<[Transaction], any Error>?
-    private var callWaiter: CheckedContinuation<Void, Never>?
+/// Holds the fetch open until the test answers it.
+actor PendingFetch {
+    private var continuation: CheckedContinuation<[Transaction], any Error>?
+    var isWaiting: Bool { continuation != nil }
 
     func fetch() async throws -> [Transaction] {
-        try await withCheckedThrowingContinuation { continuation in
-            pending = continuation
-            callWaiter?.resume()
-            callWaiter = nil
-        }
+        try await withCheckedThrowingContinuation { continuation = $0 }
     }
 
-    func waitUntilCalled() async {
-        if pending != nil { return }
-        await withCheckedContinuation { callWaiter = $0 }
+    func answer(_ result: Result<[Transaction], any Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
     }
+}
 
-    func finish(with result: Result<[Transaction], any Error>) {
-        pending?.resume(with: result)
-        pending = nil
+@MainActor
+func waitUntil(maxYields: Int = 1_000, _ condition: () async -> Bool) async {
+    for _ in 0..<maxYields {
+        if await condition() { return }
+        await Task.yield()
     }
+    Issue.record("Condition never became true")
 }
 
 func transaction(_ title: String) -> Transaction {
     Transaction(id: UUID(), title: title, date: .now)
 }
 
-extension TransactionsModel.State {
-    var items: [Transaction]? {
-        if case .loaded(let items) = self { items } else { nil }
-    }
-    var isLoading: Bool {
-        if case .loading = self { true } else { false }
-    }
-    var isFailed: Bool {
-        if case .failed = self { true } else { false }
-    }
-}
-
 @MainActor
 struct TransactionsModelTests {
-    @Test func cancelledLoadLeavesStateUntouched() async {
-        // Given a load that is waiting for the network
-        let fetcher = ControlledFetcher()
-        let model = TransactionsModel(api: fetcher)
-        let task = Task { await model.load() }
-        await fetcher.waitUntilCalled()
+    @Test func failedLoadShowsAnErrorNotAnEmptyList() async {
+        let model = TransactionsModel(fetch: { throw URLError(.notConnectedToInternet) })
 
-        // When the screen goes away and URLSession reports the cancel as an error
+        await model.load()
+
+        #expect(model.error == "Couldn't load transactions.")
+    }
+
+    @Test func cancelledLoadShowsNoError() async {
+        // Given a load waiting for the network
+        let pending = PendingFetch()
+        let model = TransactionsModel(fetch: { try await pending.fetch() })
+        let task = Task { await model.load() }
+        await waitUntil { await pending.isWaiting }
+
+        // When the user leaves and URLSession reports the cancel as an error
         task.cancel()
-        await fetcher.finish(with: .failure(URLError(.cancelled)))
+        await pending.answer(.failure(URLError(.cancelled)))
         await task.value
 
-        // Then no error screen appears
-        #expect(model.state.isLoading)
+        // Then no error appears
+        #expect(model.error == nil)
     }
 
     @Test func reloadKeepsTheListOnScreen() async {
         // Given a list that has loaded once
         let coffee = transaction("Coffee"), rent = transaction("Rent")
-        let fetcher = ControlledFetcher()
-        let model = TransactionsModel(api: fetcher)
+        let pending = PendingFetch()
+        let model = TransactionsModel(fetch: { try await pending.fetch() })
         let first = Task { await model.load() }
-        await fetcher.waitUntilCalled()
-        await fetcher.finish(with: .success([coffee]))
+        await waitUntil { await pending.isWaiting }
+        await pending.answer(.success([coffee]))
         await first.value
 
-        // When it loads again, as it does on coming back from a detail screen
+        // When it loads again, as .task does on coming back from a detail screen
         let second = Task { await model.load() }
-        await fetcher.waitUntilCalled()
+        await waitUntil { await pending.isWaiting }
 
         // Then the old list stays while we wait, and is replaced in place
-        #expect(model.state.items == [coffee])
-        await fetcher.finish(with: .success([coffee, rent]))
+        #expect(model.items == [coffee])
+        await pending.answer(.success([coffee, rent]))
         await second.value
-        #expect(model.state.items == [coffee, rent])
+        #expect(model.items == [coffee, rent])
     }
 
-    @Test func successfulLoadShowsTheList() async {
-        let coffee = transaction("Coffee")
-        let model = TransactionsModel(api: StubFetcher(result: .success([coffee])))
-
+    @Test func searchIgnoresCaseAndAccents() async {
+        let model = TransactionsModel(fetch: {
+            [transaction("Coffee"), transaction("Café Central"), transaction("Rent")]
+        })
         await model.load()
 
-        #expect(model.state.items == [coffee])
-    }
-
-    @Test func failedLoadShowsAnError() async {
-        let model = TransactionsModel(api: StubFetcher(result: .failure(URLError(.notConnectedToInternet))))
-
-        await model.load()
-
-        #expect(model.state.isFailed)
-    }
-
-    @Test func searchIgnoresCaseAndAccents() {
-        let items = [transaction("Coffee"), transaction("Café Central"), transaction("Rent")]
-
-        #expect(TransactionsScreen.filtered(items, by: "coffee").map(\.title) == ["Coffee"])
-        #expect(TransactionsScreen.filtered(items, by: "cafe").map(\.title) == ["Café Central"])
-        #expect(TransactionsScreen.filtered(items, by: "").count == 3)
+        #expect(model.items(matching: "coffee").map(\.title) == ["Coffee"])
+        #expect(model.items(matching: "cafe").map(\.title) == ["Café Central"])
+        #expect(model.items(matching: "").count == 3)
     }
 }
 ```
 
-Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 5 tests, all passed.
+Ran with Swift 6.4: 4 tests, all passed.
 :::
 
 ::: What I'd ask next
 - *"`@StateObject` vs `@ObservedObject` in one sentence."* — `@StateObject` means this view creates
   and owns it; `@ObservedObject` means someone else owns it and passes it in.
-- *"Is `@State` with an `@Observable` model a drop-in for `@StateObject`?"* — Almost.
-  `State(initialValue:)` builds a new model every time the parent re-renders and throws it away;
-  `@StateObject` takes an autoclosure and builds it once. Keep the model's `init` cheap, with no work
-  started in it.
-- *"How would you find what's making scrolling stutter?"* — Instruments' SwiftUI template (view
-  body counts), `Self._printChanges()` in a debug build, then cut work out of `body`.
+- *"Would you move to `@Observable`?"* — On iOS 17, yes: `@State private var model`. One catch:
+  `@State`'s initial value is built again each time the parent re-creates the view (SwiftUI keeps
+  only the first), while `@StateObject` takes an autoclosure and builds it once. So keep the model's
+  `init` cheap, with no work started in it.
+- *"How would you find what's making typing stutter?"* — Instruments' SwiftUI template (how often
+  each `body` runs), `Self._printChanges()` in a debug build, then cut work out of `body`.
 - *"10,000 transactions — what changes?"* — Paginate from the API, load more near the end of the
-  list, and stop filtering client-side.
+  list, and search on the server.
 - *"Why does `Identifiable` matter beyond `ForEach`?"* — Identity drives state preservation,
   transitions and diffing; a wrong id moves `@State` between rows.
 :::

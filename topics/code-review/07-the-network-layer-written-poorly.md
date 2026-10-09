@@ -8,15 +8,13 @@ sources:
 - LeetCode Discuss · Uber SE2 iOS — "They gave an existing iOS Project… Code review & fix errors" | https://leetcode.com/discuss/interview-experience/738598/
 - Apple · URL init(string:) — from iOS 17 it percent-encodes invalid characters instead of returning nil | https://developer.apple.com/documentation/foundation/url/init(string:)
 - Apple · URLRequest timeoutInterval — the default is 60 seconds | https://developer.apple.com/documentation/foundation/urlrequest/timeoutinterval
-- SE-0461 · Run nonisolated async functions on the caller's actor by default — and @concurrent | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md
-- SE-0413 · Typed throws | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0413-typed-throws.md
+- Apple · JSONDecoder.KeyDecodingStrategy.convertFromSnakeCase — "avatar_url" becomes "avatarUrl" | https://developer.apple.com/documentation/foundation/jsondecoder/keydecodingstrategy/convertfromsnakecase
 ---
 
 *Shape: review, then extend · Reported: Uber — "an app with the network request layer written
 poorly… walk them through how you'd debug and improve"; Uber SE2 — an existing project to code-review
-and fix · UIKit snippet typechecked against the iOS SDK (iOS 18 target): clean in Swift 5 mode, one error and two
-warnings in Swift 6 mode. The fix is Foundation-only, compiled with Swift 6.4 in Swift 6 mode with
-zero warnings, and run against a fake transport returning 200, 500 and garbage*
+and fix · Verified: the snippet is clean in Swift 5 mode and has one error and two warnings in Swift 6
+mode; the fix typechecks for iOS 18 and its client tests ran, Swift 6.4*
 
 > "This is the networking layer of an app we inherited. Users report three things: the profile
 > spinner sometimes spins forever, the app crashes on search when the backend has an outage, and
@@ -85,49 +83,59 @@ class ProfileViewController: UIViewController {
 - Take each of the three user reports and trace one request through the code by hand. Which line
   runs for a timeout? For a 500 with an HTML error page? For a 200 with a valid body?
 - `dataTask` only reports a *transport* failure in `error`. What does it hand you for a 500?
+- The backend sends `avatar_url`. What key does `convertFromSnakeCase` turn that into?
 - Which thread does `dataTask`'s completion handler run on, and who touches a `UILabel` there?
-- Ask what you would need to write a unit test for "a 500 shows an error". Can you, today?
+:::
+
+::: How I'd debug it
+Before fixing anything, I'd reproduce each report. Turn on the Main Thread Checker and open the
+profile to catch report 3. Point the app at a proxy (Charles or Proxyman) and map `/users` to a 500
+with an HTML body to reproduce report 2. Use the Network Link Conditioner on "100% Loss" to
+reproduce report 1. Once the transport can be faked, each report becomes a failing test.
 :::
 
 ::: The key — what I expect a senior to find
 1. **`try!` crashes search during an outage (report 2).** `dataTask` treats any HTTP response as
-   success: a 500 arrives with `error == nil` and an HTML body. `try!` on decoding HTML traps. Use
-   `try` and surface a decoding error instead.
-2. **The spinner spins forever (report 1).** `if let error { print; return }` returns without
-   calling `completion`, and so does `guard let data else { return }`. Every path through a
-   completion-handler API must call the handler exactly once.
-3. **UI updated off the main thread (report 3).** `URLSession`'s handlers run on its delegate
-   queue — a background queue for `.shared`. The view controller sets `nameLabel.text` and stops the
-   spinner from there. UIKit isn't thread-safe: late updates, flicker, or a Main Thread Checker hit.
-4. **No HTTP status check.** A 404, 401 or 500 goes straight into the decoder. `try?` then turns it
-   into `nil`, and the caller gets `(nil, nil)` — "no user and no error", a state that should be
-   impossible. The status code is the first thing to read.
-5. **Errors are thrown away.** `try?` and `print` lose the reason. The UI can't tell "offline" from
-   "server down" from "your session expired", and the logs say nothing useful.
-6. **The query isn't encoded.** With the iOS 17 SDK, `URL(string:)` percent-encodes invalid
-   characters instead of returning `nil`, so a space no longer crashes. But `&` and `=` are valid,
-   so searching `tom&admin=true` sends a second query parameter. Build URLs with `URLComponents` or
-   `append(queryItems:)`. The `!` still crashes if `baseURL` ever comes from bad config.
-7. **No cancellation.** Leave the screen and the request still runs and writes to a screen that's
-   gone. Search typed quickly can show an older query's results last.
-8. **No timeout or retry policy.** The default request timeout is 60 seconds of spinner. A single
-   dropped packet or a 503 during a deploy fails the screen; nothing retries.
-9. **`(User?, Error?)` instead of a result type.** Four combinations, two of them nonsense. Use
-   `Result<User, APIError>`, or `async throws`.
-10. **Singleton and hard-coded `URLSession.shared`.** Nothing can be faked, so none of the above can
-    be tested. In Swift 6 mode `static let shared` on a non-`Sendable` class is a compile error —
-    verified.
-11. **`JSONDecoder` built on every call.** Cheap-ish, but the two methods already disagree:
-    one converts snake case, the other doesn't. Configure one decoder once.
-12. **Duplicate request code.** Every new endpoint copies the bugs. One generic `get` fixes them
-    all in one place.
-13. **Strong `self` in the completion.** The controller lives until the request ends. Minor here,
-    but it's how a dismissed screen keeps doing work.
-
-How I'd *debug* it before fixing anything: turn on the Main Thread Checker and reproduce report 3;
-point the app at a proxy (Charles or Proxyman) and map the endpoint to a 500 with an HTML body to
-reproduce report 2; use the Network Link Conditioner on "100% Loss" to reproduce report 1. Each
-report becomes a failing test once the transport can be faked.
+   success: a 500 arrives with `error == nil` and an HTML body, and `try!` on decoding HTML traps.
+   Use `try` and surface a decoding error.
+2. **`avatarURL` never decodes from snake case.** `convertFromSnakeCase` turns `avatar_url` into
+   `avatarUrl`, which doesn't match the property `avatarURL` — `keyNotFound`. So if the backend
+   sends snake case, as the profile decoder assumes, the profile *always* fails, and search (which
+   has no strategy at all) fails too — through `try!`, so it crashes on every result. Map the key
+   with `CodingKeys` and use one decoder.
+3. **`data!` is a second force unwrap.** It's only safe because `URLSession` happens to send data
+   whenever `error` is nil. Unwrap it properly.
+4. **UI updated off the main thread (report 3).** `URLSession.shared` calls its handler on a
+   background queue, and the view controller sets `nameLabel.text` and stops the spinner from
+   there. UIKit isn't thread-safe: late updates, flicker, a Main Thread Checker hit.
+5. **The query isn't encoded.** Since the iOS 17 SDK, `URL(string:)` percent-encodes a space
+   instead of returning `nil`, but `&` and `=` are valid, so searching `tom&admin=true` sends a
+   second parameter. Build the URL with `append(queryItems:)`.
+6. **`print` logs the full error in release builds.** The error includes the URL — a user id or a
+   search for someone's name — in the device log. Drop it, or use `Logger` with private values.
+7. **`var userID = 0`.** Forget to set it and the screen quietly loads user 0, someone else's
+   profile. Make it optional and fail loudly in debug.
+8. **Strong `self`, no cancellation.** The handler keeps the controller alive until the request
+   ends, and nothing stops the request when the user leaves. Capture `[weak self]`.
+9. **The spinner spins forever (report 1).** `if let error { print; return }` returns without
+   calling `completion`, and so does `guard let data else { return }`. A completion handler must be
+   called exactly once, on every path.
+10. **No HTTP status check.** A 404, 401 or 500 goes straight into the decoder. Read the status
+    code first.
+11. **`(User?, Error?)` and lost errors.** `try?` turns any failure into `(nil, nil)` — "no user
+    and no error", a state that should be impossible. The UI can't tell "offline" from "server
+    down". Use `async throws` (or `Result`).
+12. **No timeout or retry.** The default timeout is 60 seconds of spinner, and a single 503 during
+    a deploy fails the screen. Set a shorter timeout and retry what is transient.
+13. **Singleton and hard-coded `URLSession.shared`.** Nothing can be faked, so none of this can be
+    tested. Without default main-actor isolation, `static let shared` on this non-`Sendable` class
+    is also a compile error in Swift 6 mode (verified). Inject the transport; mark the class
+    `final` and `Sendable`.
+14. **A `JSONDecoder` built per call.** The two methods already disagree on key strategy. Build one
+    decoder, once.
+15. **Duplicate request code.** Every new endpoint copies the bugs. One generic `get` fixes them in
+    one place.
+16. **Style.** Neither class is `final`, and `baseURL` is an internal `String` built by `+`.
 :::
 
 ::: The idea behind it
@@ -142,371 +150,224 @@ is unwritten: call it once, on every path, on a known thread. Nothing enforces i
 forget a path — and then the caller waits forever.
 
 `async/await` turns that unwritten contract into a compiled one. An `async throws` function must
-either return a value or throw on every path; the compiler checks it. Cancellation flows down
-automatically. And when the caller is marked `@MainActor` — "always runs on the main thread" — the
-result lands on main without anyone remembering to hop.
-
-Think of a parcel delivery. The courier reporting "delivered" isn't the same as you getting the
-right thing in one piece. Someone still has to open the box.
+either return a value or throw on every path; the compiler checks it. And a `Task` started from a
+view controller runs on the main actor — "always on the main thread" — so the result lands on main
+without anyone remembering to hop.
 :::
 
-::: The version I'd ship
+::: The fix
 ```swift
-import Foundation
-
-struct User: Codable, Sendable, Equatable {
+struct User: Codable, Equatable {
     let id: Int
     let name: String
+    let avatarURL: URL
+    enum CodingKeys: String, CodingKey { case id, name, avatarURL = "avatar_url" }   // key 2
 }
 
-/// The one thing that touches the network. URLSession conforms; tests use a fake.
-protocol HTTPTransport: Sendable {
-    func data(for request: URLRequest) async throws -> (Data, URLResponse)
-}
+enum APIError: Error, Equatable { case transport(URLError.Code), badStatus(Int), decoding }
 
-extension URLSession: HTTPTransport {
-    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try await data(for: request, delegate: nil)
-    }
-}
+final class APIClient: Sendable {                                          // keys 13, 16
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    static let shared = APIClient()
 
-enum APIError: Error, Equatable {
-    case invalidURL
-    case offline
-    case transport(URLError.Code)
-    case badStatus(Int)
-    case decoding(String)
-    case cancelled
-}
+    private let baseURL = URL(string: "https://api.example.com")!
+    private let decoder = JSONDecoder()                                    // key 14
+    private let transport: Transport
+    private let retryDelay: Duration
 
-struct RetryPolicy: Sendable {
-    var maxAttempts = 3
-    var baseDelay: Duration = .milliseconds(300)
-
-    func isTransient(_ error: APIError) -> Bool {
-        switch error {
-        case .badStatus(let code): code == 408 || code == 429 || (500...599).contains(code)
-        case .transport(let code): [.timedOut, .networkConnectionLost].contains(code)
-        default: false
-        }
-    }
-}
-
-final class APIClient: Sendable {
-    private let baseURL: URL
-    private let transport: HTTPTransport
-    private let retry: RetryPolicy
-    private let decoder: JSONDecoder   // configured once; immutable after init
-
-    init(baseURL: URL, transport: HTTPTransport, retry: RetryPolicy = RetryPolicy()) {
-        self.baseURL = baseURL
+    init(transport: @escaping Transport = { try await URLSession.shared.data(for: $0) },
+         retryDelay: Duration = .seconds(1)) {
         self.transport = transport
-        self.retry = retry
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        self.decoder = decoder
+        self.retryDelay = retryDelay
     }
 
-    func user(id: Int) async throws(APIError) -> User {
-        try await get(path: "users/\(id)", query: [])
+    func fetchUser(id: Int) async throws -> User {                          // keys 9, 11
+        try await get(baseURL.appending(path: "users/\(id)"))
     }
 
-    func searchUsers(matching query: String) async throws(APIError) -> [User] {
-        try await get(path: "users", query: [URLQueryItem(name: "q", value: query)])
+    func searchUsers(matching query: String) async throws -> [User] {       // key 5
+        try await get(baseURL.appending(path: "users")
+            .appending(queryItems: [URLQueryItem(name: "q", value: query)]))
     }
 
-    // @concurrent: always runs off the caller's actor, so decoding never lands on main.
-    @concurrent
-    private func get<T: Decodable & Sendable>(path: String,
-                                              query: [URLQueryItem]) async throws(APIError) -> T {
-        var url = baseURL.appending(path: path)
-        if !query.isEmpty { url.append(queryItems: query) }   // encodes '&', spaces, emoji
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        var attempt = 1
-        while true {
-            do throws(APIError) {
-                let data = try await send(request)
-                do { return try decoder.decode(T.self, from: data) }
-                catch { throw APIError.decoding(String(describing: error)) }
-            } catch {
-                guard attempt < retry.maxAttempts, retry.isTransient(error) else { throw error }
-                // Exponential backoff with jitter: 300 ms, 600 ms, ... ± 50 %.
-                let delay = retry.baseDelay * (1 << (attempt - 1)) * Double.random(in: 0.5...1.5)
-                do { try await Task.sleep(for: delay) } catch { throw .cancelled }
-                attempt += 1
-            }
-        }
-    }
-
-    private func send(_ request: URLRequest) async throws(APIError) -> Data {
-        let data: Data
-        let response: URLResponse
+    private func get<T: Decodable>(_ url: URL, attempt: Int = 1) async throws -> T {   // key 15
+        let request = URLRequest(url: url, timeoutInterval: 15)                       // key 12
         do {
-            (data, response) = try await transport.data(for: request)
-        } catch is CancellationError {
-            throw .cancelled
-        } catch let error as URLError {
-            switch error.code {
-            case .cancelled: throw .cancelled
-            case .notConnectedToInternet: throw .offline
-            default: throw .transport(error.code)
-            }
-        } catch {
-            throw .transport(.unknown)
+            let data: Data, response: URLResponse
+            do { (data, response) = try await transport(request) }
+            catch let error as URLError { throw APIError.transport(error.code) }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status) else { throw APIError.badStatus(status) }   // key 10
+            do { return try decoder.decode(T.self, from: data) }
+            catch { throw APIError.decoding }                                         // keys 1, 3
+        } catch let error as APIError where attempt < 3 && error.isWorthRetrying {    // key 12
+            try await Task.sleep(for: retryDelay * attempt)                           // 1 s, then 2 s
+            return try await get(url, attempt: attempt + 1)
         }
-        guard let http = response as? HTTPURLResponse else { throw .transport(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else { throw .badStatus(http.statusCode) }
-        return data
     }
 }
 
-// The caller: a main-actor view model. No DispatchQueue.main.async anywhere.
-@MainActor
-final class ProfileViewModel {
-    enum State: Equatable { case loading, loaded(String), failed(String) }
+extension APIError {
+    var isWorthRetrying: Bool {
+        switch self {
+        case .badStatus(let code): code >= 500
+        case .transport(let code): code == .timedOut || code == .networkConnectionLost
+        case .decoding: false
+        }
+    }
+}
 
-    private(set) var state: State = .loading
-    private let api: APIClient
-    private var loadTask: Task<Void, Never>?
+class ProfileViewController: UIViewController {
+    @IBOutlet var nameLabel: UILabel!
+    @IBOutlet var spinner: UIActivityIndicatorView!
+    var userID: Int?                                                        // key 7
 
-    init(api: APIClient) { self.api = api }
-
-    @discardableResult
-    func load(userID: Int) -> Task<Void, Never> {
-        loadTask?.cancel()
-        state = .loading
-        let task = Task {
-            do throws(APIError) {
-                let user = try await api.user(id: userID)
-                state = .loaded(user.name)
-            } catch .cancelled {
-                return
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        guard let userID else { return assertionFailure("Set userID before showing the screen") }
+        spinner.startAnimating()
+        Task { [weak self] in                                               // keys 4, 8
+            do {
+                let user = try await APIClient.shared.fetchUser(id: userID)
+                self?.nameLabel.text = user.name
             } catch {
-                state = .failed(Self.message(for: error))
+                self?.nameLabel.text = "Something went wrong"               // key 6: no print
             }
-        }
-        loadTask = task
-        return task   // handed back so a caller (or a test) can await it
-    }
-
-    func cancel() { loadTask?.cancel() }
-
-    private static func message(for error: APIError) -> String {
-        switch error {
-        case .offline: "You're offline."
-        case .badStatus, .transport: "The server didn't respond. Try again."
-        default: "Something went wrong."
+            self?.spinner.stopAnimating()                                   // key 9
         }
     }
 }
 ```
 
-What the run against a fake transport printed (retry delay shortened to 1 ms for the test; the long
-decoding message is cut short here):
-
-```text
-200 json       -> user: Ada | attempts: 1
-500 html       -> error: badStatus(500) | attempts: 3
-200 garbage    -> error: decoding("DecodingError.dataCorrupted: Data was …") | attempts: 1
-503 then 200   -> user: Ada | attempts: 2
-404            -> error: badStatus(404) | attempts: 1
-offline        -> error: offline | attempts: 1
-search URL    -> https://api.example.com/users?q=tom%20%26%20admin%3Dtrue | timeout: 15.0
-view model    -> failed("The server didn\'t respond. Try again.")
-```
-
-The 500 is retried and then reported, never decoded. The garbage 200 becomes a decoding error, not
-a crash. A 404 isn't retried — it won't change. The `&` in the search is encoded, and the timeout
-is 15 seconds, not 60.
+**Said out loud, not coded:** jitter on the backoff, so a million phones don't retry at the same
+instant; retry only idempotent requests (a `GET`, not a "send money" `POST` without an idempotency
+key); cancel the task in the controller when the screen goes away; typed throws and a view model
+with a state enum; `@concurrent` on `get` if the project runs async functions on the caller's actor
+by default, so decoding stays off main.
 
 Why each piece:
 
-- **`HTTPTransport` protocol** — the seam. `URLSession` conforms in production; the fake above
-  returns any status and body. That's what made every user report testable. The extension method
-  is needed because a default argument (`delegate: nil`) doesn't satisfy a protocol requirement.
-- **`async throws(APIError)`** — every path must return or throw, so "spinner forever" can't
-  compile. *Typed throws* (Swift 6) means the caller's `catch` sees an `APIError`, not `any Error`,
-  and `switch`es over it with no casting.
-- **Status check before decoding** — the line the original was missing. 2xx goes to the decoder;
-  anything else becomes `.badStatus` with the code kept for logs and UI.
-- **Retry only what is transient, with backoff and jitter** — 408, 429, 5xx, a timeout or a dropped
-  connection may work a moment later; a 404 or a decoding error won't. *Backoff* means each wait
-  doubles. *Jitter* means a random spread, so a million phones don't retry at the same instant and
-  knock the recovering server over again. Only retry idempotent requests — a `GET` is safe to send
-  twice; a "send money" `POST` is not without an idempotency key.
-- **`@concurrent` on `get`** — since Swift 6.2 a project can turn on
-  `NonisolatedNonsendingByDefault` (Xcode 26's "Approachable Concurrency" does), and then a plain
-  `async` method runs on its *caller's* actor — decoding a big response on main. `@concurrent` says
-  "always run on the background pool", whatever the build setting.
-- **One decoder, built in `init`** — one configuration for every endpoint, and immutable, so sharing
-  it across threads is safe.
-- **`@MainActor` view model with a stored `Task`** — UI state is on main by construction, a new load
-  cancels the old one, and a cancelled request writes nothing. `load` also returns the task, so a
-  test can `await` it instead of guessing how long to wait.
+- **The transport closure with a default is the one seam.** Production uses `URLSession.shared`;
+  tests pass a fake that returns any status and body.
+- **Status check before decoding.** The line the original was missing: 2xx goes to the decoder,
+  anything else becomes `.badStatus` with the code kept.
+- **Retry only what is transient.** A 5xx, a timeout or a dropped connection may work a moment
+  later; a 404 or a bad body won't. The wait doubles each time (1 s, then 2 s).
+- **The controller keeps its outlets and its shape.** `Task` inherits the main actor from
+  `viewDidLoad`, so the labels are set on main with no `DispatchQueue.main.async`.
 :::
 
 ::: Now write the tests
-> "Good. Now write me the tests you'd want before this merges — one for each of the three user
-> reports, and the retry."
+> "Good. Now write me the tests you'd want before this merges — the crash, the retry, and the
+> search."
 
 **What I'd test, and why**
 
-1. **A 500 is retried, then reported as `badStatus(500)`** — this is the search crash. The test
-   proves an HTML error page never reaches the decoder, and that the retry stops after three tries.
-2. **A 404 is not retried** — retrying something that won't change just makes the user wait.
-3. **A garbage 200 becomes a decoding error** — the other half of the crash: a bad body throws,
-   it doesn't trap.
-4. **503, then 200, succeeds on the second attempt** — the retry actually rescues a blip.
-5. **The search query is encoded** — `&` and `=` must not turn into extra parameters. The same
-   test checks the 15-second timeout.
-6. **The view model ends in `.failed` with the right message** — the spinner-forever report. Every
-   path has to land in a final state.
+1. **The profile decodes `avatar_url`.** The bug that made every profile fail, pinned first.
+2. **A 500 is retried, then reported as `badStatus(500)`.** This is the search crash: an HTML error
+   page never reaches the decoder, and the retry stops after three tries.
+3. **A 404 is not retried.** Retrying something that won't change just makes the user wait.
+4. **503, then 200, succeeds on the second attempt.** The retry actually rescues a blip.
+5. **The search query is encoded.** `&` and `=` must not turn into extra parameters.
 
-I wouldn't test `URLSession` itself or the real backoff timing — the first is Apple's code, and the
-second is just numbers in `RetryPolicy`.
+I wouldn't test `URLSession` itself, or the view controller — its outlets need a storyboard, and
+its logic is now three lines.
 
-**The seam.** A *seam* is a place where the test can swap a real part for a fake. Here it is
-`HTTPTransport`: the *fake* below replays canned answers (any status, any body) and records each
-request, so nothing touches the network. The backoff really sleeps, so the tests pass a 1 ms
-`baseDelay` through `RetryPolicy`. One gap I closed: `load(userID:)` started its `Task` and kept it
-private, so a test could only guess when it had finished. It now returns the task (two lines,
-shown in the fix above), and the test simply awaits it — *deterministic*, meaning it gives the same
-result on every run, with no timing involved.
+**The seam.** A *seam* is a place where the test can swap a real part for a fake. Here it's the
+`transport` closure: the fake below replays canned answers (any status, any body) and records each
+request, so nothing touches the network. A zero `retryDelay` keeps the retries instant.
 
 ```swift
-import Testing
 import Foundation
+import Testing
 
-/// A fake transport: plays back canned replies in order (the last one repeats)
-/// and records every request it was sent.
-actor FakeTransport: HTTPTransport {
-    enum Reply: Sendable {
-        case status(Int, String)
-        case failure(URLError.Code)
-    }
-
-    private var replies: [Reply]
+/// Plays back canned replies in order (the last one repeats) and records every request.
+actor FakeTransport {
+    private var replies: [(status: Int, body: String)]
     private(set) var requests: [URLRequest] = []
 
-    init(_ replies: Reply...) { self.replies = replies }
+    init(_ replies: (status: Int, body: String)...) { self.replies = replies }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         requests.append(request)
         let reply = replies.count > 1 ? replies.removeFirst() : replies[0]
-        switch reply {
-        case .failure(let code):
-            throw URLError(code)
-        case .status(let code, let body):
-            let response = HTTPURLResponse(url: request.url!, statusCode: code,
-                                           httpVersion: nil, headerFields: nil)!
-            return (Data(body.utf8), response)
-        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status,
+                                       httpVersion: nil, headerFields: nil)!
+        return (Data(reply.body.utf8), response)
     }
 }
 
-let ada = #"{"id": 1, "name": "Ada"}"#
+let ada = #"{"id": 1, "name": "Ada", "avatar_url": "https://example.com/ada.png"}"#
 
-/// A 1 ms base delay keeps the real backoff, just fast.
-func makeClient(_ transport: FakeTransport, maxAttempts: Int = 3) -> APIClient {
-    APIClient(baseURL: URL(string: "https://api.example.com")!,
-              transport: transport,
-              retry: RetryPolicy(maxAttempts: maxAttempts, baseDelay: .milliseconds(1)))
+func makeClient(_ transport: FakeTransport) -> APIClient {
+    APIClient(transport: { try await transport.data(for: $0) }, retryDelay: .zero)
 }
 
 struct APIClientTests {
+    @Test func profileDecodesTheSnakeCaseAvatarURL() async throws {
+        let client = makeClient(FakeTransport((200, ada)))
+
+        let user = try await client.fetchUser(id: 1)
+
+        #expect(user.avatarURL == URL(string: "https://example.com/ada.png"))
+    }
+
     @Test func serverErrorIsRetriedThenReportedAsBadStatus() async {
         // Given a server that always answers 500 with an HTML page
-        let transport = FakeTransport(.status(500, "<html>Oops</html>"))
+        let transport = FakeTransport((500, "<html>Oops</html>"))
         let client = makeClient(transport)
 
         // When / Then: it never reaches the decoder, and it tried three times
-        await #expect(throws: APIError.badStatus(500)) { try await client.user(id: 1) }
+        await #expect(throws: APIError.badStatus(500)) { try await client.searchUsers(matching: "ada") }
         #expect(await transport.requests.count == 3)
     }
 
     @Test func notFoundIsNotRetried() async {
-        let transport = FakeTransport(.status(404, ""))
+        let transport = FakeTransport((404, ""))
         let client = makeClient(transport)
 
-        await #expect(throws: APIError.badStatus(404)) { try await client.user(id: 1) }
-        #expect(await transport.requests.count == 1)
-    }
-
-    @Test func garbageBodyBecomesADecodingErrorNotACrash() async {
-        let transport = FakeTransport(.status(200, "not json"))
-        let client = makeClient(transport)
-
-        let error = await #expect(throws: APIError.self) { try await client.user(id: 1) }
-
-        guard case .decoding = error else {
-            Issue.record("Expected a decoding error, got \(String(describing: error))")
-            return
-        }
+        await #expect(throws: APIError.badStatus(404)) { try await client.fetchUser(id: 1) }
         #expect(await transport.requests.count == 1)
     }
 
     @Test func serviceUnavailableThenOKSucceedsOnTheSecondAttempt() async throws {
-        let transport = FakeTransport(.status(503, ""), .status(200, ada))
+        let transport = FakeTransport((503, ""), (200, ada))
         let client = makeClient(transport)
 
-        let user = try await client.user(id: 1)
+        let user = try await client.fetchUser(id: 1)
 
-        #expect(user == User(id: 1, name: "Ada"))
+        #expect(user.name == "Ada")
         #expect(await transport.requests.count == 2)
     }
 
     @Test func searchQueryIsEncoded() async throws {
-        let transport = FakeTransport(.status(200, "[]"))
+        let transport = FakeTransport((200, "[]"))
         let client = makeClient(transport)
 
         _ = try await client.searchUsers(matching: "tom & admin=true")
 
         let request = try #require(await transport.requests.first)
-        #expect(request.url?.absoluteString
-                == "https://api.example.com/users?q=tom%20%26%20admin%3Dtrue")
-        #expect(request.timeoutInterval == 15)
-    }
-}
-
-@MainActor
-struct ProfileViewModelTests {
-    @Test func serverOutageEndsInFailedWithAFriendlyMessage() async {
-        let transport = FakeTransport(.status(500, "<html>Oops</html>"))
-        let viewModel = ProfileViewModel(api: makeClient(transport, maxAttempts: 1))
-
-        await viewModel.load(userID: 1).value
-
-        #expect(viewModel.state == .failed("The server didn't respond. Try again."))
-    }
-
-    @Test func successEndsInLoadedWithTheName() async {
-        let transport = FakeTransport(.status(200, ada))
-        let viewModel = ProfileViewModel(api: makeClient(transport))
-
-        await viewModel.load(userID: 1).value
-
-        #expect(viewModel.state == .loaded("Ada"))
+        #expect(request.url?.absoluteString == "https://api.example.com/users?q=tom%20%26%20admin%3Dtrue")
     }
 }
 ```
 
-Ran with Swift 6.4: 7 tests, all passed.
+Ran with Swift 6.4: 5 tests, all passed.
 :::
 
 ::: What I'd ask next
 - *"How do you add an auth token, and refresh it when it expires?"* — An `actor TokenStore` the client
   asks for a token before each request. On a 401, refresh once and retry; the actor makes sure ten
   concurrent 401s trigger one refresh, not ten.
-- *"Why not retry inside `HTTPTransport`?"* — The transport doesn't know which requests are idempotent
+- *"Why not retry inside the transport?"* — The transport doesn't know which requests are idempotent
   or which statuses are transient for this API. Keep it dumb; put policy in the client.
-- *"How would you test the backoff without waiting?"* — Inject the sleep (a `Clock`, or a small
-  `sleep(for:)` closure) and assert the requested delays, as the harness did with a 1 ms base.
+- *"How would you test the backoff delays themselves?"* — Inject the sleep (a `Clock`, or a small
+  `sleep(for:)` closure) and assert the delays it was asked for.
+- *"A user searches for `c++`. What reaches the server?"* — `URLQueryItem` leaves `+` alone, and
+  many servers read `+` in a query as a space, so they see `c  `. Percent-encode `+` as `%2B` yourself.
 - *"The product wants offline support."* — Cache the last good response on disk keyed by URL, show it
   with a "last updated" label, and refresh in the background. Don't fake it with long timeouts.
 - *"Would you still keep a completion-handler API?"* — Only as a thin wrapper for old callers:
-  a `@MainActor` method that starts a `Task`, awaits `user(id:)` in a `do`/`catch` and calls
-  `completion(.success(user))` or `completion(.failure(error))` — on main, exactly once. New code
-  uses `async`.
+  start a `Task`, await `fetchUser(id:)`, and call `completion(.success(user))` or
+  `completion(.failure(error))` — on main, exactly once. New code uses `async`.
 :::

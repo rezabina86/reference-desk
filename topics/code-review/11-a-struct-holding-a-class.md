@@ -8,7 +8,8 @@ sources:
 - LeetCode Discuss · Practo iOS — "Explain the copy on write" | https://leetcode.com/discuss/post/2062561/
 ---
 
-*Shape: what does this print · Reported: Zomato — how many instances after copying a struct that holds a class, and the reverse; Practo — explain copy-on-write · Compiled and run with Swift 6.4*
+*Shape: what does this print · Reported: Zomato — how many instances after copying a struct that
+holds a class, and the reverse; Practo — explain copy-on-write · Verified: run with Swift 6.4*
 
 > "Four small blocks. Tell me what prints, line by line — and at the end, how many objects exist."
 
@@ -150,6 +151,13 @@ if you write it, as `Notes` does.
   uniqueness in every mutating method, as `Notes` does. Callers then get honest value semantics.
 - **Don't expose mutable class properties from a struct.** `car2.engine.rpm = 3000` compiling on
   a copy is the bug factory; a `let` engine with no `var` inside it can't surprise anyone.
+:::
+
+::: What I'm really scoring
+That you count objects, not variables. Only an `init` makes an instance; copying a struct, a
+reference or an array never does. The weak answer says "structs are copied, so `car1` is safe". The
+strong one says the struct is copied but the engine inside it is shared, explains why `let` doesn't
+freeze it, and can say how `Array` gets away with copying lazily — copy-on-write.
 :::
 
 ::: What I'd ask next

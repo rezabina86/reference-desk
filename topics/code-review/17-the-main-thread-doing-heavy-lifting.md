@@ -6,14 +6,14 @@ group: Find the bug
 sources:
 - Glassdoor · Uber iOS — debugging round on "standard iOS problems (sync/async, main thread violations)" | https://static.glassdoor.nl/Interview/Uber-IOS-Developer-Interview-Questions-EI_IE575263.0,4_KO5,18_IP2.htm
 - Blind · Apple iOS — "Multi threading / Performance round" | https://www.teamblind.com/post/apple-ios-multi-threading-performance-round-avjtmkcj
+- Apple · Improving app responsiveness (hitches and hangs) | https://developer.apple.com/documentation/xcode/improving-app-responsiveness
+- Apple · UIImage.byPreparingThumbnail(ofSize:) | https://developer.apple.com/documentation/uikit/uiimage/byPreparingThumbnail(ofSize:)
+- SE-0461 · Run nonisolated async functions on the caller's actor by default | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md
 ---
 
 *Shape: find the bug · Reported: Uber — a debugging round on "standard iOS problems (sync/async,
-main thread violations)" (from a Glassdoor search snippet); Apple — a "Multi threading /
-Performance round" · UIKit — the snippet and the fix typecheck against the iOS SDK (iOS 18
-target) in Swift 6 mode, the fix with zero warnings; the formatter and decoding timings were
-compiled and run as a Foundation-only program with Swift 6.4; the scrolling behaviour was checked
-by hand*
+main thread violations)"; Apple — a "Multi threading / Performance round" · Verified: snippet and
+fix typecheck in Swift 6 mode with zero warnings, Swift 6.4; the timings were run on an M1 Pro Mac*
 
 > "Users say the articles screen freezes for a second or two when it opens, and then the list
 > stutters when they scroll. Nothing crashes in our tests. What's wrong, how would you prove it, and
@@ -76,8 +76,8 @@ final class ArticlesViewController: UITableViewController {
 }
 ```
 
-This compiles in Swift 6 mode with no warnings at all (checked). Swift 6 checks that data isn't
-shared unsafely between threads; it doesn't check *how long* the main thread is kept busy.
+This compiles in Swift 6 mode with no warnings at all. Swift 6 checks that data isn't shared
+unsafely between threads; it doesn't check *how long* the main thread is kept busy.
 
 ::: A hint, if you're stuck
 - Which of these lines wait for something outside the app — the network, the disk?
@@ -86,36 +86,55 @@ shared unsafely between threads; it doesn't check *how long* the main thread is 
 - `UIImage(data:)` returns quickly. When does the real work happen?
 :::
 
+::: How I'd debug it
+I don't guess, I profile. Run on a real device, ideally an older one, with Instruments' *Time
+Profiler* and *Hangs*. Open the screen: a hang marker appears, and the main thread's heaviest stack
+is `Data(contentsOf:)` under `viewDidLoad`. Scroll: the hitches line up with `Data(contentsOf:)`
+and image decoding under `cellForRowAt`. The fix is right when those stacks leave the main thread
+and the markers go away.
+:::
+
 ::: The key — what I expect a senior to find
-1. **`try!` on the network and the decode.** Offline, on a captive Wi-Fi page, or with one bad
-   field in the JSON, the app crashes on open. Use `try` and show an error state with Retry.
+The two reported bugs come first, right after the crash.
+
+1. **`try!` on the network and the decode.** Offline, behind a captive Wi-Fi page, or with one bad
+   field in the JSON, the app crashes on open. Use `try` and show an error state.
 2. **A network request that blocks the main thread (the freeze).** `Data(contentsOf:)` with an
    `https` URL is a *synchronous* download: the main thread stops and waits for the whole response.
-   Nothing redraws and no touch is handled until it returns — a second or two on a good network,
-   many seconds on a bad one. If this is the first screen at launch, the system can kill the app
-   for taking too long to start. Recent Xcode versions can also flag synchronous URL loading
-   on the main thread as a purple runtime issue.
-3. **A network request per cell, on main (the stutter).** The same call in `cellForRowAt` downloads
-   every thumbnail while the user scrolls, one row at a time, with nothing cached — scroll back up
-   and they all download again. This is the worst line in the file.
-4. **Full-size image decoding on main.** `UIImage(data:)` doesn't decode yet; the pixels are
-   unpacked the first time the image is drawn — on the main thread, at full size, in the middle of
-   the scroll. A 3,000-pixel photo shown at 60 points is mostly wasted work. Shrink and decode off
-   main (`byPreparingThumbnail(ofSize:)`).
-5. **JSON decoded on main.** On my M1 Pro Mac, decoding 5,000 small articles (about 2 MB) took
-   23 ms — more than a whole frame at 60 Hz, nearly three at 120 Hz. Phones are not faster.
-6. **A synchronous file read on main.** Usually tiny, but the main thread has no business waiting
-   on the disk, and the file only grows.
-7. **`reloadData()` once per article.** For 500 articles that's 500 reloads to show one result:
-   each throws away the visible rows and asks the data source again. Fill the array, reload once
-   (or apply one diffable snapshot).
-8. **A new `DateFormatter` for every cell.** Formatters are expensive to create. Measured: creating
-   one per row cost about 96 µs, reusing one cost about 1 µs, a reused `Date.FormatStyle` about
-   2–3 µs. On its own it rarely drops a frame, but it's the cheapest fix here. Make it `static`.
-9. **A fixed `dateFormat` ignores the user's region.** `"dd MMM yyyy"` forces day-month-year on a
+   Nothing redraws and no touch is handled until it returns. If this is the first screen at launch,
+   the system can kill the app for taking too long to start. Use `URLSession`'s `async` API.
+3. **A network request per cell, on main (the stutter).** The same call in `cellForRowAt`
+   downloads every thumbnail while the user scrolls, one row at a time. This is the worst line in
+   the file. Download in a `Task` and set the image when it arrives.
+4. **No loading or error state.** The user stares at an empty list while it loads, and a failure
+   would show nothing at all. Show a spinner, then rows or a message.
+5. **A fixed `dateFormat` ignores the user's region.** `"dd MMM yyyy"` forces day-month-year on a
    US user. Use a style (`.abbreviated`) and let the locale decide the order.
-10. **Nothing can be tested or cancelled.** The URL, `FileManager.default` and the decoding are
-    inside the controller; leave the screen mid-load and the work carries on.
+6. **Nothing can be tested.** The URL, `URLSession`, `FileManager.default` and the decoding all
+   live inside `viewDidLoad`, so a test can't feed it data. Inject the loading as one closure.
+7. **Full-size image decoding on main.** `UIImage(data:)` doesn't decode yet; the pixels are
+   unpacked the first time the image is drawn — on the main thread, at full size, mid-scroll. A
+   3,000-pixel photo shown at 60 points is mostly wasted work. Shrink and decode off main with
+   `byPreparingThumbnail(ofSize:)`.
+8. **No image cache.** Scroll down and back up and every thumbnail downloads again. Keep them in an
+   `NSCache` keyed by URL.
+9. **JSON decoded on main.** On my M1 Pro Mac, decoding 5,000 small articles took 22–29 ms —
+   more than a whole frame at 60 Hz. Treat a phone as the same order of magnitude; an older phone
+   is slower.
+10. **A synchronous file read on main.** Usually tiny, but the main thread has no business waiting
+    on the disk, and the file only grows.
+11. **`reloadData()` once per article.** Pointless work that grows with the list. UIKit defers
+    building cells to the next layout pass, but each call still invalidates the whole table. Fill
+    the array, reload once.
+12. **A new `DateFormatter` for every cell.** Creating one per row cost about 100 µs; reusing one,
+    or a `Date.FormatStyle`, cost 1–2 µs. Rarely a dropped frame on its own, but the cheapest fix
+    here: make it `static`.
+13. **Favourites decoded with the articles' decoder.** It works, but a decoder set up for ISO-8601
+    dates has nothing to do with a set of IDs. Use a plain `JSONDecoder()`.
+14. **Magic strings and a force unwrap.** `"ArticleCell"` is typed twice; one typo crashes at
+    dequeue. `URL(string:)!` on a literal is safe but reads as careless — make it a `static let`.
+
+How I measured 9 and 12: a Foundation-only program, `swiftc -O`, run twice on an M1 Pro Mac.
 :::
 
 ::: The idea behind it
@@ -134,118 +153,41 @@ cook a steak himself, nobody gets served. The fix is to keep him at the tables: 
 (network, disk, decoding, image shrinking) to the kitchen — background threads — and have him
 carry only the finished plate to the table, on the main thread.
 
-How to find it: Instruments' *Time Profiler* shows what the main thread was busy with; the *Hangs*
-and *Animation Hitches* instruments mark the exact moments it fell behind. *Main Thread Checker*
-catches the opposite mistake — UI touched *off* the main thread — and is silent about this code.
+*Main Thread Checker* catches the opposite mistake — UI touched *off* the main thread — and is
+silent about this code. Slow work *on* the main thread is legal; it's just slow.
 :::
 
 ::: The fix
 ```swift
-struct Article: Decodable, Sendable {
+struct Article: Decodable, Sendable {                                    // crosses threads now
     let id: String
     let title: String
     let publishedAt: Date
     let thumbnailURL: URL
 }
 
-protocol ArticlesLoading: Sendable {
-    func articles() async throws -> [Article]
-    func favourites() async -> Set<String>
-}
-
-struct ArticlesLoader: ArticlesLoading {
-    let session: URLSession
-    let endpoint: URL
-    let favouritesFile: URL
-
-    // @concurrent: always runs on the background pool, never on the caller's actor.
-    @concurrent func articles() async throws -> [Article] {
-        let (data, _) = try await session.data(from: endpoint)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode([Article].self, from: data)
-    }
-
-    @concurrent func favourites() async -> Set<String> {
-        guard let data = try? Data(contentsOf: favouritesFile) else { return [] }
-        return (try? JSONDecoder().decode(Set<String>.self, from: data)) ?? []
-    }
-}
-
-protocol ThumbnailLoading: Sendable {
-    func thumbnail(for url: URL, fittingPixels size: CGSize) async throws -> UIImage?
-}
-
-struct ThumbnailLoader: ThumbnailLoading {
-    let session: URLSession
-
-    @concurrent func thumbnail(for url: URL, fittingPixels size: CGSize) async throws -> UIImage? {
-        let (data, _) = try await session.data(from: url)
-        // Shrinks and decodes now, off the main thread, so drawing it later costs nothing.
-        return await UIImage(data: data)?.byPreparingThumbnail(ofSize: size)
-    }
-}
-
-final class ArticleCell: UITableViewCell {
-    static let reuseID = "ArticleCell"
-    private static let dateStyle = Date.FormatStyle(date: .abbreviated, time: .omitted)
-    private var thumbnailTask: Task<Void, Never>?
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        thumbnailTask?.cancel()
-    }
-
-    func configure(with article: Article, isFavourite: Bool, thumbnails: ThumbnailLoading) {
-        var content = defaultContentConfiguration()
-        content.text = article.title
-        content.secondaryText = article.publishedAt.formatted(Self.dateStyle)
-        content.image = UIImage(systemName: "photo")   // placeholder until the real one arrives
-        contentConfiguration = content
-        accessoryType = isFavourite ? .checkmark : .none
-
-        let side = 60 * traitCollection.displayScale    // the thumbnail is 60 pt square
-        thumbnailTask?.cancel()
-        thumbnailTask = Task { [weak self] in
-            guard let image = try? await thumbnails.thumbnail(for: article.thumbnailURL,
-                                                              fittingPixels: CGSize(width: side, height: side)),
-                  !Task.isCancelled, let self,
-                  var content = self.contentConfiguration as? UIListContentConfiguration else { return }
-            content.image = image
-            self.contentConfiguration = content
-        }
-    }
-}
-
 final class ArticlesViewController: UITableViewController {
-    private let loader: ArticlesLoading
-    private let thumbnails: ThumbnailLoading
     private var articles: [Article] = []
     private var favourites: Set<String> = []
-    private var loadTask: Task<Void, Never>?
-
-    init(loader: ArticlesLoading, thumbnails: ThumbnailLoading) {
-        self.loader = loader
-        self.thumbnails = thumbnails
-        super.init(style: .plain)
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    private static let dateStyle = Date.FormatStyle(date: .abbreviated, time: .omitted)  // key 5, 12
+    var load: @Sendable () async throws -> ([Article], Set<String>) = loadArticles  // key 6: the seam
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        tableView.register(ArticleCell.self, forCellReuseIdentifier: ArticleCell.reuseID)
-        loadTask = Task { [weak self, loader] in
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ArticleCell")
+
+        let load = self.load
+        Task { [weak self] in
             do {
-                async let list = loader.articles()
-                async let saved = loader.favourites()
-                let (articles, favourites) = try await (list, saved)
+                let (loaded, saved) = try await load()          // key 1, 2, 9, 10: off main, no try!
                 guard let self else { return }
-                self.articles = articles
-                self.favourites = favourites
-                self.tableView.reloadData()           // once, with everything
+                articles = loaded
+                favourites = saved
+                tableView.reloadData()                          // key 11: once
             } catch {
-                self?.showError(error)
+                let label = UILabel()                           // key 1, 4: an error state, not a crash
+                label.text = "Couldn't load articles."
+                self?.tableView.backgroundView = label
             }
         }
     }
@@ -255,53 +197,63 @@ final class ArticlesViewController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: ArticleCell.reuseID, for: indexPath) as! ArticleCell
+        let cell = tableView.dequeueReusableCell(withIdentifier: "ArticleCell", for: indexPath)
         let article = articles[indexPath.row]
-        cell.configure(with: article, isFavourite: favourites.contains(article.id), thumbnails: thumbnails)
+
+        var content = cell.defaultContentConfiguration()
+        content.text = article.title
+        content.secondaryText = article.publishedAt.formatted(Self.dateStyle)
+        content.image = UIImage(systemName: "photo")                         // placeholder
+        content.imageProperties.maximumSize = CGSize(width: 60, height: 60)
+        cell.contentConfiguration = content
+        cell.accessoryType = favourites.contains(article.id) ? .checkmark : .none
+
+        let side = 60 * tableView.traitCollection.displayScale
+        Task { [weak tableView] in                                           // key 3, 7
+            guard let image = try? await Self.thumbnail(article.thumbnailURL, side: side),
+                  let cell = tableView?.cellForRow(at: indexPath),           // nil if scrolled away
+                  var content = cell.contentConfiguration as? UIListContentConfiguration else { return }
+            content.image = image
+            cell.contentConfiguration = content
+        }
         return cell
     }
 
-    private func showError(_ error: any Error) {
-        // An empty state with a Retry button; omitted.
+    // @concurrent: always runs on a background thread, never on the caller's actor.
+    @concurrent private static func loadArticles() async throws -> ([Article], Set<String>) {
+        let (data, _) = try await URLSession.shared.data(from: URL(string: "https://api.example.com/articles")!)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let loaded = try decoder.decode([Article].self, from: data)
+
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let saved = try? Data(contentsOf: documents.appendingPathComponent("favourites.json"))
+        let favourites = saved.flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []  // key 13
+        return (loaded, favourites)
+    }
+
+    @concurrent private static func thumbnail(_ url: URL, side: CGFloat) async throws -> UIImage? {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return await UIImage(data: data)?.byPreparingThumbnail(ofSize: CGSize(width: side, height: side))
     }
 }
 ```
 
-The timings in the key came from a Foundation-only program (`swiftc -swift-version 6 -O`, no
-warnings), run twice on an M1 Pro Mac. Its setup, in short:
-
-```swift
-let dates = (0..<10_000).map { Date(timeIntervalSince1970: Double($0) * 86_400) }
-// ① a new DateFormatter per row   ② one shared DateFormatter   ③ one Date.FormatStyle
-// ④ JSONDecoder on 5,000 Article values encoded as ~2 MB of JSON
-```
-
-```text
-① new DateFormatter per row        total 967.0 ms · per row 96.7 μs
-② one shared DateFormatter         total 10.3 ms · per row 1.0 μs
-③ one Date.FormatStyle             total 26.8 ms · per row 2.7 μs
-④ decode 5,000 articles (2164 KB): 23.3 ms
-```
-
-(The second run: 958.4 ms, 10.4 ms, 17.1 ms, 23.1 ms.)
+**Said out loud, not coded:** a spinner while loading (key 4) · an `NSCache` for thumbnails
+(key 8) · a cell subclass that cancels its download in `prepareForReuse` · a Retry button ·
+moving loading out of the controller into a view model · a `static let` for the reuse ID and URL.
 
 Why each piece:
 
-- **`@concurrent` on the loaders** — guarantees the decoding, the file read and the image
-  shrinking run on a background thread. Without it, whether a plain `async` function leaves the
-  main actor depends on a build setting (see the follow-ups); with it, the answer is always yes.
-- **`URLSession.data(from:)` instead of `Data(contentsOf:)`** — the request is asynchronous: while
-  it waits, no thread is blocked, and the main thread keeps drawing.
-- **`async let` for the two loads** — the articles and the favourites load at the same time.
-- **Code after `await` in the controller's `Task` runs on main** — the controller is `@MainActor`,
-  so assigning `articles` and calling `reloadData()` is on the right thread by construction.
-- **One `reloadData()`** — the data arrives all at once, so the table is told once.
-- **`byPreparingThumbnail(ofSize:)` with a pixel size** — shrinks to what the cell shows (points ×
-  screen scale) and decodes in the background, so drawing it during the scroll is cheap.
-- **A `Task` per cell, cancelled in `prepareForReuse`** — a reused cell never shows the previous
-  row's thumbnail, and a fast scroll cancels downloads for rows already gone (chapter 01).
-- **A `static` date style** — created once for the whole app, and locale-aware.
-- **Injected loaders** — a test can feed fixed data and check the screen without a network.
+- **`@concurrent`** — guarantees the download, the decoding, the file read and the image shrinking
+  run off the main actor. A plain `nonisolated async` function may run on the *caller's* actor
+  under the newer `nonisolated(nonsending)` default (SE-0461); `@concurrent` is clear under both.
+- **Code after `await` in the `Task` runs on main** — the controller is `@MainActor`, so setting
+  `articles` and calling `reloadData()` is on the right thread by construction.
+- **`cellForRow(at:)` after the download, not the cell captured earlier** — a captured cell may
+  have been reused for another row by then; `cellForRow(at:)` returns `nil` for a row that's gone.
+- **`maximumSize` on the image** — a thumbnail made from `Data` has scale 1, so a 180-pixel image
+  would otherwise lay out as 180 points. This pins it to the 60-point slot.
 :::
 
 ::: Now write the tests
@@ -309,86 +261,30 @@ Why each piece:
 
 **What I'd test, and why**
 
-1. **The screen loads once and shows every article, with one reload.** The old code reloaded the
-   table once per article; a *spy* table that counts `reloadData()` calls pins "once". It also
-   checks the favourite tick.
-2. **A failed load shows no rows and doesn't crash** — the old `try!` crashed on open.
-3. **Reusing a cell cancels its thumbnail download** — fast scrolling must not keep downloading
-   rows that are gone.
-4. **A thumbnail shows when it arrives** — the placeholder is replaced, the title kept.
+1. **The screen loads once and reloads once.** The old code reloaded the table once per article.
+   A *spy* table — a subclass that counts `reloadData()` calls — pins "once".
+2. **A failed load shows an error and no rows** — the old `try!` crashed on open.
+3. **A favourite is ticked** — the regression check: moving the loading must not lose the
+   favourites.
 
 What a unit test can't prove is the point of the chapter: that the work happens *off* the main
-thread and the scroll stays smooth. That's measured with Instruments (Time Profiler, Hangs) on a
-real device, before and after. The tests here pin the behaviour that makes it possible.
+thread and the scroll stays smooth. That's measured with Instruments on a device, before and after.
 
-**The seam.** The screen takes `ArticlesLoading` and `ThumbnailLoading` in `init`, so the tests pass
-*fakes*: a loader with a fixed answer that counts its calls, and a thumbnail loader that holds each
-download until the test answers it and reports when one is cancelled. The screen keeps its tasks
-private, so the tests wait for what a user would see — the table reloaded, the image set — with a
-helper that gives the main actor a turn up to a fixed number of times. No clock, so it can't be
-flaky; and each suite has a one-minute `.timeLimit` as a backstop. One detail worth knowing: the
-spy table is swapped in *after* `loadViewIfNeeded()`. Assigning `tableView` first creates the view
-without calling `viewDidLoad`, and nothing would load.
+**The seam.** The `load` closure is a property with a real default, so a test swaps in a fixed
+answer — no network, no disk. The test waits for what a user would see (the table reloaded, the
+error shown) with `waitUntil(maxYields:_:)`, which gives the main actor a turn up to a fixed number
+of times. No clock, so it can't be flaky. One detail: the spy table goes in *after*
+`loadViewIfNeeded()`. Assigning `tableView` first creates the view without calling `viewDidLoad`,
+and nothing would load.
 
 ```swift
 import Testing
 import UIKit
 
-// Fakes: fixed answers, no network, no disk.
-actor FakeArticlesLoader: ArticlesLoading {
-    private(set) var loadCount = 0
-    private let result: Result<[Article], any Error>
-    private let saved: Set<String>
-
-    init(_ result: Result<[Article], any Error>, favourites: Set<String> = []) {
-        self.result = result
-        saved = favourites
-    }
-
-    func articles() async throws -> [Article] {
-        loadCount += 1
-        return try result.get()
-    }
-
-    func favourites() async -> Set<String> { saved }
-}
-
-struct NoThumbnails: ThumbnailLoading {
-    func thumbnail(for url: URL, fittingPixels size: CGSize) async throws -> UIImage? { nil }
-}
-
-// Each thumbnail waits until the test answers it, and reports when it is cancelled.
-actor GatedThumbnails: ThumbnailLoading {
-    nonisolated let requests: AsyncStream<URL>
-    nonisolated let cancellations: AsyncStream<URL>
-    private let requested: AsyncStream<URL>.Continuation
-    private let cancelled: AsyncStream<URL>.Continuation
-    private var waiting: [URL: CheckedContinuation<UIImage?, any Error>] = [:]
-
-    init() {
-        (requests, requested) = AsyncStream.makeStream()
-        (cancellations, cancelled) = AsyncStream.makeStream()
-    }
-
-    func thumbnail(for url: URL, fittingPixels size: CGSize) async throws -> UIImage? {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                waiting[url] = continuation
-                requested.yield(url)
-            }
-        } onCancel: {
-            Task { await self.cancel(url) }
-        }
-    }
-
-    func answer(_ url: URL, with image: UIImage) {
-        waiting.removeValue(forKey: url)?.resume(returning: image)
-    }
-
-    private func cancel(_ url: URL) {
-        cancelled.yield(url)
-        waiting.removeValue(forKey: url)?.resume(throwing: CancellationError())
-    }
+// Counts how many times the screen asked for articles.
+actor LoadCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }
 
 final class TableSpy: UITableView {
@@ -399,16 +295,8 @@ final class TableSpy: UITableView {
     }
 }
 
-extension AsyncStream {
-    func first() async -> Element? {
-        var iterator = makeAsyncIterator()
-        return await iterator.next()
-    }
-}
-
-/// The screen and the cell keep their tasks private, so the test waits for what the user would
-/// see instead: it gives the main actor a turn, up to a fixed number of times, until the condition
-/// holds. A count of turns, not a clock, so a slow machine can't make it flaky or hang.
+/// Gives the main actor a turn, up to a fixed number of times, until the condition holds.
+/// A count of turns, not a clock, so a slow machine can't make it flaky.
 @MainActor
 func waitUntil(maxYields: Int = 1_000, _ condition: () async -> Bool) async {
     for _ in 0..<maxYields {
@@ -418,88 +306,71 @@ func waitUntil(maxYields: Int = 1_000, _ condition: () async -> Bool) async {
 }
 
 func makeArticle(_ id: String) -> Article {
+    // /dev/null reads as empty data, so the thumbnail task ends at once, with no network.
     Article(id: id, title: "Article \(id)", publishedAt: Date(timeIntervalSince1970: 0),
-            thumbnailURL: URL(string: "https://example.com/\(id).jpg")!)
+            thumbnailURL: URL(fileURLWithPath: "/dev/null"))
 }
 
 struct LoadFailed: Error {}
 
-@Suite(.timeLimit(.minutes(1)))
+/// Loads the screen, then swaps in a spy table. The order matters: assigning `tableView`
+/// first would create the view without calling viewDidLoad, and nothing would load.
 @MainActor
-struct ArticlesViewControllerTests {
-    @Test func loadsOnceAndShowsEveryArticle() async throws {
-        // Given three articles, one of them a favourite
-        let loader = FakeArticlesLoader(.success(["1", "2", "3"].map(makeArticle)), favourites: ["2"])
-        let screen = ArticlesViewController(loader: loader, thumbnails: NoThumbnails())
-
-        // When the screen loads (the spy table goes in after viewDidLoad, which starts the load;
-        // assigning tableView first would create the view and skip viewDidLoad)
-        screen.loadViewIfNeeded()
-        let table = TableSpy()
-        table.register(ArticleCell.self, forCellReuseIdentifier: ArticleCell.reuseID)
-        screen.tableView = table
-        await waitUntil { table.reloadCount > 0 }
-
-        // Then it asked once, reloaded once, and shows three rows with the favourite ticked
-        #expect(await loader.loadCount == 1)
-        #expect(table.reloadCount == 1)
-        #expect(screen.tableView(table, numberOfRowsInSection: 0) == 3)
-        let second = screen.tableView(table, cellForRowAt: IndexPath(row: 1, section: 0))
-        #expect(second.accessoryType == .checkmark)
-    }
-
-    @Test func failedLoadShowsNoRowsAndDoesNotCrash() async {
-        let loader = FakeArticlesLoader(.failure(LoadFailed()))
-        let screen = ArticlesViewController(loader: loader, thumbnails: NoThumbnails())
-
-        screen.loadViewIfNeeded()
-        let table = TableSpy()
-        screen.tableView = table
-        await waitUntil { await loader.loadCount == 1 }
-        await waitUntil(maxYields: 50) { false }   // let the failure finish landing
-
-        #expect(screen.tableView(table, numberOfRowsInSection: 0) == 0)
-        #expect(table.reloadCount == 0)
-    }
+func makeScreen(load: @escaping @Sendable () async throws -> ([Article], Set<String>))
+    -> (ArticlesViewController, TableSpy) {
+    let screen = ArticlesViewController(style: .plain)
+    screen.load = load
+    screen.loadViewIfNeeded()
+    let table = TableSpy()
+    table.register(UITableViewCell.self, forCellReuseIdentifier: "ArticleCell")
+    screen.tableView = table
+    return (screen, table)
 }
 
 @Suite(.timeLimit(.minutes(1)))
 @MainActor
-struct ArticleCellTests {
-    @Test func reuseCancelsTheThumbnailDownload() async {
-        // Given a cell waiting for its thumbnail
-        let thumbnails = GatedThumbnails()
-        let cell = ArticleCell(style: .default, reuseIdentifier: ArticleCell.reuseID)
-        let article = makeArticle("1")
-        cell.configure(with: article, isFavourite: false, thumbnails: thumbnails)
-        _ = await thumbnails.requests.first()
+struct ArticlesViewControllerTests {
+    @Test func loadsOnceAndReloadsOnce() async {
+        // Given a loader with three articles that counts its calls
+        let counter = LoadCounter()
+        let (screen, table) = makeScreen {
+            await counter.increment()
+            return (["1", "2", "3"].map(makeArticle), [])
+        }
 
-        // When the cell is reused
-        cell.prepareForReuse()
+        // When the load lands
+        await waitUntil { table.reloadCount > 0 }
 
-        // Then the download is cancelled
-        #expect(await thumbnails.cancellations.first() == article.thumbnailURL)
+        // Then it asked once, reloaded once, and shows three rows
+        #expect(await counter.count == 1)
+        #expect(table.reloadCount == 1)
+        #expect(screen.tableView(table, numberOfRowsInSection: 0) == 3)
     }
 
-    @Test func thumbnailShowsWhenItArrives() async {
-        let thumbnails = GatedThumbnails()
-        let cell = ArticleCell(style: .default, reuseIdentifier: ArticleCell.reuseID)
-        let article = makeArticle("1")
-        let photo = UIImage(systemName: "star")!
-        cell.configure(with: article, isFavourite: false, thumbnails: thumbnails)
-        _ = await thumbnails.requests.first()
+    @Test func failedLoadShowsAnErrorAndNoRows() async {
+        let (screen, table) = makeScreen { throw LoadFailed() }
 
-        await thumbnails.answer(article.thumbnailURL, with: photo)
-        await waitUntil { (cell.contentConfiguration as? UIListContentConfiguration)?.image === photo }
+        await waitUntil { table.backgroundView != nil }
 
-        let content = cell.contentConfiguration as? UIListContentConfiguration
-        #expect(content?.image === photo)
-        #expect(content?.text == "Article 1")
+        #expect((table.backgroundView as? UILabel)?.text == "Couldn't load articles.")
+        #expect(screen.tableView(table, numberOfRowsInSection: 0) == 0)
+        #expect(table.reloadCount == 0)
+    }
+
+    @Test func favouriteIsTicked() async {
+        let (screen, table) = makeScreen { (["1", "2"].map(makeArticle), ["2"]) }
+        await waitUntil { table.reloadCount > 0 }
+
+        let first = screen.tableView(table, cellForRowAt: IndexPath(row: 0, section: 0))
+        let second = screen.tableView(table, cellForRowAt: IndexPath(row: 1, section: 0))
+
+        #expect(first.accessoryType == .none)
+        #expect(second.accessoryType == .checkmark)
     }
 }
 ```
 
-Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
+Ran on the iOS Simulator (Swift 6 mode): 3 tests, all passed.
 :::
 
 ::: What I'd ask next
@@ -512,11 +383,10 @@ Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
   older one, with the Time Profiler and Hangs instruments: the main thread's heavy stacks should
   disappear and the hang markers on open should go. Xcode Organizer's hang rate shows the same
   for users in the field.
-- *"Where does the image cache go?"* — In the thumbnail loader: an `NSCache` keyed by URL and
-  size, checked before the request. Then scrolling back up is free.
-- *"Main Thread Checker didn't complain about any of this. Why?"* — It only catches UIKit called
-  *from a background thread*. Doing slow work *on* the main thread is legal; it's just slow. Those
-  are opposite problems with different tools.
+- *"Where does the image cache go?"* — Next to the thumbnail download: an `NSCache` keyed by URL
+  and size, checked before the request. Then scrolling back up is free.
+- *"A fast scroll starts a download for every row it passes. Then what?"* — Move the `Task` into a
+  cell subclass, keep it in a property, and cancel it in `prepareForReuse` (chapter 01).
 - *"Is `DateFormatter` safe to share across threads?"* — Yes, on iOS 7 and later it is
   thread-safe for formatting. The real constraint is not mutating its settings while others use it,
   which a `static let` you configure once avoids.

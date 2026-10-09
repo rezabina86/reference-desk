@@ -10,9 +10,8 @@ sources:
 
 *Shape: find the bug · Reported: DoorDash — debugging a sample app with "bad interface wiring and
 a race condition" (from a Glassdoor search snippet), and "a piece of code doing something pretty
-straight forward with a few problems" · UIKit — the snippet and the fix typecheck against the iOS
-SDK (iOS 18 target); the fix has zero warnings in Swift 6 mode; the race and the fixed pricing
-logic were compiled and run as Foundation-only programs with Swift 6.4, the rest checked by hand*
+straight forward with a few problems" · Verified: the snippet and the fix built in Swift 6 mode
+(Swift 6.4) and ran on the iOS Simulator*
 
 > "Here's a small sample app — a cart. QA filed four bugs: Clear doesn't clear, it adds things.
 > After you come back from the product page, one tap on Add adds everything twice. The item count
@@ -72,44 +71,16 @@ final class CartViewController: UIViewController {
 ```
 
 In Swift 5 mode this compiles silently. In Swift 6 mode it compiles with one warning, inside
-`PricingService` (capturing a non-`Sendable` completion in a `@Sendable` closure) — and nothing at
-all about the controller (both checked). The warning points one file away from the crash.
+`PricingService` (capturing a non-`Sendable` completion in a `@Sendable` closure), and nothing at
+all about the controller. It doesn't trap at runtime either: I ran it on the simulator in Swift 6
+mode, and the callback ran on a background thread and set the label there. So Swift 6 doesn't save
+you here — the warning points one file away from the crash.
 
 ::: A hint, if you're stuck
 - For each QA bug, find the line that produces it. They are four different lines.
 - Which thread does `completion` run on? How many of them can run at once?
 - `viewWillAppear` runs more than once in a screen's life. When?
 - Read the closure in `addTapped` line by line: what does the label say for the first item?
-:::
-
-::: The key — what I expect a senior to find
-1. **The crash: a data race on `items`.** `price(for:)` calls back on a global concurrent queue, so
-   with several SKUs several callbacks run at the same time, all appending to the same array. A
-   Swift array is not safe to change from two threads at once; when two appends collide during a
-   resize, memory is corrupted. I ran the same pattern 20 times — 1,000 appends with
-   `DispatchQueue.concurrentPerform` on an 8-core Mac: 19 runs crashed (segfaults, a trap, a bus
-   error) and the one that finished had 989 items, not 1,000. On a phone with a three-item basket
-   it's rarer, which is why it reached QA. Fix: only ever touch `items` on the main actor.
-2. **UI changed from a background thread.** `countLabel.text` is set inside the same background
-   callback. UIKit is main-thread only; off main the label may not redraw, may redraw late, or may
-   crash inside UIKit. Main Thread Checker flags this line the first time it runs.
-3. **Clear is wired to Add (QA bug 1).** `clearButton` targets `#selector(addTapped)`, so Clear
-   prices and adds the selection. `clearTapped` is dead code. Wrong selector, compiles fine.
-4. **Add is wired again every time the screen appears (QA bug 2).** `viewWillAppear` runs on first
-   show *and* every time you come back from a pushed screen. Each time, `addAction` adds a new
-   closure, and closures don't replace each other, so after one round trip a tap runs `addTapped`
-   twice. Wire once, in `viewDidLoad`. (I checked: adding the *same* target and selector twice
-   keeps one entry, so the old `addTarget` style would have hidden this. Fresh `UIAction`s stack.)
-5. **The count is one behind (QA bug 3).** The label is set *before* the append, so it shows the
-   count before this item arrived. Update the label after the change — a `didSet` on `items` makes
-   it impossible to get the order wrong.
-6. **One label update per item, in random order.** Even when fixed, the label flickers through
-   1, 2, 3 and the items land in whatever order the callbacks finish. Price everything, then
-   append once, in the order the user chose.
-7. **No guard against double taps.** Two quick taps price the basket twice. Disable Add while a
-   request is in flight.
-8. **`PricingService` is built inside the controller.** Nothing can be faked, so none of these
-   bugs could have been caught by a test. Inject it behind a protocol.
 :::
 
 ::: How I'd debug it
@@ -127,6 +98,42 @@ I'd say this before touching code, because the round scores *how* you debug as m
   don't crash. That's the point: a race shows up in TSan far more reliably than as a crash.
 - **For the off-by-one, a breakpoint with a log action** on the label line that prints
   `items.count` makes the "before the append" order obvious.
+:::
+
+::: The key — what I expect a senior to find
+1. **The crash: a data race on `items` (QA bug 4).** `price(for:)` calls back on a global
+   concurrent queue, so with several SKUs several callbacks run at the same time, all appending to
+   the same array. A Swift array is not safe to change from two threads at once; when two appends
+   collide during a resize, memory is corrupted. Twenty runs of 1,000 concurrent appends, in a
+   stand-alone program: 3 crashed and 3 more silently lost items. A three-item basket hits it far
+   more rarely, which is why it reached QA. Fix: only touch `items` on the main thread.
+2. **UI changed from a background thread.** `countLabel.text` is set in the same background
+   callback. UIKit is main-thread only; off main the label may not redraw, redraw late, or crash
+   inside UIKit. Main Thread Checker flags this line the first time it runs.
+3. **The callback holds `self` strongly.** It isn't a cycle, so nothing leaks for good, but a closed
+   cart stays alive until every price comes back and then updates a screen nobody sees. Fine for a
+   fast local lookup; with a network call, capture `[weak self]`.
+4. **Clear is wired to Add (QA bug 1).** `clearButton` targets `#selector(addTapped)`, so Clear
+   prices and adds the selection. `clearTapped` is dead code. Wrong selector, compiles fine.
+5. **Add is wired again every time the screen appears (QA bug 2).** `viewWillAppear` runs on first
+   show *and* every time you come back from a pushed screen. Each `addAction` adds a new closure, so
+   after one round trip a tap runs `addTapped` twice. Wire once, in `viewDidLoad`. (Adding the same
+   target and selector twice keeps one entry; fresh `UIAction`s stack.)
+6. **The count is one behind (QA bug 3).** The label is set *before* the append, so it shows the
+   count before this item arrived. Update the label after the change.
+7. **An add still in flight lands after Clear.** Tap Add, then Clear before the prices come back:
+   the items reappear in a cart the user just emptied.
+8. **One label update per item, in random order.** Even when fixed, the label flickers through
+   1, 2, 3, and the items land in whatever order the callbacks finish, not the order the user chose.
+9. **No guard against double taps.** Two quick taps price the basket twice. Disable Add while a
+   request is in flight.
+10. **"1 items".** The text isn't pluralised or localised. Use a String Catalog plural.
+11. **Pricing has no failure path.** The completion only takes a `CartItem`. A failed lookup can't
+    report anything, so the user taps Add and nothing happens. Pass a `Result`.
+12. **`PricingService` is built inside the controller.** Nothing can be faked, so none of these bugs
+    could have been caught by a test. Inject it behind a protocol.
+13. **`selectedSKUs` is writable by anyone, and the wiring mixes styles.** Target-action for one
+    button, `UIAction` for the other: pick one, so a reader can find every connection the same way.
 :::
 
 ::: The idea behind it
@@ -150,28 +157,18 @@ and `addAction`, and ask how many times each runs.
 :::
 
 ::: The fix
+Same screen, same callback API, same storyboard outlets. The four QA bugs are four small edits.
+
 ```swift
-struct CartItem: Sendable, Equatable {
-    let sku: String
-    let price: Decimal
+protocol PricingServiceType {                                          // key 12: the one seam
+    func price(for sku: String, completion: @escaping @Sendable (CartItem) -> Void)
 }
 
-protocol Pricing: Sendable {
-    func price(for sku: String) async -> CartItem
-}
-
-extension Pricing {
-    /// Prices every SKU at the same time, then hands back the results in the order asked for.
-    func prices(for skus: [String]) async -> [CartItem] {
-        await withTaskGroup(of: (Int, CartItem).self) { group in
-            for (index, sku) in skus.enumerated() {
-                group.addTask { (index, await price(for: sku)) }
-            }
-            var priced = [CartItem?](repeating: nil, count: skus.count)
-            for await (index, item) in group {   // results arrive one at a time, here
-                priced[index] = item
-            }
-            return priced.compactMap { $0 }
+final class PricingService: PricingServiceType {
+    func price(for sku: String, completion: @escaping @Sendable (CartItem) -> Void) {
+        DispatchQueue.global().async {
+            // Looks the price up in a local database, then calls back.
+            completion(CartItem(sku: sku, price: 4.99))
         }
     }
 }
@@ -182,107 +179,49 @@ final class CartViewController: UIViewController {
     @IBOutlet private var countLabel: UILabel!
 
     var selectedSKUs: [String] = []
-    private var items: [CartItem] = [] {
-        didSet { countLabel.text = "\(items.count) items" }   // runs after the change
-    }
-    private let pricing: Pricing
-    private var addTask: Task<Void, Never>?
-
-    init?(coder: NSCoder, pricing: Pricing) {
-        self.pricing = pricing
-        super.init(coder: coder)
-    }
-
-    required init?(coder: NSCoder) { fatalError("Use init(coder:pricing:)") }
+    private var items: [CartItem] = []
+    var pricing: PricingServiceType = PricingService()                 // key 12
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        addButton.addTarget(self, action: #selector(addTapped), for: .touchUpInside)
-        clearButton.addTarget(self, action: #selector(clearTapped), for: .touchUpInside)
+        addButton.addTarget(self, action: #selector(addTapped), for: .touchUpInside)     // key 5
+        clearButton.addTarget(self, action: #selector(clearTapped), for: .touchUpInside) // key 4
     }
 
+    // key 5: viewWillAppear deleted — nothing to wire there
+
     @objc private func addTapped() {
-        guard addTask == nil else { return }
-        addButton.isEnabled = false
-        let skus = selectedSKUs
-        addTask = Task {
-            defer {
-                addTask = nil
-                addButton.isEnabled = true
+        for sku in selectedSKUs {
+            pricing.price(for: sku) { item in
+                DispatchQueue.main.async {                             // key 1, 2: main only
+                    self.items.append(item)
+                    self.countLabel.text = "\(self.items.count) items" // key 6: after the append
+                }
             }
-            let priced = await pricing.prices(for: skus)
-            guard !Task.isCancelled else { return }
-            items.append(contentsOf: priced)   // on the main actor: one writer, one label update
         }
     }
 
     @objc private func clearTapped() {
-        addTask?.cancel()   // an add still in flight must not land after Clear
         items.removeAll()
+        countLabel.text = "0 items"
     }
 }
 ```
 
-The broken pattern, as a Foundation-only program (compiled with `-swift-version 5`; Swift 6 mode
-gives a warning here, not an error, because Dispatch's API predates strict checking):
-
-```swift
-final class Cart {
-    var items: [Int] = []
-}
-
-func addAll() {
-    let cart = Cart()
-    DispatchQueue.concurrentPerform(iterations: 1_000) { i in
-        cart.items.append(i)          // many threads append at once
-    }
-    print("expected 1000, got \(cart.items.count)")
-}
-addAll()
-```
-
-```text
-20 runs: 15 × exit 139 (segfault), 3 × exit 133 (trap), 1 × exit 138 (bus error),
-         1 × "expected 1000, got 989"
-```
-
-The fixed pricing logic, driven by a fake that answers each SKU after a random 0–500 µs so
-replies come back out of order (compiled with `-swift-version 6`, no warnings):
-
-```swift
-struct FakePricing: Pricing {
-    func price(for sku: String) async -> CartItem {
-        try? await Task.sleep(for: .microseconds(Int.random(in: 0...500)))   // replies in random order
-        return CartItem(sku: sku, price: 4.99)
-    }
-}
-
-@MainActor final class Cart {
-    private(set) var items: [CartItem] = []
-    func add(_ skus: [String], using pricing: Pricing) async {
-        items.append(contentsOf: await pricing.prices(for: skus))
-    }
-}
-```
-
-Twenty runs of 1,000 SKUs: all 20 ended with 1,000 items, in the order asked for.
+**Said out loud, not coded:** keep results in the user's order and update the label once (key 8);
+disable Add while pricing (key 9); have Clear drop adds still in flight (key 7); a plural string
+(key 10); a `Result` in the callback (key 11); then move to `async`/`await` on a `@MainActor`
+controller and inject the service through `instantiateViewController(identifier:creator:)`.
 
 Why each piece:
 
-- **`async` pricing instead of a callback** — the controller is `@MainActor` (every
-  `UIViewController` is), so code after `await` in its `Task` runs on main. The append and the
-  label update can't happen on a background thread.
-- **The task group** — still prices in parallel, but results are collected by a single `for await`
-  loop, one at a time. Parallel work, one writer.
-- **Results placed by index** — the cart shows items in the order the user picked them, not the
-  order the database answered.
-- **`didSet` on `items`** — the label is derived from the array *after* every change, so it can't
-  be one behind, and Clear updates it for free.
-- **Both buttons wired once, in `viewDidLoad`, to the right selectors.**
-- **`addTask` and `isEnabled`** — one add at a time; Clear cancels a pending add so a slow reply
-  can't refill a cart the user just emptied.
-- **`init?(coder:pricing:)`** — the service is injected (with a storyboard, through
-  `instantiateViewController(identifier:creator:)`), so a test can use `FakePricing`.
+- **`DispatchQueue.main.async` around both lines.** Every append now happens on one thread, one
+  after another, so the race is gone; the label is on main too.
+- **`@Sendable` on the completion.** It tells the compiler the closure runs on another thread. It
+  also clears the snippet's warning — and if someone deletes the main-queue hop, Swift 6 now warns
+  on every line that touches `items` or `countLabel`.
+- **A property with a default, not a new initialiser.** The storyboard still creates the controller
+  the way it always did; a test just replaces `pricing`.
 :::
 
 ::: Now write the tests
@@ -290,202 +229,153 @@ Why each piece:
 
 **What I'd test, and why**
 
-1. **Prices come back in the order asked, even when replies don't.** The fake answers c, then a,
-   then b; the cart still gets a, b, c. That's the ordering half of the race fix.
-2. **The count matches the items after Add and Clear** — "3 items" after three, "0 items" after
-   Clear. This catches the off-by-one label *and* Clear being wired to Add.
-3. **Tapping Add twice quickly prices once** — the "adds everything twice" report.
-4. **Clear cancels an add still in flight** — a slow price must not refill a cart the user just
-   emptied.
+1. **Prices answered in the background all land.** 200 SKUs answered on background threads at once
+   end as "200 items". That's the crash fix, and it goes first.
+2. **The count reads N after adding N** — "3 items", not "2 items". The off-by-one.
+3. **Clear empties the cart and prices nothing.** Catches Clear being wired to Add.
+4. **Coming back to the screen doesn't double-add.** `viewWillAppear` twice, one tap, one price
+   request.
 
-I wouldn't try to unit-test the crash itself. A data race is a matter of luck; Thread Sanitizer
-finds it reliably, a unit test doesn't. The fix makes it impossible by construction (one writer on
-the main actor), and these tests pin the behaviour around it.
+I wouldn't count on test 1 to catch the race every time — a data race is a matter of luck, and
+Thread Sanitizer finds it reliably. The test pins the behaviour; TSan and the main-queue hop do
+the rest.
 
-**The seam.** `Pricing` is injected through `init(coder:pricing:)`, so the test passes a *fake*
-price list that holds each request until the test answers it — that's how it picks the order
-replies arrive in. The controller only has a coder initialiser, so the test builds it the way a
-storyboard would: an empty coder, then the outlets connected by key. Small *spies* — real
-`UIButton`/`UILabel` subclasses that also report every change — let the test wait for "the add
-finished" instead of sleeping. Each suite has a one-minute `.timeLimit`, so a test that waits for
-something that never happens fails instead of hanging the run.
+**The seam.** `pricing` is a property with a default, so the test swaps in a *fake* that records
+each SKU and answers straight away (or on a background queue, for test 1). The test builds the
+controller in code and connects the outlets by key, the way a storyboard would. The fix puts each
+result on the main queue, so the test waits a bounded number of turns for the label instead of
+sleeping.
 
 ```swift
 import Testing
 import UIKit
 
-// A fake price list. Each SKU waits until the test answers it, so the test picks the order.
-actor GatedPricing: Pricing {
+/// A fake price list: records every SKU it's asked for and answers straight away.
+final class FakePricing: PricingServiceType, @unchecked Sendable {
     private(set) var asked: [String] = []
-    private var waiting: [String: CheckedContinuation<CartItem, Never>] = [:]
-    nonisolated let arrivals: AsyncStream<String>
-    private let arrived: AsyncStream<String>.Continuation
+    var answersInBackground = false
 
-    init() { (arrivals, arrived) = AsyncStream.makeStream() }
-
-    func price(for sku: String) async -> CartItem {
+    func price(for sku: String, completion: @escaping @Sendable (CartItem) -> Void) {
         asked.append(sku)
-        return await withCheckedContinuation { continuation in
-            waiting[sku] = continuation
-            arrived.yield(sku)                 // tells the test this SKU is now waiting
+        let item = CartItem(sku: sku, price: 4.99)
+        if answersInBackground {
+            DispatchQueue.global().async { completion(item) }
+        } else {
+            completion(item)
         }
     }
-
-    func answer(_ sku: String) {
-        waiting.removeValue(forKey: sku)?.resume(returning: CartItem(sku: sku, price: 4.99))
-    }
 }
 
-extension AsyncStream {
-    func take(_ count: Int) async {
-        var iterator = makeAsyncIterator()
-        for _ in 0..<count { _ = await iterator.next() }
-    }
-}
-
-// Spies: real controls that also report every change through a stream.
-final class LabelSpy: UILabel {
-    let texts: AsyncStream<String?>
-    private let changed: AsyncStream<String?>.Continuation
-
-    override init(frame: CGRect) {
-        (texts, changed) = AsyncStream.makeStream()
-        super.init(frame: frame)
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override var text: String? { didSet { changed.yield(text) } }
-
-    func waitForText(_ expected: String) async {
-        for await text in texts where text == expected { return }
-    }
-}
-
-final class ButtonSpy: UIButton {
-    private let states: AsyncStream<Bool>
-    private let changed: AsyncStream<Bool>.Continuation
-
-    override init(frame: CGRect) {
-        (states, changed) = AsyncStream.makeStream()
-        super.init(frame: frame)
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override var isEnabled: Bool { didSet { changed.yield(isEnabled) } }
-
-    /// Returns once the button was disabled and then enabled again: the add has finished.
-    func waitUntilAddFinishes() async {
-        var wasDisabled = false
-        for await enabled in states {
-            if !enabled { wasDisabled = true } else if wasDisabled { return }
-        }
+/// Gives the main queue a turn, a fixed number of times, until the condition holds. No clocks.
+@MainActor
+func waitUntil(maxYields: Int = 1_000, _ condition: () async -> Bool) async {
+    for _ in 0..<maxYields {
+        if await condition() { return }
+        await Task.yield()
     }
 }
 
 @MainActor
 struct CartScreen {
-    let controller: CartViewController
-    let add = ButtonSpy()
+    let controller = CartViewController()
+    let add = UIButton()
     let clear = UIButton()
-    let count = LabelSpy()
+    let count = UILabel()
+    let pricing = FakePricing()
 
-    init(pricing: Pricing, skus: [String]) throws {
-        // The controller only has a coder initialiser, so build it the way a storyboard
-        // would: an empty coder, then the outlets connected by key.
-        let archiver = NSKeyedArchiver(requiringSecureCoding: false)
-        archiver.finishEncoding()
-        let coder = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
-        coder.requiresSecureCoding = false
-        controller = try #require(CartViewController(coder: coder, pricing: pricing))
-        controller.setValue(add, forKey: "addButton")
+    init(skus: [String]) {
+        controller.setValue(add, forKey: "addButton")   // what the storyboard would connect
         controller.setValue(clear, forKey: "clearButton")
         controller.setValue(count, forKey: "countLabel")
-        controller.loadViewIfNeeded()          // viewDidLoad wires the buttons
+        controller.pricing = pricing
         controller.selectedSKUs = skus
+        controller.loadViewIfNeeded()                   // viewDidLoad wires the buttons
     }
 }
 
-@Suite(.timeLimit(.minutes(1)))
-struct PricingTests {
-    @Test func pricesComeBackInTheOrderAsked() async {
-        let pricing = GatedPricing()
-        async let priced = pricing.prices(for: ["a", "b", "c"])
-        await pricing.arrivals.take(3)         // all three are being priced
-
-        // The database answers c first, then a, then b
-        for sku in ["c", "a", "b"] { await pricing.answer(sku) }
-
-        #expect(await priced.map(\.sku) == ["a", "b", "c"])
-    }
-}
-
-@Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct CartViewControllerTests {
-    @Test func countMatchesTheItemsAfterAddAndClear() async throws {
-        let pricing = GatedPricing()
-        let cart = try CartScreen(pricing: pricing, skus: ["a", "b", "c"])
 
+    @Test
+    func pricesAnsweredInTheBackgroundAllLand() async {
+        // Given a basket of 200 SKUs, priced on background threads at the same time
+        let cart = CartScreen(skus: (0..<200).map { "sku\($0)" })
+        cart.pricing.answersInBackground = true
+
+        // When the user taps Add
         cart.add.sendActions(for: .touchUpInside)
-        await pricing.arrivals.take(3)
-        for sku in ["a", "b", "c"] { await pricing.answer(sku) }
-        await cart.count.waitForText("3 items")      // not "2 items": the label isn't one behind
 
-        cart.clear.sendActions(for: .touchUpInside)
-        #expect(cart.count.text == "0 items")
+        // Then every item lands, none lost
+        await waitUntil { cart.count.text == "200 items" }
+        #expect(cart.count.text == "200 items")
     }
 
-    @Test func tappingAddTwiceQuicklyPricesOnce() async throws {
-        let pricing = GatedPricing()
-        let cart = try CartScreen(pricing: pricing, skus: ["a"])
+    @Test
+    func countReadsNAfterAddingN() async {
+        let cart = CartScreen(skus: ["a", "b", "c"])
 
         cart.add.sendActions(for: .touchUpInside)
-        cart.add.sendActions(for: .touchUpInside)    // a double tap
-        await pricing.arrivals.take(1)
-        await pricing.answer("a")
-        await cart.add.waitUntilAddFinishes()
 
-        #expect(await pricing.asked == ["a"])
+        await waitUntil { cart.count.text == "3 items" }
+        #expect(cart.count.text == "3 items")          // not "2 items"
+    }
+
+    @Test
+    func clearEmptiesTheCart() async {
+        // Given two items in the cart
+        let cart = CartScreen(skus: ["a", "b"])
+        cart.add.sendActions(for: .touchUpInside)
+        await waitUntil { cart.count.text == "2 items" }
+
+        // When the user taps Clear
+        cart.clear.sendActions(for: .touchUpInside)
+
+        // Then the cart is empty, and Clear priced nothing
+        #expect(cart.count.text == "0 items")
+        #expect(cart.pricing.asked == ["a", "b"])
+    }
+
+    @Test
+    func comingBackToTheScreenDoesNotDoubleAdd() async {
+        // Given the screen appeared twice: first show, then back from the product page
+        let cart = CartScreen(skus: ["a"])
+        cart.controller.viewWillAppear(false)
+        cart.controller.viewWillAppear(false)
+
+        // When the user taps Add once
+        cart.add.sendActions(for: .touchUpInside)
+        await waitUntil { cart.count.text == "1 items" }
+
+        // Then the SKU was priced once
+        #expect(cart.pricing.asked == ["a"])
         #expect(cart.count.text == "1 items")
-    }
-
-    @Test func clearCancelsAnAddStillInFlight() async throws {
-        // Given an add waiting for its price
-        let pricing = GatedPricing()
-        let cart = try CartScreen(pricing: pricing, skus: ["a"])
-        cart.add.sendActions(for: .touchUpInside)
-        await pricing.arrivals.take(1)
-
-        // When the user taps Clear, and only then the price comes back
-        cart.clear.sendActions(for: .touchUpInside)
-        await pricing.answer("a")
-        await cart.add.waitUntilAddFinishes()
-
-        // Then the cart stays empty
-        #expect(cart.count.text == "0 items")
     }
 }
 ```
 
-Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
+The last two tests assert "1 items" and "0 items" on purpose: they pin today's text. When key 10
+is fixed, they change with it.
+
+Ran on the iOS Simulator (Swift 6 mode): 4 tests, all passed.
 :::
 
 ::: What I'd ask next
+- *"Why not move to `async`/`await` right away?"* — In the interview, the main-queue hop fixes all
+  four bugs in a few lines. In the codebase I'd go further: an `async` price lookup on a
+  `@MainActor` controller means the code after `await` is on main by construction, and the
+  compiler checks it. The hop is something the next person can forget.
 - *"The old `PricingService` can't change. How do you get `async` from it?"* — Wrap it with
   `withCheckedContinuation`: call the old method and resume the continuation in its completion,
   exactly once.
-- *"Why not just wrap the append in `DispatchQueue.main.async`?"* — It would fix the race and the
-  thread, and it's a fine minimal fix in an interview. But the compiler can't check it, and the
-  next person to add a callback can forget it. `@MainActor` makes forgetting a compile error.
 - *"Could you use a lock instead?"* — Yes, for a model that isn't UI state: a `Mutex` (from the
   Synchronization module) or an actor around the array. For state that drives a label, the main
-  actor is simpler, because the UI has to read it there anyway.
+  thread is simpler, because the UI has to read it there anyway.
 - *"Why does Thread Sanitizer catch it when the app doesn't crash?"* — TSan watches every memory
   access and flags two unsynchronised accesses from different threads, whether or not they
   happened to collide this time. A crash needs the collision; TSan only needs the possibility.
-- *"Would Swift 6 have caught all of this?"* — The race, partly. As written, no: the controller
-  raises nothing. Mark the completion `@Sendable` and Swift 6 mode flags every line in the callback
-  that touches `items` or `countLabel` — but as warnings, not errors, when I checked against the iOS
-  SDK. Warnings get ignored; moving to `async` makes the problem disappear instead. The wiring bugs
-  and the off-by-one, no — they are correct Swift that does the wrong thing.
+- *"Would Swift 6 have caught all of this?"* — As written, no: the controller raises nothing, and
+  the callback isn't checked at runtime either. Mark the completion `@Sendable` and Swift 6 mode
+  flags every line in the callback that touches `items` or `countLabel` — as warnings, not errors,
+  because UIKit's checks are relaxed for older code. The wiring bugs and the off-by-one, no: they
+  are correct Swift that does the wrong thing.
 :::

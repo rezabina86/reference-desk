@@ -10,9 +10,8 @@ sources:
 ---
 
 *Shape: find the bug, in two parts · Reported: Snapchat — design a class and solve its
-concurrency issues and race conditions; TikTok — threads, GCD and race conditions · Compiled and
-run with Swift 6.4: part 1 is rejected in Swift 6 mode and was run in Swift 5 mode; part 2 and the
-fix compile in Swift 6 mode with zero warnings and were run against a fake auth server*
+concurrency issues and race conditions; TikTok — threads, GCD and race conditions · Verified: part 1
+is rejected in Swift 6 mode, part 2 compiles; the fix and its tests ran with Swift 6.4*
 
 > "Support tickets say users get logged out at random, usually right after opening the app in the
 > morning. Our backend rotates refresh tokens — each one works once. Here's the session manager.
@@ -97,55 +96,43 @@ actor NaiveSession {
 :::
 
 ::: The key — what I expect a senior to find
-I ran both against a fake auth server that rotates refresh tokens and takes 50 ms to answer.
-Part 1, two requests at once, three runs in Swift 5 mode (real output, one run shown):
+The reported bug comes first. Against a fake auth server that rotates refresh tokens, part 1 with
+two requests refreshed twice and logged the user out; the actor with three requests refreshed
+three times and logged out twice.
 
-```text
-refresh #1 with r0: ok -> a1
-feed got token: a1
-refresh #2 with r0: rejected (already used)
-LOGGED OUT
-profile got token: nil
-refresh calls: 2
-```
-
-Part 2, the actor, three requests at once in Swift 6 mode:
-
-```text
-actor, no in-flight task:
-  refresh #1 with r0: ok -> a1
-  refresh #3 with r0: rejected, already used
-  feed: a1
-  refresh #2 with r0: rejected, already used
-  inbox: failed -> log out
-  profile: failed -> log out
-  refresh calls: 3
-```
-
-1. **Check-then-act race: two refreshes.** Both requests check "is the token expired?", both
-   see yes, both refresh. Nothing records that a refresh is already running. This is the
-   morning-logout bug.
+1. **Check-then-act race: two refreshes (the reported bug).** Both requests check "is the token
+   expired?", both see yes, both refresh. Nothing records that a refresh is already running.
 2. **The second refresh destroys the session.** With rotation, the first refresh spends `r0`. The
-   second sends the same `r0`, the server rejects it — and in real auth servers that reuse is
-   often treated as theft, so the whole session is revoked. The user did nothing wrong.
-3. **Data race on `tokens`.** It's read on whatever thread calls `withValidToken` and written on
-   whatever queue the refresher calls back on. Unsynchronised reads and writes of a struct with
-   strings can tear or crash. Swift 6 refuses part 1 — verified: *static property 'shared' is not
-   concurrency-safe*. In Swift 5 mode it compiles with no warning.
-4. **The actor doesn't fix it (part 2).** An actor runs one *piece* of code at a time, but it lets
+   second sends the same `r0` and is rejected — and real auth servers often treat that reuse as
+   theft and revoke the whole session. The user did nothing wrong.
+3. **The actor doesn't fix it (part 2).** An actor runs one *piece* of code at a time, but it lets
    go at every `await`. While caller 1 waits for the network, callers 2 and 3 enter, see the same
-   expired token, and start their own refreshes. Three calls, two logouts. The data race is gone;
-   the logic race isn't.
-5. **Logout fires once per failed request.** Two failures, two `onLogout` calls — two login
-   screens pushed, two analytics events. Logout must happen once.
-6. **Any failure logs out.** Offline, a timeout or a 500 also clears the tokens. Only a rejected
+   expired token, and start their own refreshes. The data race is gone; the logic race isn't.
+   Fix: store the in-flight refresh `Task` and make later callers wait on it.
+4. **`refresher` is implicitly unwrapped.** If nobody sets it before the first request, the app
+   crashes. Pass it in through `init`.
+5. **Data race on `tokens`.** It's read on whatever thread calls `withValidToken` and written on
+   whatever queue the refresher calls back on. Unsynchronised reads and writes of a struct holding
+   strings can tear or crash. Swift 6 mode refuses part 1 (*static property 'shared' is not
+   concurrency-safe*); Swift 5 mode compiles it with no warning.
+6. **Callbacks on the wrong thread.** `completion` and `onLogout` run on the refresher's queue. The
+   caller will update UI from them, and `onLogout` will present a login screen — off the main
+   thread.
+7. **Logout during a refresh brings the user back.** Nothing stops a refresh that finishes after
+   logout from writing new tokens. On a shared device that's a privacy bug.
+8. **Logout fires once per failed request.** Two failures, two `onLogout` calls — two login screens,
+   two analytics events. Logout must happen once.
+9. **Any failure logs out.** Offline, a timeout or a 500 also clears the tokens. Only a rejected
    refresh token means "log in again"; a network error means "try later".
-7. **No expiry margin.** `expiresAt > Date()` passes a token with one second left; it expires on
-   the way to the server and the request gets a 401. Refresh a little early.
-8. **Logout during a refresh brings the user back.** Nothing stops a refresh that finishes after
-   logout from writing new tokens. That's a privacy bug on a shared device.
-9. **Untestable design.** A singleton, an implicitly unwrapped `refresher`, and `Date()` read
-   directly mean no test can control time or swap the server.
+10. **No tokens still calls the server.** `tokens?.refresh ?? ""` sends an empty refresh token, a
+    request that can only fail. With no tokens, fail at once with "logged out".
+11. **No expiry margin.** `expiresAt > Date()` passes a token with one second left; it expires on
+    the way to the server and the request gets a 401. Refresh a little early.
+12. **No timeout.** If the refresher never calls back, every request waiting for a token hangs
+    forever. Put a deadline on the refresh.
+13. **Untestable and too open.** A singleton, `Date()` read directly, and `tokens` and `refresher`
+    writable by anyone: no test can control time or swap the server, and any code can overwrite
+    the session.
 :::
 
 ::: The idea behind it
@@ -169,225 +156,175 @@ another. When it finishes, the note comes down.
 :::
 
 ::: The fix
+I fix part 2, because that's where the candidate ended up. Same actor, same names; the changes
+are the in-flight task, the empty-token guard and the margin.
+
 ```swift
+struct Tokens: Sendable {                                   // a Task can only return Sendable values
+    let access: String
+    let refresh: String
+    let expiresAt: Date
+}
+
 enum SessionError: Error {
     case loggedOut
 }
 
-actor Session {
+actor NaiveSession {
     private var tokens: Tokens?
-    private var refreshTask: Task<Tokens, any Error>?
+    private var refreshTask: Task<Tokens, any Error>?          // key 1, 3: "a refresh is running"
     private let refresher: any TokenRefreshing
-    private let now: @Sendable () -> Date
-    private let leeway: TimeInterval = 30
 
-    init(tokens: Tokens?, refresher: any TokenRefreshing, now: @escaping @Sendable () -> Date) {
+    init(tokens: Tokens?, refresher: any TokenRefreshing) {
         self.tokens = tokens
         self.refresher = refresher
-        self.now = now
     }
 
     func validAccessToken() async throws -> String {
-        let task: Task<Tokens, any Error>
-        if let refreshTask {
-            task = refreshTask                  // a refresh is already running: join it
-        } else {
-            guard let tokens else { throw SessionError.loggedOut }
-            if tokens.expiresAt.timeIntervalSince(now()) > leeway {
-                return tokens.access
-            }
-            task = Task { [refresher] in
-                try await refresher.refresh(using: tokens.refresh)
-            }
-            refreshTask = task                  // stored BEFORE the first await
+        if let refreshTask {                                    // key 3: join the one in flight
+            return try await refreshTask.value.access
         }
-
+        guard let tokens else { throw SessionError.loggedOut } // key 10: no "" refresh token
+        if tokens.expiresAt.timeIntervalSinceNow > 30 {         // key 11: refresh 30 s early
+            return tokens.access
+        }
+        let task = Task { try await refresher.refresh(using: tokens.refresh) }
+        refreshTask = task                                      // key 1: stored before any await
+        defer { refreshTask = nil }                             // only the caller that started it
         do {
             let newTokens = try await task.value
-            if refreshTask == task {            // first caller back applies the result
-                tokens = newTokens
-                refreshTask = nil
-            }
-            guard tokens?.access == newTokens.access else {
-                throw SessionError.loggedOut    // logOut() ran while we were waiting
-            }
+            self.tokens = newTokens
             return newTokens.access
         } catch {
-            if refreshTask == task {            // the refresh itself failed
-                tokens = nil
-                refreshTask = nil
-            }
+            self.tokens = nil                                   // key 8: one logout, not one per caller
             throw error
         }
-    }
-
-    func logOut() {
-        refreshTask?.cancel()
-        refreshTask = nil
-        tokens = nil
     }
 }
 ```
 
-The same harness, run against the fix (real output):
-
-```text
-actor + shared refresh task:
-  refresh #1 with r0: ok -> a1
-  inbox: a1
-  profile: a1
-  feed: a1
-  refresh calls: 1
-again, token now fresh:
-  feed: a1
-  profile: a1
-  inbox: a1
-  refresh calls: 1
-refresh rejected:
-  inbox: failed -> log out
-  profile: failed -> log out
-  feed: failed -> log out
-  refresh calls: 1
-  next call: loggedOut
-log out mid-refresh:
-   failed: loggedOut | failed: loggedOut
-   next call: loggedOut
-```
-
-The last case used a refresher that ignores cancellation and still returns new tokens after
-logout. Both waiting callers got `loggedOut`, and the session stayed logged out.
+**Said out loud, not coded:** an injected clock instead of the real one; `logOut()` that cancels
+the task, plus a check after the `await` so a late refresh can't log the user back in (key 7);
+separate "refresh token rejected" from "network down" (key 9); a timeout (key 12); one logout event
+for the app to observe; retry once on a 401.
 
 Why each piece:
 
-- **`refreshTask` stored before the first `await`** — this is the whole fix. Between creating the
-  task and storing it there is no suspension point, so no other caller can slip in.
-- **Joining callers `await task.value`** — every caller gets the same tokens, or the same error.
-  One network call, however many requests arrive.
-- **"First caller back applies the result"** — whoever resumes first writes the tokens and clears
-  the task; the rest see it's already done. No `defer` that a late caller could run at the wrong
-  moment.
-- **Clearing on failure** — a failed refresh doesn't stay cached, so the next call doesn't
-  re-throw an old error forever. Here it also means logged out; see the second question below.
-- **The logout check after the `await`** — reentrancy again. `logOut()` can run while callers
-  wait. Comparing against the current `tokens` stops a late refresh from logging the user back in.
-- **`leeway` and an injected `now`** — refresh 30 seconds early so tokens don't die in flight, and
-  a test can move time forward without sleeping.
-- **An actor, not a lock** — the compiler checks every access to `tokens`; a lock is a convention
-  someone eventually forgets.
+- **The task is stored before the first `await`.** Between creating it and storing it there is no
+  suspension point, so no other caller can slip in and start a second refresh.
+- **Only the caller that started the refresh writes the result and clears the task.** Callers that
+  join just return the task's value. A caller that arrives after the network answered but before
+  the starter resumes still finds the task and gets its finished result at once. Writing the tokens
+  and clearing the task happen with no `await` between them, so nobody can see the task gone but the
+  old tokens still there.
+- **Clearing on failure** means a failed refresh isn't cached, so the next call says "logged out"
+  instead of re-throwing an old error forever.
+
+I checked the reentrancy claim beyond the tests: 500 rounds of 40 callers arriving before, during
+and after the refresh, against a server that rejects reused tokens — one refresh per round, every
+caller got the new token.
 :::
 
 ::: Now write the tests
 > "Good. This one logged people out in production. Write me the tests that make sure it never
 > does again."
 
-What I'd test, and why:
+**What I'd test, and why**
 
 1. **Concurrent callers share one refresh.** Three requests hit an expired token at once; the
-   server sees `r0` exactly once and all three get `a1`. This is the morning-logout bug, so it
-   goes first.
-2. **A fresh token needs no refresh.** The happy path must not touch the server at all.
-3. **The leeway.** A token with 20 seconds left is refreshed early. Delete the leeway and this
-   fails.
-4. **A rejected refresh fails every caller and logs out once.** All three waiting callers get the
-   error, the next call says `loggedOut`, and the server isn't asked again.
-5. **`logOut()` during a refresh stays logged out.** The server answers after logout; the waiting
-   caller and the next one both get `loggedOut`. That's the shared-device privacy bug.
+   server sees `r0` exactly once, all three get `a1`, and a call after it finished needs no new
+   refresh. This is the morning-logout bug, so it goes first.
+2. **A fresh token needs no refresh.** The happy path must not touch the server.
+3. **The margin.** A token with 20 seconds left is refreshed early. Delete the margin and this fails.
+4. **A rejected refresh fails every caller and logs out.** All three get the error, the next call
+   says `loggedOut`, and the server isn't asked again.
 
-**The seam.** Both things the session depends on are passed in. The refresher is a *fake* auth
-server: it records which refresh token it was sent and holds each refresh open until the test
-answers, with a continuation rather than a sleep. And `now` is a function, so the tests pin the
-time to one fixed "morning" instead of reading the real clock. Nothing waits on real time, so the
-tests behave the same on every run — they're *deterministic*.
+**The seam.** The refresher is already passed in, so the test passes a *fake* auth server. It
+records the refresh tokens it is sent and holds each refresh open until the test answers — with a
+continuation, not a sleep. The margin test uses the real clock: 20 seconds against a 30-second
+margin can't flip during a test run.
 
 ```swift
 import Foundation
 import Testing
 
-/// A fake auth server: it records every refresh and holds it until the test answers.
+/// A fake auth server: records each refresh token it is sent, and holds every refresh open
+/// until the test answers.
 @MainActor
-final class ControlledRefresher: TokenRefreshing {
+final class FakeRefresher: TokenRefreshing {
     private(set) var usedRefreshTokens: [String] = []
     private var pending: [CheckedContinuation<Tokens, Error>] = []
-    private var waiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
 
     func refresh(using refreshToken: String) async throws -> Tokens {
         usedRefreshTokens.append(refreshToken)
-        for waiter in waiters where usedRefreshTokens.count >= waiter.count { waiter.resume.resume() }
-        waiters.removeAll { usedRefreshTokens.count >= $0.count }
         return try await withCheckedThrowingContinuation { pending.append($0) }
     }
 
-    func waitForRefreshes(_ count: Int) async {
-        if usedRefreshTokens.count >= count { return }
-        await withCheckedContinuation { waiters.append((count, $0)) }
-    }
-
-    func succeed(with tokens: Tokens) {
-        pending.forEach { $0.resume(returning: tokens) }
-        pending.removeAll()
-    }
-
-    func reject(with error: Error) {
-        pending.forEach { $0.resume(throwing: error) }
+    func answer(_ result: Result<Tokens, Error>) {
+        pending.forEach { $0.resume(with: result) }
         pending.removeAll()
     }
 }
 
-struct RefreshRejected: Error, Equatable {}
+/// Gives other tasks a turn, a fixed number of times, until the condition holds. No clocks.
+@MainActor
+func waitUntil(maxYields: Int = 1_000, _ condition: () async -> Bool) async {
+    for _ in 0..<maxYields {
+        if await condition() { return }
+        await Task.yield()
+    }
+}
 
-let morning = Date(timeIntervalSince1970: 1_000_000)
-let expired = Tokens(access: "a0", refresh: "r0", expiresAt: morning - 60)
-let fresh = Tokens(access: "a1", refresh: "r1", expiresAt: morning + 3600)
+struct RefreshRejected: Error {}
+
+let expired = Tokens(access: "a0", refresh: "r0", expiresAt: Date() - 60)
+let fresh = Tokens(access: "a1", refresh: "r1", expiresAt: Date() + 3600)
 
 @MainActor
 struct SessionTests {
 
     @Test
     func concurrentCallersShareOneRefresh() async throws {
-        // Given an expired token and three requests needing it at once
-        let refresher = ControlledRefresher()
-        let session = Session(tokens: expired, refresher: refresher, now: { morning })
+        // Given an expired token, and three requests needing it at once
+        let refresher = FakeRefresher()
+        let session = NaiveSession(tokens: expired, refresher: refresher)
         let callers = (0..<3).map { _ in Task { try await session.validAccessToken() } }
-        await refresher.waitForRefreshes(1)
-        for _ in 0..<200 { await Task.yield() }   // let the other callers reach the session
+        await waitUntil { !refresher.usedRefreshTokens.isEmpty }
+        for _ in 0..<1_000 { await Task.yield() }   // give the other callers turns to reach the session
 
         // When the one refresh comes back
-        refresher.succeed(with: fresh)
+        refresher.answer(.success(fresh))
 
-        // Then all three get the new token, and r0 was spent exactly once
+        // Then all three get the new token, r0 was spent once, and a later call needs no refresh
         for caller in callers {
             #expect(try await caller.value == "a1")
         }
+        #expect(try await session.validAccessToken() == "a1")
         #expect(refresher.usedRefreshTokens == ["r0"])
     }
 
     @Test
     func freshTokenNeedsNoRefresh() async throws {
-        // Given a token valid for another hour
-        let refresher = ControlledRefresher()
-        let session = Session(tokens: fresh, refresher: refresher, now: { morning })
+        let refresher = FakeRefresher()
+        let session = NaiveSession(tokens: fresh, refresher: refresher)
 
-        // When a request asks for it
-        let token = try await session.validAccessToken()
-
-        // Then it comes straight from the session
-        #expect(token == "a1")
+        #expect(try await session.validAccessToken() == "a1")
         #expect(refresher.usedRefreshTokens == [])
     }
 
     @Test
-    func tokenInsideTheLeewayIsRefreshedEarly() async throws {
-        // Given a token with 20 seconds left (less than the 30-second leeway)
-        let refresher = ControlledRefresher()
-        let almostExpired = Tokens(access: "a0", refresh: "r0", expiresAt: morning + 20)
-        let session = Session(tokens: almostExpired, refresher: refresher, now: { morning })
+    func tokenInsideTheMarginIsRefreshedEarly() async throws {
+        // Given a token with 20 seconds left, inside the 30-second margin
+        let refresher = FakeRefresher()
+        let almostExpired = Tokens(access: "a0", refresh: "r0", expiresAt: Date() + 20)
+        let session = NaiveSession(tokens: almostExpired, refresher: refresher)
 
-        // When a request asks for a token
+        // When a request asks for it
         let caller = Task { try await session.validAccessToken() }
-        await refresher.waitForRefreshes(1)
-        refresher.succeed(with: fresh)
+        await waitUntil { !refresher.usedRefreshTokens.isEmpty }
+        refresher.answer(.success(fresh))
 
-        // Then it is refreshed before it can die on the way to the server
+        // Then it was refreshed before it could die on the way to the server
         #expect(try await caller.value == "a1")
         #expect(refresher.usedRefreshTokens == ["r0"])
     }
@@ -395,64 +332,49 @@ struct SessionTests {
     @Test
     func rejectedRefreshFailsEveryCallerAndLogsOut() async throws {
         // Given three requests waiting on one refresh
-        let refresher = ControlledRefresher()
-        let session = Session(tokens: expired, refresher: refresher, now: { morning })
+        let refresher = FakeRefresher()
+        let session = NaiveSession(tokens: expired, refresher: refresher)
         let callers = (0..<3).map { _ in Task { try await session.validAccessToken() } }
-        await refresher.waitForRefreshes(1)
-        for _ in 0..<200 { await Task.yield() }
+        await waitUntil { !refresher.usedRefreshTokens.isEmpty }
+        for _ in 0..<1_000 { await Task.yield() }
 
         // When the server rejects the refresh token
-        refresher.reject(with: RefreshRejected())
+        refresher.answer(.failure(RefreshRejected()))
 
-        // Then every caller gets that error
+        // Then every caller gets that error, and the next call is told it's logged out
         for caller in callers {
             await #expect(throws: RefreshRejected.self) { try await caller.value }
         }
-        // And the session is logged out, without trying again
         await #expect(throws: SessionError.loggedOut) { try await session.validAccessToken() }
         #expect(refresher.usedRefreshTokens == ["r0"])
-    }
-
-    @Test
-    func logOutDuringARefreshStaysLoggedOut() async throws {
-        // Given a refresh in flight
-        let refresher = ControlledRefresher()
-        let session = Session(tokens: expired, refresher: refresher, now: { morning })
-        let caller = Task { try await session.validAccessToken() }
-        await refresher.waitForRefreshes(1)
-
-        // When the user logs out, and the server answers anyway
-        await session.logOut()
-        refresher.succeed(with: fresh)
-
-        // Then the waiting request is told it's logged out, and so is the next one
-        await #expect(throws: SessionError.loggedOut) { try await caller.value }
-        await #expect(throws: SessionError.loggedOut) { try await session.validAccessToken() }
     }
 }
 ```
 
 A test can't see inside the actor, so in the two three-caller tests it can't know for certain that
 every caller has joined before the refresh returns. It gives them a fixed number of turns first.
-That's enough: with the join removed (each caller starting its own refresh), the first test fails.
+That's enough: with the join removed, both tests fail.
 
-Ran with Swift 6.4: 5 tests, all passed.
+Ran with Swift 6.4: 4 tests, all passed.
 :::
 
 ::: What I'd ask next
+- *"How would you add logout?"* — `logOut()` cancels the task, clears it and the tokens. Then every
+  caller must check after its `await` that the session wasn't logged out meanwhile, or a refresh that
+  lands late writes tokens back. And a refresher that honours cancellation makes waiters throw
+  `CancellationError`, so map that to `loggedOut`.
 - *"A request with a 'valid' token comes back 401. Now what?"* — The server says it's dead. Add
   `invalidate(token:)`: if the current access token is the one that failed, drop it so the next
   call refreshes, then retry that request once. Comparing the token avoids throwing away a newer
   one another caller just got.
 - *"Should a network error log the user out?"* — No. Throw it and keep the tokens; only a
-  rejection of the refresh token itself (`invalid_grant`) means log in again. The fix clears on
-  any error to stay short — in production, split the error types.
+  rejection of the refresh token itself (`invalid_grant`) means log in again.
 - *"Why is actor reentrancy a feature, not a bug?"* — A non-reentrant actor that awaits another
   actor that awaits the first deadlocks. SE-0306 chose reentrancy and the rule "don't trust state
   across an `await`."
 - *"How do you test this deterministically?"* — A fake refresher that counts calls and suspends
-  until the test releases it (a continuation, not a sleep), fire N concurrent callers with a task
-  group, release, assert one call and N identical tokens.
+  until the test releases it (a continuation, not a sleep). Start N callers as separate tasks,
+  release, assert one call and N identical tokens.
 - *"Where would the logout screen be triggered?"* — Not in the session. It throws `loggedOut`;
   one observer (an `AsyncStream` of session events, or the app's root coordinator) reacts once.
 :::

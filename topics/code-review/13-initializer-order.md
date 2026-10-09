@@ -8,7 +8,8 @@ sources:
 - The Swift Programming Language · Initialization | https://docs.swift.org/swift-book/documentation/the-swift-programming-language/initialization/
 ---
 
-*Shape: what does this print · Reported: PhonePe — walk through the flow of initialisation from convenience to designated · Compiled and run with Swift 6.4*
+*Shape: what does this print · Reported: PhonePe — walk through the flow of initialisation from
+convenience to designated · Verified: run with Swift 6.4*
 
 > "Walk me through the order. Every `print` — which one comes first, and does every `didSet`
 > fire?"
@@ -175,10 +176,10 @@ the parent. A *convenience* initializer is a shortcut: it must call another init
 *same* class first, and only then tweak things. Delegation goes "across" for convenience inits
 and "up" for designated ones.
 
-Property observers (`willSet`/`didSet`) exist to react to *changes*. While a class is setting its
-own properties during its initializers there is nothing to react to yet, so they don't fire. A
-subclass setting a parent's property after `super.init` is a change the parent should hear
-about — so they fire.
+Property observers (`willSet`/`didSet`) exist to react to *changes*. Assignments made inside the
+declaring class's own initializers — designated or convenience, even after `self.init` — never
+fire its observers. A subclass setting a parent's property after `super.init` is a change the
+parent should hear about — so they fire.
 
 Swift's phase-1 rule is why ② is safe. In Objective-C, a parent's init that calls an overridden
 method can reach a subclass whose properties are still `nil` or zero. Swift makes that impossible.
@@ -191,6 +192,14 @@ method can reach a subclass whose properties are still `nil` or zero. Swift make
   side effect matters on first set, call it explicitly from the init too.
 - **Prefer one designated init plus convenience inits.** Every path then funnels through one
   place that sets every property, which keeps the order easy to follow.
+:::
+
+::: What I'm really scoring
+That you can explain the order from the two-phase rule, not recite it. Up the chain setting
+properties, then back down using `self`. The strong answer also gets the two traps: the `didSet`
+that stays silent inside the class's own inits, and why calling an overridden method from
+`super.init` is safe in Swift but not in Objective-C. ⑤ should be "no, because `self` isn't
+built yet" — not a guess.
 :::
 
 ::: What I'd ask next

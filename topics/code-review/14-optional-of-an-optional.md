@@ -8,7 +8,8 @@ sources:
 - SE-0230 · Flatten nested optionals resulting from try? | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0230-flatten-optional-try.md
 ---
 
-*Shape: what does this print · Reported: Swiggy — define Optional's type and its cases, then implement `isNil()` · Compiled and run with Swift 6.4*
+*Shape: what does this print · Reported: Swiggy — define Optional's type and its cases, then
+implement `isNil()` · Verified: run with Swift 6.4*
 
 > "A dictionary where some people have no nickname. Tell me what each line prints — types
 > included."
@@ -139,6 +140,13 @@ because Swift lets any optional be compared with the `nil` literal.
   *removes* the key. To store a `nil` value you need `.some(nil)` or `updateValue(nil, forKey:)`.
 - **Prefer `flatMap` when the transform can fail**, and treat a `try?` on a function that already
   returns an optional as a review comment — `do`/`catch` keeps the two failures apart.
+:::
+
+::: What I'm really scoring
+That you count layers. Every unwrapping tool opens exactly one, and `ben == nil` being `false` is
+the line that shows whether you do. The strong answer names the two kinds of "nothing" (no key, or
+a key holding `nil`), writes `isNil` as a pattern match on `.none` without hesitating, and knows
+`try?` flattens since Swift 5 — and what that costs.
 :::
 
 ::: What I'd ask next

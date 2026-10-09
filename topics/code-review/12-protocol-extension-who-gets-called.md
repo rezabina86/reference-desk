@@ -8,7 +8,8 @@ sources:
 - LeetCode Discuss · TikTok iOS — "dynamic vs static dispatch" | https://leetcode.com/discuss/interview-experience/5550559/
 ---
 
-*Shape: what does this print · Reported: Zomato — witness tables and static/dynamic dispatch; TikTok — dynamic vs static dispatch · Compiled and run with Swift 6.4*
+*Shape: what does this print · Reported: Zomato — witness tables and static/dynamic dispatch;
+TikTok — dynamic vs static dispatch · Verified: run with Swift 6.4*
 
 > "Every line calls a method on the same kind of object. Tell me which implementation runs each
 > time — and why."
@@ -145,6 +146,13 @@ Why each piece:
   through every static type. The required `override` keyword is the compiler confirming it.
 - **Mark classes `final` when nobody should subclass them.** It turns a silent shadowing bug into
   a compile error.
+:::
+
+::: What I'm really scoring
+One rule, applied every time: a protocol *requirement* is looked up at runtime; a method that only
+lives in an extension is picked at compile time from the type the compiler can see. Most candidates
+get ① and ②. ④ is the separator — the strong answer spots that `Child.greet` has no `override`
+and says what that means. In a real review, that missing keyword is the line I'd want flagged.
 :::
 
 ::: What I'd ask next

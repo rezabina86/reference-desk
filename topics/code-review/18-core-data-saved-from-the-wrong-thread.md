@@ -6,13 +6,12 @@ group: Find the bug
 sources:
 - LeetCode Discuss · PhonePe iOS — "downloading via multiple threads but need to save in coredata how many managed object contexts are required" | https://leetcode.com/discuss/interview-experience/1422835/
 - Apple · NSManagedObjectContext — concurrency types, perform, merge policy | https://developer.apple.com/documentation/coredata/nsmanagedobjectcontext
+- Apple · automaticallyMergesChangesFromParent | https://developer.apple.com/documentation/coredata/nsmanagedobjectcontext/automaticallymergeschangesfromparent
 ---
 
 *Shape: find the bug · Reported: PhonePe — "downloading via multiple threads but need to save in
-Core Data, how many managed object contexts are required" · Core Data — the fix typechecks against
-the iOS SDK (iOS 18 target) in Swift 6 mode with zero warnings; the snippet and the fix were also run on macOS
-against a SQLite store built from a programmatic model, with and without
-`-com.apple.CoreData.ConcurrencyDebug 1`*
+Core Data, how many managed object contexts are required" · Verified: snippet and fix typecheck in
+Swift 6 mode, Swift 6.4; the snippet's crashes were reproduced on macOS*
 
 > "Users import an album of photos. We download them in parallel and save each one to Core Data.
 > It crashes in production, but never on my machine, and sometimes the album screen shows nothing
@@ -63,6 +62,10 @@ final class PhotoDownloader {
 }
 ```
 
+In Swift 6 mode this compiles with three warnings: `self` and `album` captured in `@Sendable`
+closures. The compiler sees objects crossing threads. It can't see which queue a context is used
+on — that's a runtime rule.
+
 ::: A hint, if you're stuck
 - `album` was fetched by the screen. Which context does it belong to? Which context is `photo` in?
 - A context created with `.privateQueueConcurrencyType` owns a queue. Is any of this code running
@@ -72,53 +75,59 @@ final class PhotoDownloader {
   changed?
 :::
 
+::: How I'd debug it
+Turn on Core Data's own checker: add `-com.apple.CoreData.ConcurrencyDebug 1` to the scheme's
+launch arguments. It makes every context check it is on its own queue, and trap if not.
+
+I ran the snippet against a small store. Without the flag, the first download crashes on every run:
+"Illegal attempt to establish a relationship 'album' between objects in different contexts".
+`markAllSeen` is quieter, which makes it worse: with four photos stored it ran to the end and all
+four were marked seen — it looked like it worked. With the flag it trapped at once (exit code 133).
+That's the production crash, caught on the first run instead of the thousandth.
+:::
+
 ::: The key — what I expect a senior to find
-I ran it. Without any flags, the first download crashes on every run:
-
-```text
-*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: 'Illegal
-attempt to establish a relationship 'album' between objects in different contexts …
-```
-
-`markAllSeen` is quieter, which makes it worse. On its own, with four photos stored, it ran to the
-end and reported `seen: 4` — it looked like it worked. With the launch argument
-`-com.apple.CoreData.ConcurrencyDebug 1` it stopped at once (exit code 133, a trap) in
-`_PFAssertSafeMultiThreadedAccess_impl`, on a `com.apple.root.default-qos` thread. That's the
-production crash, caught on the first run instead of the thousandth.
-
-In Swift 6 mode the snippet still compiles, with three warnings: `self` and `album` captured in
-`@Sendable` closures. The compiler can see objects crossing threads. It can't see which queue a
-context is used on — that's a runtime rule.
+**Answer:** two contexts. One main-queue `viewContext` the UI reads, and one background context
+that does all the writing, one save at a time. The downloads can run in parallel; they don't need
+a context at all.
 
 1. **An object from one context related to an object in another.** `album` lives in the screen's
-   `viewContext`; `photo` lives in a brand-new context. Core Data refuses and throws. Pass the
+   `viewContext`; `photo` lives in a brand-new context. Core Data throws, every time. Pass the
    album's `objectID` and look it up inside the context doing the work.
-2. **`viewContext` used off the main queue.** `viewContext` is a main-queue context. Fetching and
-   saving it from a global queue is undefined behaviour: it usually works, and sometimes corrupts
-   the context or crashes. This is "never on my machine".
-3. **A private-queue context used without `perform`.** A private context owns a serial queue, and
-   every touch — insert, `setValue`, save — must run on it via `perform` or `performAndWait`.
-   Here nothing does.
-4. **An `NSManagedObject` handed to another thread.** `photo` belongs to a background context and
-   `onSaved` hands it to main. Managed objects are tied to their context's queue; only
-   `NSManagedObjectID` is safe to pass around.
-5. **The screen never sees the new photos.** The `viewContext` isn't told about other contexts'
-   saves, because `automaticallyMergesChangesFromParent` is off. Verified with the fix minus that
-   line: the store held 15 photos and `album.photos` in the `viewContext` held 0. That's "shows
-   nothing until you relaunch."
-6. **One context per download, and no merge policy.** Twenty downloads make twenty contexts, each
-   saving on its own. Two downloads of the same URL produce two rows, or — with a uniqueness
-   constraint — a merge conflict, because the default policy is to fail the save. "Check if it
-   exists, then insert" can't work across contexts saving at the same time.
-7. **Errors thrown away or turned into crashes.** `try?` on `save` hides every failure, including
-   the merge conflict above; `try!` on `fetch` crashes.
-8. **`Data(contentsOf:)` for a network URL, one global-queue block per photo.** It blocks a thread
-   per download. Two hundred photos ask GCD for far more threads than there are cores. Use
-   `URLSession`'s async API.
-9. **Loading every photo to flip one flag.** `markAllSeen` fetches every row into memory. A batch
-   update does it in the store.
-10. **Images stored inline.** Large blobs in the SQLite file make every fetch heavier. Tick *Allows
+2. **`try!` on the fetch.** Any fetch error — a migration problem, a full disk — crashes the app.
+   Use `try` and let the caller hear about it.
+3. **`viewContext` used off the main queue.** `markAllSeen` fetches and saves the main-queue
+   context from a global queue. It usually works, and sometimes corrupts the context or crashes.
+   This is "never on my machine". Do the work in `perform` on a background context.
+4. **A private-queue context used without `perform`.** A private context owns a serial queue, and
+   every touch — insert, `setValue`, save — must run on it through `perform`. Here nothing does.
+5. **An `NSManagedObject` handed to another thread.** `onSaved` gives the main thread a `photo`
+   that belongs to a background context. Only `NSManagedObjectID` is safe to pass around.
+6. **`onSaved` is a data race.** The caller sets it on one thread; it's read inside
+   `DispatchQueue.main.async`. Keep the class on the main actor so both happen on main.
+7. **The screen never sees the new photos.** The `viewContext` isn't told about other contexts'
+   saves: `automaticallyMergesChangesFromParent` is off. That's "shows nothing until you
+   relaunch."
+8. **One context per download, so duplicates.** Twenty downloads make twenty contexts, each
+   saving on its own. The same URL twice gives two rows, and "check if it exists, then insert"
+   can't work across contexts saving at the same time. One writer context can.
+9. **Errors thrown away.** `try?` on `save` hides every failure, and a failed download returns
+   silently: the user is never told a photo is missing, and nothing retries.
+10. **No HTTP status check.** `Data(contentsOf:)` doesn't care about status codes, so a 404 error
+    page is saved as `imageData`. Check for a 200.
+11. **No cancellation or progress.** Two hundred global-queue blocks can't be stopped when the user
+    leaves, and the screen can't show "12 of 200".
+12. **Nothing can be tested.** The network is `Data(contentsOf:)`, called directly. Inject the
+    download behind one protocol.
+13. **`Data(contentsOf:)` for a network URL, one global-queue block per photo.** It blocks a thread
+    per download. Two hundred photos ask GCD for far more threads than there are cores. Use
+    `URLSession`'s async API.
+14. **Loading every photo to flip one flag.** `markAllSeen` fetches every row into memory. A batch
+    update does it in the store.
+15. **Images stored inline.** Large blobs in the SQLite file make every fetch heavier. Tick *Allows
     External Storage* on the attribute.
+16. **Stringly typed attributes.** `setValue(_:forKey:)` with `"remoteURL"` and `"isSeen"` compiles
+    with any typo and crashes at run time. Use generated `NSManagedObject` subclasses.
 :::
 
 ::: The idea behind it
@@ -148,148 +157,117 @@ that.
 ```swift
 import CoreData
 
-protocol PhotoDownloading: Sendable {
-    func data(from url: URL) async throws -> Data
+protocol PhotoDownloading: Sendable {                                   // key 12: the one seam
+    func imageData(from url: URL) async throws -> Data
 }
 
-/// Owns the ONE background context all imports write through. The UI reads `viewContext`.
-final class PhotoImporter: Sendable {
-    private let context: NSManagedObjectContext
-    private let viewContext: NSManagedObjectContext
-    private let downloader: any PhotoDownloading
+extension URLSession: PhotoDownloading {
+    func imageData(from url: URL) async throws -> Data {
+        let (data, response) = try await data(from: url)                // key 13: no thread per photo
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {   // key 10
+            throw URLError(.badServerResponse)
+        }
+        return data
+    }
+}
 
-    @MainActor
-    init(container: NSPersistentContainer, downloader: any PhotoDownloading) {
-        container.viewContext.automaticallyMergesChangesFromParent = true
-        let context = container.newBackgroundContext()
-        context.name = "PhotoImporter"
-        context.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump   // another writer, same URL: no save error
-        self.context = context
-        self.viewContext = container.viewContext
+@MainActor                                                              // key 6: onSaved only on main
+final class PhotoDownloader {
+    private let context: NSManagedObjectContext                         // key 8: ONE writer context
+    private let downloader: any PhotoDownloading
+    var onSaved: ((NSManagedObjectID) -> Void)?                         // key 5: IDs, not objects
+
+    init(container: NSPersistentContainer, downloader: any PhotoDownloading = URLSession.shared) {
+        container.viewContext.automaticallyMergesChangesFromParent = true // key 7
+        context = container.newBackgroundContext()
+        context.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump
         self.downloader = downloader
     }
 
-    /// Downloads in parallel, saves one at a time on the background context.
-    /// Returns object IDs — safe to hand to any thread or context.
-    func importPhotos(_ urls: [URL], into albumID: NSManagedObjectID) async throws -> [NSManagedObjectID] {
-        try await withThrowingTaskGroup(of: (URL, Data).self) { group in
+    /// Downloads in parallel, saves one at a time. Returns the URLs that failed.
+    @discardableResult
+    func download(_ urls: [URL], into album: NSManagedObject) async throws -> [URL] {
+        let albumID = album.objectID                                    // key 1: read on main, where album lives
+        var failed: [URL] = []
+        try await withThrowingTaskGroup(of: (URL, Data?).self) { group in
             for url in urls {
-                group.addTask { [downloader] in (url, try await downloader.data(from: url)) }
+                group.addTask { [downloader] in (url, try? await downloader.imageData(from: url)) }
             }
-            var saved: [NSManagedObjectID] = []
             for try await (url, data) in group {
-                saved.append(try await save(data, from: url, albumID: albumID))
+                guard let data else { failed.append(url); continue }   // key 9: skipped, but reported
+                let id = try await save(data, from: url, albumID: albumID)  // never inside onSaved?(…)
+                onSaved?(id)
             }
-            return saved
         }
+        return failed
     }
 
     func markAllSeen() async throws {
-        let ids = try await context.perform { [context] in
-            let update = NSBatchUpdateRequest(entityName: "Photo")
-            update.propertiesToUpdate = ["isSeen": true]
-            update.resultType = .updatedObjectIDsResultType
-            let result = try context.execute(update) as? NSBatchUpdateResult
-            return result?.result as? [NSManagedObjectID] ?? []
-        }
-        // A batch update skips every context, so tell the UI's context what changed.
-        await viewContext.perform { [viewContext] in
-            NSManagedObjectContext.mergeChanges(fromRemoteContextSave: [NSUpdatedObjectsKey: ids],
-                                                into: [viewContext])
+        try await context.perform { [context] in                        // key 3: background, on its queue
+            let photos = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "Photo"))  // key 2
+            photos.forEach { $0.setValue(true, forKey: "isSeen") }
+            try context.save()
         }
     }
 
     private func save(_ data: Data, from url: URL, albumID: NSManagedObjectID) async throws -> NSManagedObjectID {
-        try await context.perform { [context] in
-            let album = try context.existingObject(with: albumID)        // re-fetch in THIS context
+        try await context.perform { [context] in                        // key 4: every touch inside perform
+            let album = try context.existingObject(with: albumID)       // key 1: the album, in THIS context
             let request = NSFetchRequest<NSManagedObject>(entityName: "Photo")
             request.predicate = NSPredicate(format: "remoteURL == %@", url.absoluteString)
-            request.fetchLimit = 1
-            let photo = try context.fetch(request).first                  // find or create:
-                ?? NSManagedObject(entity: try Self.entity("Photo", in: context), insertInto: context)
+            let photo = try context.fetch(request).first                // key 8: find or create
+                ?? NSEntityDescription.insertNewObject(forEntityName: "Photo", into: context)
             photo.setValue(url.absoluteString, forKey: "remoteURL")
             photo.setValue(data, forKey: "imageData")
             photo.setValue(album, forKey: "album")
-            try context.save()
-            return photo.objectID                                          // permanent after save
+            do { try context.save() } catch { context.rollback(); throw error }  // key 9: no try?
+            return photo.objectID
         }
-    }
-
-    private static func entity(_ name: String, in context: NSManagedObjectContext) throws -> NSEntityDescription {
-        guard let entity = NSEntityDescription.entity(forEntityName: name, in: context) else {
-            throw CocoaError(.coreData)
-        }
-        return entity
     }
 }
 ```
 
-Run on macOS with `-com.apple.CoreData.ConcurrencyDebug 1` on, a fake downloader with random
-delays, and 20 URLs of which 5 appear twice (real output):
-
-```text
-CoreData: annotation: Core Data multi-threading assertions enabled.
-saved: 20 | temporary IDs: 0
-album.photos seen by viewContext: 15
-rows in store: 15
-isSeen before: false
-isSeen after batch update: true
-distinct IDs: 15 | all resolvable: true
-```
-
-No assertion fired. Duplicates became updates, the screen's context saw every photo without a
-refetch, and every returned ID resolves in the `viewContext`.
+**Said out loud, not coded:** an `NSBatchUpdateRequest` for `markAllSeen` (key 14, then merge
+its object IDs into the `viewContext`) · a cap of about six downloads at once · progress and
+cancellation (key 11) · retry for failed URLs · *Allows External Storage* (key 15) · generated
+`NSManagedObject` subclasses (key 16).
 
 Why each piece:
 
-- **One `newBackgroundContext()`, kept** — the answer to "how many contexts": the `viewContext`
-  for the UI plus this one for writes. All saves go through one serial queue, so find-or-create
-  is race-free.
-- **Every touch inside `context.perform`** — the async `perform` puts the work on the context's
-  own queue and returns its result. No context or object escapes the closure; only IDs do.
-- **`existingObject(with: albumID)`** — the album is fetched again inside the background context,
-  so the relationship is between two objects in the same context.
-- **Find or create by `remoteURL`** — importing the same photo twice updates it. My first version
-  just inserted and relied on a uniqueness constraint; the store stayed clean, but the returned IDs
-  for the duplicates pointed at rows that didn't exist. The fetch fixes that.
-- **`mergeByPropertyObjectTrump`** — a safety net if anything else (a sync job) writes the same row:
-  the in-memory change wins instead of the save failing.
-- **`automaticallyMergesChangesFromParent`** — the UI's context hears about every save on the
-  background one, so the album fills in live.
-- **Downloads in a task group, outside Core Data** — the network runs in parallel; only the saves
-  are serial.
-- **`NSBatchUpdateRequest` plus `mergeChanges(fromRemoteContextSave:into:)`** — the update runs in
-  SQLite without loading rows, then tells the `viewContext` which objects changed so it doesn't
-  show stale flags.
+- **The class is `@MainActor`, but the work isn't on main.** The downloads run in child tasks, and
+  every Core Data touch runs inside `context.perform` on the background queue. Main only
+  orchestrates: it reads `album.objectID` and calls `onSaved`.
+- **`existingObject(with:)` inside `perform`** — the album is fetched again in the background
+  context, so the relationship joins two objects in the same context. The album must already be
+  saved: an unsaved object has a temporary ID another context can't open.
+- **A failed download is skipped, like before, but reported.** The old code skipped silently; now
+  the caller gets the failed URLs back. A failed *save* throws, because that's a real bug, and
+  rolls back first — otherwise the bad insert stays in the context and every later save fails too.
+- **`save` runs on its own line, before `onSaved?(id)`.** My first draft wrote
+  `onSaved?(try await save(…))`. When `onSaved` is `nil`, optional chaining skips the whole call,
+  arguments included — so nothing was saved. A test with no `onSaved` caught it.
 :::
 
 ::: Now write the tests
-> "Good. Now write me a few tests for the importer — the ones that would have caught this before
+> "Good. Now write me a few tests for the downloader — the ones that would have caught this before
 > production."
 
-What I'd test, and why:
+**What I'd test, and why**
 
-1. **Duplicates become one row each, and every returned ID works.** 20 URLs, 5 of them twice, must
-   give 15 rows, and all 20 returned IDs must open in the `viewContext`. My first version of the fix
-   got this wrong, so this test comes first.
-2. **The screen sees new photos without a refetch.** That's the "album shows nothing until you
-   relaunch" bug. The test holds the album object the screen already has and checks its photos fill
-   in.
-3. **`markAllSeen` reaches the screen.** A batch update skips every context. The test reads the
-   photos as unseen first, so they are really in memory, then checks the same objects say "seen".
-4. **A failed download throws and saves nothing for that URL.** The old code swallowed errors with
-   `try?`. Now the caller hears about it.
+1. **The screen sees downloaded photos without a refetch.** The first bug: the album the screen
+   already holds must fill in, and every ID passed to `onSaved` must open on the main context.
+   It also proves the cross-context relationship no longer throws.
+2. **A failed download is skipped and reported** — the edge case. The rest still save.
+3. **The same URL twice gives one row** — what one writer context buys you.
+4. **`markAllSeen` reaches the screen** — the regression check for the off-main `viewContext`.
 
 The crash itself — a context used on the wrong queue — isn't something a `#expect` can see.
 Core Data catches that: I add `-com.apple.CoreData.ConcurrencyDebug 1` to the test scheme's
-launch arguments, so any wrong-queue access traps during the run. I wouldn't test Core Data's own
-merging or SQLite; I test that my code asks for them.
+launch arguments, so any wrong-queue access traps during the run.
 
 **The seam.** `PhotoDownloading` is injected, so the tests use a *fake* downloader — a stand-in
 that answers at once with no network, and can fail for one URL. The container is passed in too, so
-each test builds its own fresh store. I use a real SQLite file in a temp folder, not the in-memory
-store: `NSBatchUpdateRequest` only works on SQLite. The model is built in code, so the tests need no
-`.xcdatamodeld` file.
+each test builds its own fresh in-memory store.
 
 ```swift
 import CoreData
@@ -298,13 +276,14 @@ import Testing
 // A fake downloader: no network, answers at once, and can fail for one URL.
 struct FakeDownloader: PhotoDownloading {
     var failing: URL? = nil
-    func data(from url: URL) async throws -> Data {
+    func imageData(from url: URL) async throws -> Data {
         if url == failing { throw URLError(.badServerResponse) }
         return Data(url.absoluteString.utf8)
     }
 }
 
-// The model, built in code: Album <->> Photo. Built once, shared by every container.
+// The model, built in code so the tests need no .xcdatamodeld file. It is long only because
+// Core Data's model API is verbose: two entities, Album <->> Photo.
 @MainActor let model: NSManagedObjectModel = {
     let album = NSEntityDescription(), photo = NSEntityDescription()
     album.name = "Album"
@@ -316,8 +295,6 @@ struct FakeDownloader: PhotoDownloading {
         attribute.type = type
         return attribute
     }
-    let remoteURL = attribute("remoteURL", .string)
-    let imageData = attribute("imageData", .binaryData)
     let isSeen = attribute("isSeen", .boolean)
     isSeen.defaultValue = false
 
@@ -325,7 +302,6 @@ struct FakeDownloader: PhotoDownloading {
     photos.name = "photos"
     photos.destinationEntity = photo
     photos.maxCount = 0                       // to-many
-    photos.deleteRule = .cascadeDeleteRule
     toAlbum.name = "album"
     toAlbum.destinationEntity = album
     toAlbum.maxCount = 1
@@ -333,115 +309,107 @@ struct FakeDownloader: PhotoDownloading {
     toAlbum.inverseRelationship = photos
 
     album.properties = [attribute("name", .string), photos]
-    photo.properties = [remoteURL, imageData, isSeen, toAlbum]
+    photo.properties = [attribute("remoteURL", .string), attribute("imageData", .binaryData), isSeen, toAlbum]
     let model = NSManagedObjectModel()
     model.entities = [album, photo]
     return model
 }()
 
-// A real SQLite store in a fresh temp folder: batch updates don't run on the in-memory store.
+// An in-memory store, fresh per test.
 @MainActor
 func makeContainer() throws -> NSPersistentContainer {
-    let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let container = NSPersistentContainer(name: "Photos", managedObjectModel: model)
-    container.persistentStoreDescriptions = [
-        NSPersistentStoreDescription(url: folder.appending(path: "Photos.sqlite"))
-    ]
+    let store = NSPersistentStoreDescription()
+    store.type = NSInMemoryStoreType
+    container.persistentStoreDescriptions = [store]
     var loadError: (any Error)?
-    container.loadPersistentStores { _, error in loadError = error }   // synchronous for SQLite
+    container.loadPersistentStores { _, error in loadError = error }   // synchronous by default
     if let loadError { throw loadError }
     return container
 }
 
 @MainActor
 func makeAlbum(in context: NSManagedObjectContext) throws -> NSManagedObject {
-    let album = NSManagedObject(entity: model.entitiesByName["Album"]!, insertInto: context)
+    let album = NSEntityDescription.insertNewObject(forEntityName: "Album", into: context)
     album.setValue("Holiday", forKey: "name")
     try context.save()                         // a saved object has a permanent ID
     return album
 }
-
-// 20 URLs, 15 different: photos 0...4 appear twice.
-let urls = (0..<15).map { URL(string: "https://example.com/\($0).jpg")! }
-    + (0..<5).map { URL(string: "https://example.com/\($0).jpg")! }
 
 @MainActor
 func photos(of album: NSManagedObject) -> Set<NSManagedObject> {
     album.value(forKey: "photos") as? Set<NSManagedObject> ?? []
 }
 
+let urls = (0..<10).map { URL(string: "https://example.com/\($0).jpg")! }
+
+@Suite(.timeLimit(.minutes(1)))
 @MainActor
-struct PhotoImporterTests {
-    @Test func importingDuplicatesGivesOneRowPerURL() async throws {
-        // Given an album and an importer
+struct PhotoDownloaderTests {
+    @Test func screenSeesDownloadedPhotosWithoutRefetching() async throws {
+        // Given an album the screen already holds
         let container = try makeContainer()
         let album = try makeAlbum(in: container.viewContext)
-        let importer = PhotoImporter(container: container, downloader: FakeDownloader())
+        let downloader = PhotoDownloader(container: container, downloader: FakeDownloader())
+        var saved: [NSManagedObjectID] = []
+        downloader.onSaved = { saved.append($0) }
 
-        // When 20 URLs arrive, 5 of them twice
-        let ids = try await importer.importPhotos(urls, into: album.objectID)
+        // When ten photos download and save on the background context
+        try await downloader.download(urls, into: album)
+        await container.viewContext.perform {}    // let merges already queued on main run first
 
-        // Then there is one row per URL, and every returned ID points at one of them
-        let count = try container.viewContext.count(for: NSFetchRequest(entityName: "Photo"))
-        #expect(count == 15)
-        #expect(ids.count == 20)
-        #expect(Set(ids).count == 15)
-        for id in ids {
-            #expect(!id.isTemporaryID)
+        // Then the screen's own album object has them, and every reported ID opens on main
+        #expect(photos(of: album).count == 10)
+        #expect(saved.count == 10)
+        for id in saved {
             #expect(throws: Never.self) { try container.viewContext.existingObject(with: id) }
         }
     }
 
-    @Test func screenSeesImportedPhotosWithoutRefetching() async throws {
-        // Given an album the screen already holds
-        let container = try makeContainer()
-        let album = try makeAlbum(in: container.viewContext)
-        let importer = PhotoImporter(container: container, downloader: FakeDownloader())
-
-        // When the import saves on the background context
-        _ = try await importer.importPhotos(urls, into: album.objectID)
-        await container.viewContext.perform {}    // let merges already queued on main run first
-
-        // Then the screen's own album object has the photos
-        #expect(photos(of: album).count == 15)
-    }
-
-    @Test func markAllSeenReachesTheScreen() async throws {
-        // Given imported photos the screen has already read as unseen
-        let container = try makeContainer()
-        let album = try makeAlbum(in: container.viewContext)
-        let importer = PhotoImporter(container: container, downloader: FakeDownloader())
-        _ = try await importer.importPhotos(urls, into: album.objectID)
-        await container.viewContext.perform {}
-        #expect(photos(of: album).allSatisfy { $0.value(forKey: "isSeen") as? Bool == false })
-
-        // When the batch update runs
-        try await importer.markAllSeen()
-
-        // Then the same in-memory objects now say "seen"
-        #expect(photos(of: album).count == 15)
-        #expect(photos(of: album).allSatisfy { $0.value(forKey: "isSeen") as? Bool == true })
-    }
-
-    @Test func failedDownloadThrowsAndSavesNothingForThatURL() async throws {
+    @Test func failedDownloadIsSkippedAndReported() async throws {
         let container = try makeContainer()
         let album = try makeAlbum(in: container.viewContext)
         let broken = urls[3]
-        let importer = PhotoImporter(container: container, downloader: FakeDownloader(failing: broken))
+        let downloader = PhotoDownloader(container: container, downloader: FakeDownloader(failing: broken))
 
-        await #expect(throws: URLError(.badServerResponse)) {
-            try await importer.importPhotos(urls, into: album.objectID)
-        }
+        let failed = try await downloader.download(urls, into: album)
+        await container.viewContext.perform {}
 
-        let request = NSFetchRequest<NSManagedObject>(entityName: "Photo")
-        request.predicate = NSPredicate(format: "remoteURL == %@", broken.absoluteString)
-        #expect(try container.viewContext.count(for: request) == 0)
+        #expect(failed == [broken])
+        #expect(photos(of: album).count == 9)
+    }
+
+    @Test func downloadingTheSameURLTwiceGivesOneRow() async throws {
+        let container = try makeContainer()
+        let album = try makeAlbum(in: container.viewContext)
+        let downloader = PhotoDownloader(container: container, downloader: FakeDownloader())
+
+        try await downloader.download(urls + urls.prefix(3), into: album)
+
+        #expect(try container.viewContext.count(for: NSFetchRequest(entityName: "Photo")) == 10)
+    }
+
+    @Test func markAllSeenReachesTheScreen() async throws {
+        // Given photos the screen has already read as unseen
+        let container = try makeContainer()
+        let album = try makeAlbum(in: container.viewContext)
+        let downloader = PhotoDownloader(container: container, downloader: FakeDownloader())
+        try await downloader.download(urls, into: album)
+        await container.viewContext.perform {}
+        #expect(photos(of: album).allSatisfy { $0.value(forKey: "isSeen") as? Bool == false })
+
+        // When they are marked seen in the background
+        try await downloader.markAllSeen()
+        await container.viewContext.perform {}
+
+        // Then the same in-memory objects say "seen"
+        #expect(photos(of: album).count == 10)
+        #expect(photos(of: album).allSatisfy { $0.value(forKey: "isSeen") as? Bool == true })
     }
 }
 ```
 
-Ran on the iOS Simulator (iOS 18.5, Swift 6 mode) with `-com.apple.CoreData.ConcurrencyDebug 1`: 4 tests, all passed.
+Ran on the iOS Simulator (Swift 6 mode) with `-com.apple.CoreData.ConcurrencyDebug 1`: 4 tests, all passed.
 :::
 
 ::: What I'd ask next
@@ -450,9 +418,9 @@ Ran on the iOS Simulator (iOS 18.5, Swift 6 mode) with `-com.apple.CoreData.Conc
   one-off jobs; wrong for an import that must stay consistent.
 - *"Isn't saving one photo at a time slow?"* — Each save is a disk write. For big imports, save
   every N photos, or use `NSBatchInsertRequest`, which writes straight to the store.
-- *"What does `ConcurrencyDebug 1` actually do?"* — It makes Core Data check the current queue on
-  every context and object access and trap on a violation. Turn it on in the debug scheme's
-  launch arguments and leave it on; it costs nothing in release because you don't ship it.
+- *"Why not a batch update for `markAllSeen`?"* — I would, for thousands of rows. It runs in
+  SQLite without loading anything, but it skips every context, so I'd merge the changed object IDs
+  into the `viewContext` with `mergeChanges(fromRemoteContextSave:into:)`.
 - *"200 URLs — any problem with the task group?"* — 200 downloads at once. Cap it: start 6, and
   add one each time one finishes.
 - *"Would SwiftData change this?"* — The rule stays. A `ModelContext` belongs to one actor;

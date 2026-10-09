@@ -9,9 +9,8 @@ sources:
 ---
 
 *Shape: find the bug · Reported: Uber — an "identify and fix the memory leak" question; Swiggy —
-wiring a view model to its controller with a delegate · UIKit — the snippet and the fix typecheck
-against the iOS SDK (iOS 18 target) in Swift 6 mode; both were also run in the iOS simulator, and
-a Foundation-only stand-in was compiled and run with Swift 6.4*
+wiring a view model to its controller with a delegate · Verified: snippet and fix compiled in Swift
+6 mode against the iOS SDK, and the leak tests ran on the iOS Simulator, Swift 6.4*
 
 > "Open the profile screen and close it. The `deinit` never prints. Do it ten times and there are
 > ten profile screens in memory. Find out why — there's more than one reason."
@@ -93,7 +92,7 @@ final class ProfileViewController: UIViewController, ProfileViewModelDelegate {
 }
 ```
 
-It compiles in Swift 6 mode with no warnings (checked). Swift 6 checks for data races, not for
+It compiles in Swift 6 mode with no warnings (checked against the iOS SDK). Swift 6 checks for data races, not for
 leaks — the compiler is no help here.
 
 ::: A hint, if you're stuck
@@ -104,30 +103,42 @@ leaks — the compiler is no help here.
 :::
 
 ::: The key — what I expect a senior to find
+The five leaks first — that's the reported bug — then what else I'd raise.
+
 1. **A strong delegate.** Controller → view model → `delegate` → controller. A delegate should be
-   `weak`, but here `weak` won't even compile: *'weak' must not be applied to non-class-bound 'any
+   `weak`, but here `weak` won't compile: *'weak' must not be applied to non-class-bound 'any
    ProfileViewModelDelegate'; consider adding a protocol conformance that has a class bound*
-   (verified). Only class instances have reference counts, so the protocol must say "classes only"
-   with `: AnyObject`. Note that `@MainActor` on the protocol doesn't do that — a struct can still
-   conform.
+   (verified). Add `: AnyObject` to the protocol. `@MainActor` alone doesn't make it class-only.
 2. **`onError` captures `self` strongly.** Controller → view model → `onError` closure →
    controller. Capture `[weak self]`.
-3. **`onRetry` is stored on `self` and captures `self`.** A one-object loop: controller → closure →
-   controller. Capture `[weak self]` — or better, don't store a closure for something a method
-   already does.
-4. **The `lazy var` closure captures `self`.** `greeting` is a stored property holding a closure
-   that mentions `self`. The loop forms the first time `greeting` is read, which here is during
-   `viewDidLoad`. Compare `lazy var title: String = { … self … }()`: that closure *runs* once and
-   only its result is stored, so it keeps nothing. The trailing `()` is the whole difference.
+3. **`onRetry` is stored on `self` and captures `self`.** A loop of one: controller → closure →
+   controller. Better than `[weak self]`: don't store a closure for something a method already does.
+4. **The `lazy var` closure captures `self`.** `greeting` stores a closure that mentions `self`; the
+   loop forms the first time it's read, during `viewDidLoad`. Compare `lazy var title: String =
+   { … self … }()`: that closure *runs* once and only its result is stored. The `()` is the whole
+   difference.
 5. **The child view model owns its parent.** `ProfileViewModel` → `avatar` → `parent` →
-   `ProfileViewModel`. This one leaks the two view models *even after* the controller is fixed —
-   I checked with a stand-in: with only this loop left, the screen was freed and the view model
-   wasn't. Make `parent` `weak`, or better, give the child a callback so it doesn't know its parent.
-6. **Not a leak: the alert's `self`.** The Retry handler captures `self` strongly, and the
-   controller presents the alert, so there is a loop while the alert is up. UIKit drops the alert
-   when it's dismissed and the loop breaks. Say it's temporary; `[weak self]` is still tidier.
-7. **The `deinit` print is the right instinct, wrong tool.** It tells you *that* it leaks, not
-   *why*. The Memory Graph tells you why (see the follow-ups).
+   `ProfileViewModel`. This leaks both view models even after the controller is fixed — I checked:
+   with only this loop left, the screen was freed and its view model wasn't. Make `parent` `weak`.
+6. **Not a leak: the alert's `self`.** The Retry handler captures `self` while the controller
+   presents the alert. UIKit drops the alert on dismiss, so the loop is temporary. `[weak self]` is
+   still tidier.
+7. **`nameLabel` is never added to the view.** If this is the whole screen, the name never appears
+   at all.
+8. **`profileDidLoad(name:)` ignores its argument.** It reads `viewModel.name` through the
+   `greeting` closure instead. Two sources for one value; use the `name` you were given.
+9. **The view model is built inside the controller.** `private let viewModel = ProfileViewModel()`
+   means no test can hand in a fake. Inject it.
+10. **`avatar: AvatarViewModel!` exists only to pass `self` in `init`.** The force-unwrapped
+    optional is a sign the child shouldn't know its parent. Give the child an `onFailure` callback.
+11. **`delegate`, `onError` and `greeting` are publicly writable.** Any caller can swap them out.
+    Make what isn't API `private`.
+12. **Two callback styles on one view model.** A delegate for loading, a closure for errors. Pick
+    one, so there is one place to look.
+13. **User-facing copy in the view model, not localised.** "We couldn't load your photo." belongs
+    in a string catalog, reached through `String(localized:)`.
+14. **The `deinit` print is the right instinct, wrong tool.** It tells you *that* it leaks, not
+    *why*. The Memory Graph tells you why (see the follow-ups).
 :::
 
 ::: The idea behind it
@@ -155,15 +166,17 @@ controller are `weak`.
 :::
 
 ::: The fix
+Same types, same shape. Only the lines marked with a key number change.
+
 ```swift
 @MainActor
-protocol ProfileViewModelDelegate: AnyObject {
+protocol ProfileViewModelDelegate: AnyObject {                  // key 1
     func profileDidLoad(name: String)
 }
 
 @MainActor
 final class ProfileViewModel {
-    weak var delegate: ProfileViewModelDelegate?
+    weak var delegate: ProfileViewModelDelegate?                // key 1
     var onError: ((String) -> Void)?
     private(set) var avatar: AvatarViewModel!
     private(set) var name = ""
@@ -184,150 +197,61 @@ final class ProfileViewModel {
 
 @MainActor
 final class AvatarViewModel {
-    private weak var parent: ProfileViewModel?
+    private weak var parent: ProfileViewModel?                  // key 5
 
     init(parent: ProfileViewModel) {
         self.parent = parent
     }
 
     func downloadFailed() {
-        parent?.avatarFailed()
+        parent?.avatarFailed()                                  // key 5
     }
 }
 
 final class ProfileViewController: UIViewController, ProfileViewModelDelegate {
     private let viewModel = ProfileViewModel()
     private let nameLabel = UILabel()
-
+    // keys 3, 4: the stored onRetry and the lazy greeting closure are gone
     override func viewDidLoad() {
         super.viewDidLoad()
         viewModel.delegate = self
-        viewModel.onError = { [weak self] message in
+        viewModel.onError = { [weak self] message in            // key 2
             self?.showError(message)
         }
         viewModel.load()
     }
 
     func profileDidLoad(name: String) {
-        nameLabel.text = greeting(for: name)
-    }
-
-    private func greeting(for name: String) -> String {
-        "Hello, \(name)"
-    }
-
-    private func retry() {
-        viewModel.load()
+        nameLabel.text = "Hello, \(name)"                       // key 4
     }
 
     private func showError(_ message: String) {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
-            self?.retry()
+            self?.viewModel.load()                              // keys 3, 6
         })
         present(alert, animated: true)
     }
-}
-```
 
-The test I'd add, which typechecks with Swift Testing against the iOS SDK:
-
-```swift
-@MainActor
-struct ProfileViewControllerTests {
-    @Test func screenIsReleasedAfterItLoads() {
-        weak var weakScreen: ProfileViewController?
-        autoreleasepool {
-            let screen = ProfileViewController()
-            screen.loadViewIfNeeded()          // runs viewDidLoad, so every closure is wired
-            weakScreen = screen
-        }
-        #expect(weakScreen == nil)
+    deinit {
+        print("ProfileViewController deinit")
     }
 }
 ```
 
-I ran the same steps as a small program in the iOS simulator: the original controller printed
-`screen released: false`, the fixed one `screen released: true`.
-
-And here is the Foundation-only stand-in, plain classes playing the controller and the two view
-models, with all five loops fixed:
-
-```swift
-protocol ViewModelDelegate: AnyObject { func didLoad(name: String) }
-
-final class ViewModel {
-    weak var delegate: ViewModelDelegate?
-    var onError: ((String) -> Void)?
-    private(set) var child: Child!
-    private(set) var name = ""
-    init() { child = Child(parent: self) }
-    func load() { name = "Ada"; delegate?.didLoad(name: name) }
-    deinit { print("ViewModel deinit") }
-}
-
-final class Child {
-    weak var parent: ViewModel?
-    init(parent: ViewModel) { self.parent = parent }
-    deinit { print("Child deinit") }
-}
-
-final class Screen: ViewModelDelegate {
-    let viewModel = ViewModel()
-    var onRetry: (() -> Void)?
-    lazy var greeting: () -> String = { [unowned self] in "Hello, \(self.viewModel.name)" }
-    lazy var title: String = { "Profile of \(self.viewModel.name)" }()   // runs once, keeps nothing
-    func viewDidLoad() {
-        viewModel.delegate = self
-        viewModel.onError = { [weak self] message in self?.show(message) }
-        onRetry = { [weak self] in self?.viewModel.load() }
-        viewModel.load()
-    }
-    func didLoad(name: String) { _ = greeting(); _ = title }
-    func show(_ message: String) {}
-    deinit { print("Screen deinit") }
-}
-
-weak var weakScreen: Screen?
-weak var weakViewModel: ViewModel?
-do {
-    let screen = Screen()
-    screen.viewDidLoad()
-    weakScreen = screen
-    weakViewModel = screen.viewModel
-}
-print("screen freed: \(weakScreen == nil), view model freed: \(weakViewModel == nil)")
-```
-
-```text
-Screen deinit
-ViewModel deinit
-Child deinit
-screen freed: true, view model freed: true
-```
-
-Compiled with `swiftc -swift-version 6`, no warnings. The same program with the original strong
-references printed only `screen freed: false, view model freed: false` — no `deinit` at all. With
-everything fixed except `Child.parent`, it printed `Screen deinit` and then `screen freed: true,
-view model freed: false`: loop 5 is independent of the other four.
+**Said out loud, not coded:** give `AvatarViewModel` a callback so it doesn't know its parent;
+inject the view model; one callback style (or an `@Observable` view model); localised copy; add
+`nameLabel` to the layout.
 
 Why each piece:
 
 - **`: AnyObject` on the protocol** — makes `weak var delegate` legal. `@MainActor` stays, because
   the controller conforms on the main actor.
-- **`weak var delegate`** — the view model talks to the controller without owning it.
-- **`[weak self]` in `onError`** — the view model owns the closure, so the closure must not own
-  the controller.
-- **`onRetry` and the lazy `greeting` became methods** — a method doesn't store anything, so
-  there's no loop to break. The cleanest fix for a self-capturing stored closure is often to not
-  store it.
-- **`private weak var parent`** — the parent owns the child, never the other way round. `unowned`
-  would also be correct here, since the parent creates and outlives the child, but `weak` costs
-  nothing and can't crash if someone keeps an `AvatarViewModel` around.
-- **`unowned self` in the stand-in's `greeting`** — shown on purpose: the closure is stored on
-  `self`, so as long as nobody copies it out, it can't outlive `self`. That's the textbook case for
-  `unowned` — and the "as long as" is why `greeting` should be `private`. Copy it into another
-  object, call it after the screen is gone, and `unowned` crashes.
+- **`onRetry` and `greeting` are gone, not patched** — a method or an inline string stores
+  nothing, so there's no loop to break.
+- **`weak` for `parent`, not `unowned`** — the parent creates and outlives the child, so `unowned`
+  would work, but `weak` costs nothing and can't crash if someone keeps the child around.
+- **`[weak self]` in the alert** — not needed for the leak (key 6), but it keeps the rule simple.
 :::
 
 ::: Now write the tests
@@ -337,34 +261,29 @@ Why each piece:
 
 1. **The screen is freed after it loads.** `loadViewIfNeeded()` runs `viewDidLoad`, so every
    closure is wired; then a *weak reference* — one that doesn't keep the object alive — must be
-   `nil`. Any one of the five loops makes it fail.
+   `nil`. Any of loops 1–4 makes it fail.
 2. **The view model is freed with the screen.** This catches loop 5 (child → parent), which leaks
    the view models even when the screen itself is freed.
 3. **The child doesn't keep its parent alive** — even while something else still holds the child,
    and calling it afterwards is safe.
-4. **The view model doesn't own its delegate** — the `weak var delegate` fix, pinned.
 
 Not unit-tested: the alert's Retry closure. Presenting an alert needs a real window on screen, so
-its `[weak self]` is checked in review and with the Memory Graph, not here.
+its `[weak self]` is checked in review and with the Memory Graph.
 
 **The seam.** Leak tests need no fakes — just a weak reference and an `autoreleasepool`, which makes
-UIKit's deferred releases happen before the check (otherwise a screen that doesn't leak can still be
-alive at the `#expect`). The view model is private, so the test reads it with `Mirror`, Swift's
-built-in way to look at an object's stored properties, rather than widening the screen's API for a
-test. These replace the single test shown above with a small suite.
+UIKit's deferred releases happen before the check. The view model is private, so the test reads it
+with `Mirror`, Swift's built-in way to look at an object's stored properties, rather than widening
+the screen's API for a test.
 
 ```swift
 import Testing
 import UIKit
 
 extension ProfileViewController {
-    // The view model is private. Mirror lets the test reach it without changing the screen.
-    var viewModelForTest: ProfileViewModel? { Mirror(reflecting: self).descendant("viewModel") as? ProfileViewModel }
-}
-
-@MainActor
-final class DelegateSpy: ProfileViewModelDelegate {
-    func profileDidLoad(name: String) {}
+    // The view model is private. Mirror reads it without widening the screen's API.
+    var viewModelForTest: ProfileViewModel? {
+        Mirror(reflecting: self).descendant("viewModel") as? ProfileViewModel
+    }
 }
 
 @MainActor
@@ -399,26 +318,14 @@ struct ProfileLeakTests {
             child = parent.avatar
         }
 
-        // Then the parent is freed anyway, and the child copes with that
+        // Then the parent is freed anyway, and calling the child is still safe
         #expect(weakParent == nil)
         child?.downloadFailed()
-        #expect(child != nil)
-    }
-
-    @Test func viewModelDoesNotOwnItsDelegate() {
-        let viewModel = ProfileViewModel()
-        weak var weakDelegate: DelegateSpy?
-        autoreleasepool {
-            let delegate = DelegateSpy()
-            viewModel.delegate = delegate
-            weakDelegate = delegate
-        }
-        #expect(weakDelegate == nil)
     }
 }
 ```
 
-Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
+Ran on the iOS Simulator (Swift 6 mode): 3 tests, all passed.
 :::
 
 ::: What I'd ask next
@@ -430,8 +337,10 @@ Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 4 tests, all passed.
   release is deferred to the end of the current pool. Without a pool the reference can still be
   alive when `#expect` runs, and the test fails for a screen that doesn't actually leak.
 - *"When is `unowned` the right choice?"* — When the referenced object is guaranteed to outlive the
-  reference: a closure stored on `self` that refers to `self`, or a child that's always destroyed
-  before its parent. If you can't state the guarantee in one sentence, use `weak`.
+  reference. The textbook case is a closure stored on `self` that refers to `self`:
+  `lazy var greeting = { [unowned self] in "Hello, \(viewModel.name)" }` can't outlive the screen — as long
+  as nobody copies it out. Copy it into another object, call it after the screen is gone, and
+  `unowned` crashes. If you can't state the guarantee in one sentence, use `weak`.
 - *"Does `[weak self]` in every closure fix leaks?"* — No. It's only needed when `self` stores the
   closure, directly or through something it owns. A closure passed to `UIView.animate` or a
   one-shot network call doesn't loop; it just keeps `self` alive a little longer.

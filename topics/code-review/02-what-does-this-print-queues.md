@@ -1,6 +1,6 @@
 ---
 title: 02 · What does this print? — queues
-summary: Four short GCD puzzles on serial vs concurrent and sync vs async, including the one that crashes.
+summary: Four short GCD puzzles on serial vs concurrent and sync vs async, including the two that crash.
 minutes: 15
 group: What does this print?
 sources:
@@ -10,7 +10,7 @@ sources:
 ---
 
 *Shape: what does this print · Reported: GCD questions at Revolut; this exact ordering puzzle is the
-standard warm-up form · Compiled and run with Swift 6.2 (Linux libdispatch)*
+standard warm-up form · Verified: run with Swift 6.4*
 
 > "No running it. Tell me what prints, in what order, and which parts of the order are guaranteed."
 
@@ -62,7 +62,7 @@ print("after")
 - "It usually prints first" and "it's guaranteed to print first" are different answers.
 :::
 
-::: Answers
+::: Answers (verified output)
 **A — `1 2 3 4`, then `5` and `6` in either order.**
 `2` is queued before `3` on the same serial queue, and a serial queue runs one block at a time in
 order, so `3` waits for `2`. `sync` blocks the caller until `3` finishes, so `4` comes after it.
@@ -72,8 +72,8 @@ exactly the trap: "it always prints 6 first" is an observation, not a guarantee.
 
 **B — crash.** The outer block occupies the serial queue; the inner `sync` waits for the queue to
 be free; the queue is waiting for the outer block to finish. That's a deadlock, and libdispatch
-detects this one and traps rather than hanging — verified: the process died with an illegal
-instruction. `after` never prints.
+detects this one and traps rather than hanging — verified: the process was killed by a trap
+(exit code 133). `after` never prints.
 
 **C — `inner`, then `after`.** A concurrent queue can run more than one block at a time, so the
 inner block doesn't need the outer one to finish. No deadlock.
@@ -97,6 +97,21 @@ library spots it and crashes instead, which is easier to debug.
 Ordering follows from the same picture. Inside one serial queue, order is guaranteed: one cashier,
 one line. Across different queues nothing is guaranteed unless something waits. A result that
 "always" comes out in one order on your machine is a race that hasn't lost yet.
+:::
+
+::: How to make it unsurprising
+```swift
+let group = DispatchGroup()
+DispatchQueue.global().async(group: group) { print("5") }
+group.wait()
+print("6")                                   // always 5, then 6
+```
+
+- **If order matters, make something wait for it.** A group, a serial queue or a completion — never
+  "it usually comes first".
+- **Never `sync` onto a queue you might already be on.** Put `dispatchPrecondition(condition:
+  .notOnQueue(queue))` before a `sync`, and the mistake stops at that line with a clear message.
+- **Update UI with `DispatchQueue.main.async`, never `main.sync`.**
 :::
 
 ::: What I'm really scoring

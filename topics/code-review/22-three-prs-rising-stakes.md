@@ -1,7 +1,7 @@
 ---
 title: 22 · Three PRs, rising stakes
 summary: Three small pull requests in one round — a naming PR with a hidden float bug, a threading PR and an architecture PR — and how to split your time.
-minutes: 30
+minutes: 45
 group: Review this PR
 sources:
 - Blind · Airbnb iOS code review round — a repo with three PRs; points per comment, the last PR worth the most | https://www.teamblind.com/post/Airbnb-Code-Review-Round-OnE7Ex7H
@@ -11,11 +11,8 @@ sources:
 
 *Shape: review this PR, three times · Reported: Airbnb — a repo with three PRs, points per comment,
 the last PR worth the most; Deliveroo — "a PR was provided and I had to review it and put comments" ·
-PR 1 (Foundation) compiled and run with Swift 6.4, broken and fixed, real output below. PR 2 and
-PR 3 are UIKit: the broken versions were typechecked against the iOS SDK (iOS 18 deployment target)
-in Swift 5 and Swift 6 mode; the fixes typecheck in Swift 6 mode with zero warnings, and their
-Foundation-only parts (the cache actor, the view model) were run in harnesses. On-screen behaviour
-checked by hand*
+Verified: PR 1 run with Swift 6.4; the UIKit fixes and all tests run on the iOS Simulator (Swift 6
+mode)*
 
 > "Three PRs from the same teammate, in this repo. Leave comments the way you would at work — each
 > good comment scores, and each PR is worth more than the one before. You have forty-five minutes
@@ -116,24 +113,24 @@ final class OrderHistoryViewController: UITableViewController {
 ::: The key — what I expect a senior to find
 **PR 1 — style, plus one real bug (worth least, quick points)**
 
-1. **`Uploaded == 1.0` is never true for ten chunks.** `Double` can't store 0.1 exactly, so ten of
+1. **Out-of-range index traps.** `chunk_sizes[i]` crashes on a bad index. A `precondition` with a
+   message makes the crash say why.
+2. **`Uploaded == 1.0` is never true for ten chunks.** `Double` can't store 0.1 exactly, so ten of
    them add up to `0.9999999999999999` — run, not guessed. The upload finishes and the UI waits
    forever. A test with chunks of 0.5, 0.25, 0.25 passes, because those are exact in binary.
    My comment — *Blocking:* "Summing fractions in `Double` drifts — ten chunks of 0.1 sum to
-   0.9999999999999999, so `isDone()` never returns true. Could we track which chunks finished
-   (integers) and decide 'done' from that? Keep the fraction for the progress bar only."
-2. **A retried chunk counts twice.** Report chunk 1 twice and skip chunk 2: the real output was
-   `1.0 true` — "done" with a chunk never sent.
-   My comment — *Blocking:* "If a chunk is retried and reports twice, it's added twice, and we can say 'done'
-   with a chunk missing. A `Set` of finished chunk indices makes this idempotent."
-3. **Out-of-range index traps.** `chunk_sizes[i]` crashes on a bad index. A `precondition` with a
-   message makes the crash say why.
-4. **Naming.** `upload_progress` and `chunk_sizes` aren't Swift style (types are `UpperCamelCase`,
+   0.9999999999999999, so `isDone()` never returns true. Could we track which chunks finished and
+   decide 'done' by counting them? Keep the fraction for the progress bar only."
+3. **A retried chunk counts twice.** With chunks `[0.5, 0.25, 0.25]`, report chunk 1 twice and skip
+   chunk 2: the real output was `1.0 true` — "done" with a chunk never sent.
+   My comment — *Blocking:* "If a chunk is retried and reports twice, it's added twice, and we can
+   say 'done' with a chunk missing. A `Set` of finished chunk indices makes this idempotent."
+4. **Public mutable state.** Anyone can set `Uploaded` directly. `private(set)`.
+5. **Naming.** `upload_progress` and `chunk_sizes` aren't Swift style (types are `UpperCamelCase`,
    properties `lowerCamelCase`), and `Uploaded` reads like a type. `isDone()` reads better as a
    property, `isComplete`.
-   My comment — *Nit:* "Swift API guidelines: `UploadProgress`, `chunkSizes`, `uploaded`. Happy to pair on a
-   SwiftLint rule so this isn't on you to remember."
-5. **Public mutable state.** Anyone can set `Uploaded` directly. `private(set)`.
+   My comment — *Nit:* "Swift API guidelines: `UploadProgress`, `chunkSizes`, `uploaded`. Happy to
+   pair on a SwiftLint rule so this isn't on you to remember."
 
 **PR 2 — threading (worth more)**
 
@@ -142,55 +139,71 @@ final class OrderHistoryViewController: UITableViewController {
    `Dictionary` isn't thread-safe: this is a crash during a resize, or silently corrupt state.
    Swift 6 refuses the file (verified: `static let shared` is an error, plus two
    `Sendable`-capture warnings); Swift 5 mode compiles it without a word.
-   My comment — *Blocking:* "`images` is written from a concurrent queue and read off-queue, which is a data
-   race — it can crash on a resize. An `actor` would make the compiler enforce exclusive access,
-   and it's a small change; sketch below."
-2. **UI updated off main.** `completion` runs on the background queue, and the cell sets
+   My comment — *Blocking:* "`images` is written from a concurrent queue and read off-queue, which
+   is a data race — it can crash on a resize. Could the queue be serial, with the lookup and the
+   write both inside `queue.async`?"
+2. **UI updated off main.** On a miss, `completion` runs on the background queue, and the cell sets
    `imageView.image` there.
-   My comment — *Blocking:* "The completion arrives on the thumbnails queue, so the cell touches UIKit off the
-   main thread. If the cache becomes `async`, the cell can await it from a main-actor `Task`."
-3. **Wrong thumbnail in a reused cell.** No cancellation and no identity check: a slow render for
-   row 3 lands in the cell after it's been reused for row 40 (the bug from chapter 01).
-4. **Duplicate work.** Ten cells asking for the same URL miss together and render ten times.
-5. **Unbounded memory.** Every thumbnail is kept forever and nothing listens for memory warnings.
-   Fine for twenty; not for a vault of two thousand.
-6. **Singleton.** `ThumbnailCache.shared` can't be replaced in a test.
-7. **Failures are cached as nothing.** A `nil` render is stored as `nil` — which is the same as "not
-   cached", so it retries forever. Harmless here, but say it, and decide on purpose.
+   My comment — *Blocking:* "The completion arrives on the thumbnails queue, so the cell touches
+   UIKit off the main thread. Could the cache always call back on main?"
+3. **Two threading behaviours in one API.** A hit calls `completion` at once, on the caller's thread;
+   a miss calls it later, on a background queue. Callers can't write correct code against both.
+   Always call back the same way: later, on main.
+4. **Wrong thumbnail in a reused cell.** No identity check: a slow render for row 3 lands in the cell
+   after it's been reused for row 40 (the bug from chapter 01). Remember the URL; check it on return.
+5. **It can't render a PDF.** The cell is for documents, but `UIImage(contentsOfFile:)` only reads
+   images, so a PDF gets `nil`. QuickLook Thumbnailing (`QLThumbnailGenerator`) renders both.
+6. **The cache key ignores size and scale.** Ask for the same URL at 120 pt and 300 pt and you get
+   the small one. Key by URL, size and scale.
+7. **Duplicate work.** Ten cells asking for the same URL miss together and render ten times.
+8. **Unbounded memory.** Every thumbnail is kept forever and nothing listens for memory warnings.
+   Fine for twenty; not for a vault of two thousand. `NSCache` evicts on its own.
+9. **Failures are cached as nothing.** A `nil` render is stored as `nil` — which is the same as "not
+   cached", so it retries every time. Harmless here, but say it, and decide on purpose.
+10. **Singleton.** `ThumbnailCache.shared` can't be replaced in a test. Keep `.shared` for the app if
+    you like, but let the test build its own.
 
 **PR 3 — architecture (worth most)**
 
-1. **Core Data used on the wrong queue.** `viewContext` belongs to the main queue. The completion
+1. **Crashes waiting to happen.** `as! AppDelegate` (breaks in a test host or an extension),
+   `currentUser!` (logged out, or session expired), `try!` on fetch and decode (a 500 with an HTML
+   body traps).
+2. **Core Data used on the wrong queue.** `viewContext` belongs to the main queue. The completion
    handler inserts into it and saves from URLSession's background queue. That breaks Core Data's
    threading rule — corrupt object graphs, crashes that never reproduce. Run with
    `-com.apple.CoreData.ConcurrencyDebug 1` and it traps on the spot.
-   My comment — *Blocking:* "This writes to `viewContext` from URLSession's queue. Contexts must be used on their
-   own queue; this tends to show up as rare, unreproducible crashes. Could the import move into a
-   repository that uses `performBackgroundTask`?"
-2. **Personal data in a URL and in analytics.** The email goes into a query string — which ends up
+   My comment — *Blocking:* "This writes to `viewContext` from URLSession's queue. Contexts must be
+   used on their own queue; this tends to show up as rare, unreproducible crashes. Could the import
+   use `performBackgroundTask`?"
+3. **UI updated off main** — `orders` and `reloadData()` from the background queue. Swift 6 mode
+   warns about exactly these two lines (verified).
+4. **Personal data in a URL and in analytics.** The email goes into a query string — which ends up
    in server logs, proxies and crash reports — and is sent to the analytics vendor. That's a privacy
    bug and possibly a compliance one. It's also not encoded: many servers decode `+` as a space, so
    `ana+orders@…` asks for a different address. The auth token already says who the user is.
-   My comment — *Blocking:* "The email goes into the URL and into analytics. Query strings get logged
-   server-side, and our analytics vendor shouldn't receive personal data. Could we call
+   My comment — *Blocking:* "The email goes into the URL and into analytics. Query strings get
+   logged server-side, and our analytics vendor shouldn't receive personal data. Could we call
    `/me/orders` and let the token identify the user, and drop the property from the event?"
-3. **Crashes waiting to happen.** `as! AppDelegate` (breaks in a test host or an extension),
-   `currentUser!` (logged out, or session expired), `try!` on fetch and decode (a 500 with an HTML
-   body traps).
-4. **UI updated off main** — `orders` and `reloadData()` from the background queue. Swift 6 mode
-   warns about exactly these two lines (verified).
 5. **Duplicates on every visit.** Each load inserts every order again with no upsert by `id`. Open
    the screen three times, see each order three times.
-6. **Errors and empty state ignored.** No network, a 500, no orders — all show the same blank list.
-7. **The layering problem underneath all of it.** One view controller knows the app delegate, the
-   Core Data stack, the URL scheme, JSON, the session singleton and the analytics SDK. That's why
-   every bug above lives here, and why none of it can be tested.
-   My comment — *Suggestion (the comment that matters most):* "This screen does six jobs. What if it only knew
-   an `OrderHistoryViewModel`, which asks an `OrderRepository` protocol for orders? The repository
-   owns network and Core Data; analytics goes behind a protocol with a typed event. Then each piece
-   gets a unit test with a fake. Happy to pair — I've sketched it below."
-8. **Hidden singletons break tests.** `UserSession.shared` and `Analytics.shared` mean a test of this
-   screen hits real global state, and tests can affect each other. Inject them.
+6. **The HTTP status is ignored.** A 401 or a 500 with a JSON error body goes straight to the decoder.
+   Check for a 2xx before decoding.
+7. **Errors and empty state ignored.** No network, a 500, no orders — all show the same blank list.
+8. **No sort descriptor.** A Core Data fetch without one comes back in no promised order, so the
+   list can reshuffle between visits. Sort by date, newest first.
+9. **Money as `Double`.** `total` can't hold 12.99 exactly, and sums drift. Use `Decimal` (a Core
+   Data migration), and format it with the order's own currency, not a hard-coded one.
+10. **The request isn't cancelled.** Leave the screen and the task still runs, saves and reloads a
+    table nobody sees. Keep the task and cancel it in `deinit` or on disappear.
+11. **The layering problem underneath all of it.** One view controller knows the app delegate, the
+    Core Data stack, the URL scheme, JSON, the session singleton and the analytics SDK. That's why
+    every bug above lives here, and why none of it can be tested.
+    My comment — *Suggestion (the comment that matters most):* "This screen does six jobs. What if
+    it only talked to a presenter, which asks an `OrderRepository` for orders? The repository owns
+    network and Core Data; analytics goes behind a protocol with a typed event. Then each piece gets
+    a unit test with a fake. Happy to pair on it."
+12. **Hidden singletons break tests.** `UserSession.shared` and `Analytics.shared` mean a test of
+    this screen hits real global state, and tests can affect each other. Inject them.
 
 **How I'd split forty-five minutes.** Read all three first (five minutes) — you need to know where
 the points are. Then go in order but spend time by value: PR 1 in about seven minutes (the float
@@ -219,237 +232,151 @@ pair, and say what's good when something is.
 :::
 
 ::: The fix
-**PR 1** — decide "done" with integers, keep the fraction for display:
+**PR 1** — count finished chunks for "done"; keep the fractions for the bar:
 
 ```swift
 struct UploadProgress {
-    let chunkByteCounts: [Int]
-    private(set) var uploadedChunks: Set<Int> = []
+    let chunkSizes: [Double]                       // key 5: Swift names; fractions, for the bar only
+    private(set) var finished: Set<Int> = []       // key 3, 4: a retry is counted once
 
-    init(chunkByteCounts: [Int]) {
-        self.chunkByteCounts = chunkByteCounts
+    init(chunkSizes: [Double]) { self.chunkSizes = chunkSizes }
+
+    mutating func chunkDone(_ i: Int) {
+        precondition(chunkSizes.indices.contains(i), "No chunk \(i)")      // key 1
+        finished.insert(i)
     }
 
-    /// Idempotent: a retried chunk that reports twice is counted once.
-    mutating func markChunkUploaded(at index: Int) {
-        precondition(chunkByteCounts.indices.contains(index), "No chunk \(index)")
-        uploadedChunks.insert(index)
-    }
-
-    var isComplete: Bool { uploadedChunks.count == chunkByteCounts.count }
-
-    /// For the progress bar only — never for the "done" decision.
-    var fractionCompleted: Double {
-        let total = chunkByteCounts.reduce(0, +)
-        guard total > 0 else { return 1 }
-        let uploaded = uploadedChunks.reduce(0) { $0 + chunkByteCounts[$1] }
-        return Double(uploaded) / Double(total)
-    }
+    var uploaded: Double { finished.reduce(0) { $0 + chunkSizes[$1] } }    // display only
+    var isComplete: Bool { finished.count == chunkSizes.count }           // key 2: count, don't compare
 }
 ```
 
-```text
-ten chunks:    1.0 true
-retry twice:   0.75 false
-then the last: 1.0 true
-0.1 x 10 sum:  0.9999999999999999
-```
-
-**PR 2** — an actor owns the dictionary and joins duplicate requests; the cell awaits on main:
+**PR 2** — a serial queue owns the dictionary; every answer comes back later, on main; the cell
+checks it still wants it:
 
 ```swift
-/// Safe to call from any thread: the actor owns the dictionaries.
-actor ThumbnailCache<Image: Sendable> {
-    private var images: [URL: Image] = [:]
-    private var inFlight: [URL: Task<Image?, Never>] = [:]
-    private let render: @Sendable (URL) async -> Image?
-
-    init(render: @escaping @Sendable (URL) async -> Image?) {
-        self.render = render
+final class ThumbnailCache: @unchecked Sendable {  // safe: `images` is only touched on `queue`
+    static let shared = ThumbnailCache { url in
+        UIImage(contentsOfFile: url.path)?.preparingThumbnail(of: CGSize(width: 120, height: 120))
     }
+    private var images: [URL: UIImage] = [:]
+    private let queue = DispatchQueue(label: "thumbnails")       // key 1: serial, not concurrent
+    private let render: @Sendable (URL) -> UIImage?
 
-    func thumbnail(for url: URL) async -> Image? {
-        if let cached = images[url] { return cached }
-        if let running = inFlight[url] { return await running.value }   // join, don't re-render
-        let task = Task.detached(priority: .userInitiated) { [render] in await render(url) }
-        inFlight[url] = task
-        let image = await task.value
-        inFlight[url] = nil
-        if let image { images[url] = image }
-        return image
+    init(render: @escaping @Sendable (URL) -> UIImage?) { self.render = render }
+
+    func thumbnail(for url: URL, completion: @escaping @MainActor (UIImage?) -> Void) {
+        queue.async {                                            // key 1: read and write on the queue
+            let image = self.images[url] ?? self.render(url)
+            self.images[url] = image
+            DispatchQueue.main.async { completion(image) }       // key 2, 3: always main, always later
+        }
     }
 }
 
 final class DocumentCell: UITableViewCell {
-    private var thumbnailTask: Task<Void, Never>?
+    private var representedURL: URL?                             // key 4
 
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        thumbnailTask?.cancel()
+    func configure(with url: URL) {
+        representedURL = url
         imageView?.image = nil
-    }
-
-    func configure(with url: URL, thumbnails: ThumbnailCache<UIImage>) {
-        thumbnailTask?.cancel()
-        thumbnailTask = Task { [weak self] in          // inherits the main actor
-            let image = await thumbnails.thumbnail(for: url)
-            guard !Task.isCancelled else { return }    // the cell was reused meanwhile
-            self?.imageView?.image = image
-            self?.setNeedsLayout()
+        ThumbnailCache.shared.thumbnail(for: url) { [weak self] image in
+            guard let self, self.representedURL == url else { return }   // reused meanwhile
+            self.imageView?.image = image
+            self.setNeedsLayout()
         }
     }
 }
-
-// Composition root: one cache for the app, handed to whoever needs it.
-@MainActor
-func makeThumbnailCache() -> ThumbnailCache<UIImage> {
-    ThumbnailCache { url in
-        UIImage(contentsOfFile: url.path)?
-            .preparingThumbnail(of: CGSize(width: 120, height: 120))
-    }
-}
 ```
 
-The cache, run with a fake image type — 1,000 concurrent requests for 10 URLs:
-
-```text
-requests: 1000 renders: 10 distinct: 10
-```
-
-**PR 3** — the screen knows one thing, a view model; the view model knows protocols:
+**PR 3** — Core Data on its own queue, no email anywhere, no force-anything, an error message:
 
 ```swift
-struct Order: Identifiable, Equatable, Sendable {
-    let id: String
-    let total: Decimal
+protocol OrderLoading: Sendable {                                // the one seam
+    func fetchOrders(completion: @escaping @Sendable (Result<[OrderDTO], Error>) -> Void)
 }
 
-protocol OrderRepository: Sendable {
-    func cachedOrders() async throws -> [Order]
-    func refreshOrders() async throws -> [Order]
-}
-
-enum AnalyticsEvent: Equatable, Sendable { case orderHistoryViewed }
-
-protocol AnalyticsTracking: Sendable {
-    func track(_ event: AnalyticsEvent)
-}
-
-@MainActor
-final class OrderHistoryViewModel {
-    enum State: Equatable {
-        case loading
-        case loaded([Order])
-        case failed(String)
-    }
-
-    private(set) var state: State = .loading { didSet { onChange?(state) } }
-    var onChange: ((State) -> Void)?
-    private let repository: OrderRepository
-    private let analytics: AnalyticsTracking
-
-    init(repository: OrderRepository, analytics: AnalyticsTracking) {
-        self.repository = repository
-        self.analytics = analytics
-    }
-
-    func load() async {
-        analytics.track(.orderHistoryViewed)
-        if let cached = try? await repository.cachedOrders(), !cached.isEmpty {
-            state = .loaded(cached)                       // show what we have at once
-        }
-        do {
-            state = .loaded(try await repository.refreshOrders())
-        } catch {
-            if case .loaded = state { return }            // keep stale data over an error
-            state = .failed("Couldn't load your orders.")
-        }
+struct OrderAPI: OrderLoading {
+    func fetchOrders(completion: @escaping @Sendable (Result<[OrderDTO], Error>) -> Void) {
+        let url = URL(string: "https://api.example.com/me/orders")!     // key 4: the token names the user
+        URLSession.shared.dataTask(with: url) { data, response, error in
+            guard let data, (response as? HTTPURLResponse)?.statusCode == 200 else {   // key 6
+                return completion(.failure(error ?? URLError(.badServerResponse)))
+            }
+            completion(Result { try JSONDecoder().decode([OrderDTO].self, from: data) })  // key 1
+        }.resume()
     }
 }
 
 final class OrderHistoryViewController: UITableViewController {
-    private let viewModel: OrderHistoryViewModel
-    private var orders: [Order] = []
+    private var orders: [OrderEntity] = []
+    private let container: NSPersistentContainer                 // key 1: no `as! AppDelegate`
+    private let loader: OrderLoading
 
-    init(viewModel: OrderHistoryViewModel) {
-        self.viewModel = viewModel
+    init(container: NSPersistentContainer, loader: OrderLoading) {
+        self.container = container
+        self.loader = loader
         super.init(style: .plain)
     }
-
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Order")
-        viewModel.onChange = { [weak self] state in self?.render(state) }
-        Task { [viewModel] in await viewModel.load() }
+        showStoredOrders()
+        loader.fetchOrders { result in
+            DispatchQueue.main.async { self.handle(result) }     // key 3: back to main first
+        }
+        Analytics.shared.track("order_history_viewed", properties: [:])  // key 4: no email
     }
 
-    private func render(_ state: OrderHistoryViewModel.State) {
-        switch state {
-        case .loading:
-            tableView.backgroundView = nil
-        case .loaded(let orders):
-            self.orders = orders
-            tableView.backgroundView = orders.isEmpty ? Self.message("No orders yet.") : nil
-        case .failed(let message):
-            tableView.backgroundView = Self.message(message)
+    private func handle(_ result: Result<[OrderDTO], Error>) {
+        guard case .success(let dtos) = result else { return showMessage("Couldn't load your orders.") }
+        container.performBackgroundTask { context in             // key 2: its own queue
+            try? Self.importOrders(dtos, into: context)         // a failed import keeps what's shown
+            DispatchQueue.main.async { self.showStoredOrders() }
         }
+    }
+
+    nonisolated static func importOrders(_ dtos: [OrderDTO], into context: NSManagedObjectContext) throws {
+        for dto in dtos {                                        // key 5: upsert by id
+            let request = OrderEntity.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", dto.id)
+            let order = try context.fetch(request).first ?? OrderEntity(context: context)
+            order.id = dto.id
+            order.total = dto.total
+        }
+        try context.save()
+    }
+
+    private func showStoredOrders() {
+        orders = (try? container.viewContext.fetch(OrderEntity.fetchRequest())) ?? []
+        tableView.backgroundView = nil
         tableView.reloadData()
     }
 
-    private static func message(_ text: String) -> UILabel {
+    private func showMessage(_ text: String) {                  // key 7
         let label = UILabel()
         label.text = text
         label.textAlignment = .center
-        label.numberOfLines = 0
-        return label
-    }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        orders.count
-    }
-
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "Order", for: indexPath)
-        var content = cell.defaultContentConfiguration()
-        content.text = orders[indexPath.row].total.formatted(.currency(code: "EUR"))
-        cell.contentConfiguration = content
-        return cell
+        tableView.backgroundView = label
     }
 }
 ```
 
-The view model, run against a fake repository (the states it published, then the analytics events):
+**Said out loud, not coded:** a presenter and an `OrderRepository` behind the screen · an `actor`
+cache with in-flight de-duplication and a bounded `NSCache` · `QLThumbnailGenerator` for PDFs ·
+`Decimal` money (a migration) · a sort descriptor · cancel the request on disappear · inject
+analytics with a typed event · key the cache by size and scale.
 
-```text
-fresh ok      -> ["loaded(1)", "loaded(2)"] ["orderHistoryViewed"]
-offline+cache -> ["loaded(1)"] ["orderHistoryViewed"]
-offline empty -> ["failed"] ["orderHistoryViewed"]
-```
-
-Why each piece:
-
-- **Integers for "done", `Double` for display (PR 1)** — counting is exact; summing fractions isn't.
-  The `Set` makes a duplicate report harmless.
-- **An `actor` instead of a concurrent queue (PR 2)** — an actor runs one piece of its code at a
-  time, and the compiler stops anything outside from touching `images` directly. The `inFlight`
-  dictionary means a second request for the same URL waits for the first render instead of
-  starting its own — 10 renders for 1,000 requests.
-- **`Task.detached` for the render** — shared work shouldn't inherit one caller's priority or be
-  cancelled when one cell scrolls away; the other callers still want the image.
-- **A cancellable `Task` in the cell** — it runs on main because the cell is main-actor, and a reused
-  cell cancels it, so a late image never lands in the wrong row.
-- **`OrderRepository` protocol (PR 3)** — the layering fix. The real one combines an API client
-  (`GET /me/orders`, the token names the user) with a Core Data store that imports on a background
-  context via `performBackgroundTask` and upserts by `id`. The screen never sees either.
-- **A typed `AnalyticsEvent`** — an enum case can't carry an email by accident; a
-  `[String: String]` dictionary invites it.
-- **Cached first, then fresh, and stale beats an error** — the user sees their orders instantly and
-  offline, and only sees "couldn't load" when there is truly nothing to show. Empty and failed get
-  their own message, so neither looks like the other (point 6).
-- **Everything injected through `init`** — no `UIApplication.shared.delegate`, no `.shared`; the
-  harness above is the test the original couldn't have.
+- **Why a serial queue and not an actor (PR 2).** It's the smallest change that removes the race,
+  and it keeps the completion-handler API the cells already use. Because the lookup, the render and
+  the write all run on one queue, a second request for the same URL waits and then hits the cache.
+- **Why `@unchecked Sendable`.** The compiler can't see that `images` is only touched on `queue`, so
+  the comment says it. That promise is the price of GCD; an actor would let the compiler check it.
+- **Why `OrderLoading` is the one seam (PR 3).** The test needs a load that fails without a network.
+  The container is passed in `init` too, which replaces `as! AppDelegate` without a new protocol.
+- **Why `importOrders` is `static`.** It runs on the background context's queue, so it must not touch
+  the view controller — and a static function can't by accident. It's also what the test calls.
 :::
 
 ::: Now write the tests
@@ -458,202 +385,167 @@ Why each piece:
 
 **What I'd test, and why**
 
-1. **PR 1: ten chunks of a tenth each complete** — the reported bug. Adding `0.1` ten times never
-   equalled `1.0`, so the upload never finished.
-2. **PR 1: a retried chunk is counted once** — a chunk that reports twice must not push progress
-   past the truth. One more test checks the fraction follows bytes, not chunk count.
-3. **PR 2: a hundred concurrent requests for one URL render once** — the actor and its `inFlight`
-   table are the fix; this proves duplicate requests join the first render.
-4. **PR 2: a failed render (`nil`) is not cached** — otherwise one bad read hides the thumbnail
-   forever.
-5. **PR 3: cached orders show first, then fresh ones; offline with a cache keeps them; offline
-   with nothing shows the error** — the three states the screen promises.
-6. **PR 3: the screen view is tracked once, with no email** — the privacy fix.
+1. **PR 1: ten chunks of a tenth each complete** — the bug. Adding `0.1` ten times never equalled
+   `1.0`, so the upload never finished.
+2. **PR 1: a retried chunk is counted once** — the edge case: a retry must not mark the upload done
+   with a chunk missing.
+3. **PR 2: two requests for one URL render once** — the serial queue is the fix; this proves the
+   second request finds the first one's result instead of racing it.
+4. **PR 2: a cache hit still calls back later, on main** — the regression guard for "two threading
+   behaviours". The result is a `@MainActor` object, so the callback can only touch it on main.
+5. **PR 3: a failed load shows an error, not a blank list** — through the one seam, a loader that
+   fails.
+6. **PR 3: importing the same order twice keeps one** — the upsert, against an in-memory store.
 
-I ran all of this with SwiftPM, without UIKit. I left out `DocumentCell` and
-`OrderHistoryViewController`: they are thin, they only show what the cache and the view model give
-them, and they aren't unit-tested. I'd check those on screen.
-
-**The seam.** PR 1 needs none — it's a plain value type. PR 2's cache is generic over the image
-type and takes its `render` function in `init`, so the test uses a `FakeImage` and a renderer that
-counts its calls; no `UIImage` needed. PR 3's view model takes `OrderRepository` and
-`AnalyticsTracking` protocols, so a *fake* repository returns cached or fresh orders or throws, and
-a fake tracker records events.
+The cache takes its `render` closure in `init`, so the test counts renders and never touches disk.
+The view controller takes `OrderLoading`, so a fake fails on demand. I don't unit-test the cell; I'd
+check it on screen. `OrderModel.makeInMemoryContainer()` is a small test helper that builds the
+Core Data stack in memory. The async waits use `waitUntil(maxYields:_:)`, which counts yields
+instead of watching a clock.
 
 ```swift
-import Testing
-import Foundation
+import CoreData
 import Synchronization
+import Testing
+import UIKit
+
+/// Yield-count bounded, no clocks: gives queued main-thread work a turn until `condition` holds.
+@MainActor
+func waitUntil(maxYields: Int = 1_000, _ condition: () -> Bool) async -> Bool {
+    for _ in 0..<maxYields {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
+}
 
 // MARK: - PR 1
 
 struct UploadProgressTests {
     @Test func tenChunksOfATenthEachComplete() {
         // The bug: 0.1 added ten times is 0.9999999999999999, so `== 1.0` never fired.
-        var progress = UploadProgress(chunkByteCounts: Array(repeating: 100, count: 10))
+        var progress = UploadProgress(chunkSizes: Array(repeating: 0.1, count: 10))
 
-        for index in 0..<10 { progress.markChunkUploaded(at: index) }
+        for i in 0..<10 { progress.chunkDone(i) }
 
         #expect(progress.isComplete)
-        #expect(progress.fractionCompleted == 1.0)
     }
 
     @Test func retriedChunkIsCountedOnce() {
-        var progress = UploadProgress(chunkByteCounts: [100, 100, 100, 100])
+        var progress = UploadProgress(chunkSizes: [0.5, 0.25, 0.25])
 
-        progress.markChunkUploaded(at: 0)
-        progress.markChunkUploaded(at: 1)
-        progress.markChunkUploaded(at: 2)
-        progress.markChunkUploaded(at: 2)   // the retry reports again
+        progress.chunkDone(0)
+        progress.chunkDone(1)
+        progress.chunkDone(1)                  // the retry reports again; chunk 2 never came
 
         #expect(!progress.isComplete)
-        #expect(progress.fractionCompleted == 0.75)
-    }
-
-    @Test func fractionFollowsBytesNotChunks() {
-        var progress = UploadProgress(chunkByteCounts: [300, 100])
-
-        progress.markChunkUploaded(at: 0)
-
-        #expect(progress.fractionCompleted == 0.75)
+        #expect(progress.uploaded == 0.75)
     }
 }
 
 // MARK: - PR 2
 
-/// Stands in for UIImage: the cache is generic, so the test needs no UIKit.
-struct FakeImage: Sendable, Equatable {
-    let url: URL
-}
-
-/// Counts renders and can be told to fail (return nil) for the first few.
-final class FakeRenderer: Sendable {
-    private let state: Mutex<(renders: Int, failuresLeft: Int)>
-
-    init(failFirst failures: Int = 0) { state = Mutex((0, failures)) }
-
-    var renders: Int { state.withLock { $0.renders } }
-
-    func render(_ url: URL) async -> FakeImage? {
-        let fails = state.withLock { state -> Bool in
-            state.renders += 1
-            guard state.failuresLeft > 0 else { return false }
-            state.failuresLeft -= 1
-            return true
-        }
-        await Task.yield()   // a real render suspends; give other callers a chance to pile up
-        return fails ? nil : FakeImage(url: url)
+/// Counts renders; safe to call from the cache's queue.
+final class RenderCounter: Sendable {
+    private let count = Mutex(0)
+    var renders: Int { count.withLock { $0 } }
+    func render(_ url: URL) -> UIImage? {
+        count.withLock { $0 += 1 }
+        return UIImage()
     }
 }
 
+@MainActor
+final class CallOrder {
+    var events: [String] = []
+}
+
+@MainActor
 struct ThumbnailCacheTests {
     let url = URL(fileURLWithPath: "/docs/invoice.pdf")
 
-    @Test func concurrentRequestsForOneURLRenderOnce() async {
-        let renderer = FakeRenderer()
-        let cache = ThumbnailCache<FakeImage> { await renderer.render($0) }
+    @Test func twoRequestsForOneURLRenderOnce() async {
+        let counter = RenderCounter()
+        let cache = ThumbnailCache(render: counter.render)
 
-        let images = await withTaskGroup(of: FakeImage?.self) { group in
-            for _ in 0..<100 { group.addTask { [url] in await cache.thumbnail(for: url) } }
-            return await group.reduce(into: []) { $0.append($1) }
+        await withCheckedContinuation { done in
+            cache.thumbnail(for: url) { _ in }
+            cache.thumbnail(for: url) { _ in done.resume() }
         }
 
-        #expect(images.count == 100)
-        #expect(images.allSatisfy { $0 == FakeImage(url: url) })
-        #expect(renderer.renders == 1)
+        #expect(counter.renders == 1)
     }
 
-    @Test func failedRenderIsNotCached() async {
-        let renderer = FakeRenderer(failFirst: 1)
-        let cache = ThumbnailCache<FakeImage> { await renderer.render($0) }
+    @Test func aCacheHitStillCallsBackLaterOnMain() async {
+        let cache = ThumbnailCache(render: RenderCounter().render)
+        await withCheckedContinuation { done in cache.thumbnail(for: url) { _ in done.resume() } }
 
-        let first = await cache.thumbnail(for: url)
-        let second = await cache.thumbnail(for: url)
+        let order = CallOrder()                // @MainActor: the callback can only touch it on main
+        await withCheckedContinuation { done in
+            cache.thumbnail(for: url) { _ in
+                order.events.append("callback")
+                done.resume()
+            }
+            order.events.append("returned")
+        }
 
-        #expect(first == nil)
-        #expect(second == FakeImage(url: url))
-        #expect(renderer.renders == 2)
+        #expect(order.events == ["returned", "callback"])
     }
 }
 
 // MARK: - PR 3
 
-/// A fake repository: each call returns what the test set, or throws.
-struct FakeOrderRepository: OrderRepository {
-    var cached: Result<[Order], URLError> = .success([])
-    var fresh: Result<[Order], URLError> = .success([])
-
-    func cachedOrders() async throws -> [Order] { try cached.get() }
-    func refreshOrders() async throws -> [Order] { try fresh.get() }
-}
-
-final class FakeAnalytics: AnalyticsTracking {
-    private let recorded = Mutex<[AnalyticsEvent]>([])
-
-    var events: [AnalyticsEvent] { recorded.withLock { $0 } }
-
-    func track(_ event: AnalyticsEvent) { recorded.withLock { $0.append(event) } }
+struct FailingLoader: OrderLoading {
+    func fetchOrders(completion: @escaping @Sendable (Result<[OrderDTO], Error>) -> Void) {
+        completion(.failure(URLError(.notConnectedToInternet)))
+    }
 }
 
 @MainActor
-struct OrderHistoryViewModelTests {
-    let old = Order(id: "o-1", total: 10)
-    let new = Order(id: "o-2", total: 25)
-    let analytics = FakeAnalytics()
+struct OrderHistoryTests {
+    @Test func failedLoadShowsAnErrorNotABlankList() async {
+        let screen = OrderHistoryViewController(container: OrderModel.makeInMemoryContainer(),
+                                                loader: FailingLoader())
 
-    /// Records every state the view model publishes, in order.
-    func states(after repository: FakeOrderRepository) async -> [OrderHistoryViewModel.State] {
-        let viewModel = OrderHistoryViewModel(repository: repository, analytics: analytics)
-        var published: [OrderHistoryViewModel.State] = []
-        viewModel.onChange = { published.append($0) }
-        await viewModel.load()
-        return published
+        screen.loadViewIfNeeded()
+
+        let shown = await waitUntil {
+            (screen.tableView.backgroundView as? UILabel)?.text == "Couldn't load your orders."
+        }
+        #expect(shown)
     }
 
-    @Test func showsCachedOrdersThenFreshOnes() async {
-        let repository = FakeOrderRepository(cached: .success([old]), fresh: .success([old, new]))
+    @Test func importingTheSameOrderTwiceKeepsOne() async throws {
+        let container = OrderModel.makeInMemoryContainer()
+        let context = container.newBackgroundContext()
+        let order = OrderDTO(id: "o-1", total: 25)
 
-        #expect(await states(after: repository) == [.loaded([old]), .loaded([old, new])])
-    }
+        try await context.perform {            // a second visit imports the same order again
+            try OrderHistoryViewController.importOrders([order], into: context)
+            try OrderHistoryViewController.importOrders([order], into: context)
+        }
 
-    @Test func offlineWithACacheKeepsTheCachedOrders() async {
-        let repository = FakeOrderRepository(cached: .success([old]),
-                                             fresh: .failure(URLError(.notConnectedToInternet)))
-
-        #expect(await states(after: repository) == [.loaded([old])])
-    }
-
-    @Test func offlineWithNothingCachedFails() async {
-        let repository = FakeOrderRepository(cached: .success([]),
-                                             fresh: .failure(URLError(.notConnectedToInternet)))
-
-        #expect(await states(after: repository) == [.failed("Couldn't load your orders.")])
-    }
-
-    @Test func screenViewIsTrackedOnceWithNoPersonalData() async {
-        _ = await states(after: FakeOrderRepository(fresh: .success([new])))
-
-        // The event is an enum case with no payload, so an email has nowhere to go.
-        #expect(analytics.events == [.orderHistoryViewed])
+        #expect(try container.viewContext.count(for: OrderEntity.fetchRequest()) == 1)
     }
 }
 ```
 
-Ran with Swift 6.4: 9 tests, all passed.
+Ran on the iOS Simulator (Swift 6 mode): 6 tests, all passed.
 :::
 
 ::: What I'd ask next
 - *"The author pushes back: 'the refactor is out of scope, it works'. What do you do?"* — Separate
   the must-fix from the nice-to-have. The wrong-queue Core Data write and the email in the URL block
-  merge. The full layering refactor can be a follow-up ticket if they move the import into a
-  repository now. Offer to pair on it.
-- *"Why not `==` with a tolerance in PR 1?"* — It works (`abs(a - b) < 1e-9`), but you then have to pick
-  the tolerance and it still double-counts retries. Counting chunks removes the question.
-- *"Is a serial queue a fine fix for PR 2?"* — Yes, if every read *and* write goes through it, with
-  `sync` for reads. Then say why I'd still pick the actor: the compiler checks it, a queue is a
-  convention someone breaks in the next PR.
-- *"How would you test PR 3's offline behaviour?"* — A fake repository whose refresh throws, with and
-  without cached data, asserting the published states — exactly what the harness printed.
+  merge; the fix above is small. The presenter and repository can be a follow-up ticket. Offer to
+  pair on it.
+- *"Why not `==` with a tolerance in PR 1?"* — It works (`abs(a - b) < 1e-9`), but you then have to
+  pick the tolerance and it still double-counts retries. Counting chunks removes the question.
+- *"Why not an actor in PR 2?"* — I'd like one next: the compiler checks the isolation, and an
+  `inFlight` table lets ten callers share one render. But it changes the API to `async`, so every
+  cell changes too. The serial queue fixes the race today without that.
+- *"There's no empty state yet. Add one and test it."* — When the stored orders come back empty,
+  show "No orders yet" the same way as the error. The test is a loader that returns `[]`, then
+  `waitUntil` the message appears. Same seam, one more fake.
 - *"Which one comment would you leave if you only had time for one per PR?"* — PR 1: the float `==`.
   PR 2: the race. PR 3: the view controller owning persistence and network — because fixing it
   fixes the queue bug, the duplicates and the testability with it.

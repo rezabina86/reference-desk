@@ -10,10 +10,8 @@ sources:
 ---
 
 *Shape: review this PR · Reported: PhonePe asked how to share keychain data between apps; a
-candidate writes that storing tokens in the keychain wasn't the end of the conversation · Security
-framework — the fix typechecks against the iOS SDK (iOS 18 target) in Swift 6 mode with zero warnings; the
-login logic was compiled and run with Swift 6.4 against a fake HTTP client and an in-memory
-keychain; the real keychain calls were checked by hand*
+candidate writes that storing tokens in the keychain wasn't the end of the conversation ·
+Verified: the fix's login logic run against a fake server and token store, Swift 6.4*
 
 > "A teammate added 'remember me' to the login screen. It works, QA signed it off, and it's
 > going out on Thursday. Review it before it does."
@@ -106,46 +104,51 @@ And in the same PR, `Info.plist`, so the `http://` URL works:
 :::
 
 ::: The key — what I expect a senior to find
-1. **`try!` on the response.** A 200 with an unexpected body — a maintenance page, a changed field
-   name — crashes the app on the login screen. Decode with `try` and show an error.
+1. **`try!` on the response.** A 200 with an unexpected body — a maintenance page, a renamed
+   field — crashes the app on the login screen. Decode with `try` and show an error.
 2. **UI state written from a background queue.** The completion handler runs on `URLSession`'s
    queue and sets `isLoggedIn` and `errorMessage`, which drive the UI. That's a data race and
-   wrong-thread UI. Swift 6 mode warns (verified: *capture of 'self' with non-Sendable type
-   'LoginViewModel' in a '@Sendable' closure*); Swift 5 mode says nothing.
+   wrong-thread UI. Swift 6 mode warns (*capture of 'self' with non-Sendable type
+   'LoginViewModel' in a '@Sendable' closure*); Swift 5 mode says nothing. Make the class
+   `@MainActor` and use `async`/`await`.
 3. **"Remember me" stores the password itself, in plain text.** `UserDefaults` is an unencrypted
-   plist in the app's container. It goes into unencrypted backups, and anyone with the backup or a
-   jailbroken phone reads it. Never store the password at all — remembering the user means keeping
-   the *session token*, and that belongs in the keychain.
+   plist in the app's container. It goes into backups, and anyone with the backup or a jailbroken
+   phone reads it. `init` fills it back into the field on every launch, and `logout()` never
+   deletes it. Never store the password; remembering the user means keeping the *token*.
 4. **The token in `UserDefaults`.** Same plist, same problem: whoever reads it is logged in as the
-   user, with no password needed.
+   user, no password needed. It belongs in the keychain.
 5. **Clear-text HTTP, enabled app-wide.** `http://` sends the email and password readable to anyone
    on the same café Wi-Fi. `NSAllowsArbitraryLoads` switches off App Transport Security (Apple's
-   HTTPS-only default) for every request in the app, and has to be justified in App Review.
-   Delete it and use `https://`.
-6. **The password in the URL.** Even over HTTPS, URLs end up in server access logs, proxy and CDN
-   logs and crash reports. Credentials go in the request body. It's also a user-visible bug:
-   verified, `URLComponents` leaves `+` as is — `password=p@ss+w0rd%26x` — and many servers decode
-   `+` in a query as a space, so users with a `+` in their password can't log in.
-7. **The token in the avatar URL.** Same leak, plus the URL becomes a key in `URLCache` on disk and
-   is often logged by image loaders. Send it in an `Authorization` header.
-8. **The password logged.** `NSLog` writes to the system log, which a connected Mac can read in
-   Console and which ends up in sysdiagnose files. It also treats the string as a format: verified,
-   a password of `x%dy%@z` was logged as `x0y(null)z`. Don't log credentials; for other personal
-   data, `Logger` with `privacy: .private`.
+   HTTPS-only default) for every request in the app. Delete it and use `https://`.
+6. **The password in the URL.** Even over HTTPS, URLs end up in server, proxy and CDN logs and in
+   crash reports. Credentials go in the request body. It's also a user-visible bug: `URLComponents`
+   leaves `+` as is (`password=p@ss+w0rd%26x`), and many servers read `+` in a query as a space.
+7. **The token in the avatar URL.** Same leak, plus the URL becomes a `URLCache` key on disk and
+   image loaders often log it. The token is also pasted in unencoded, so a `+` or `&` in it breaks
+   the URL. Send it in an `Authorization` header.
+8. **The password logged.** `NSLog` writes to the system log, which a connected Mac reads in
+   Console and which lands in sysdiagnose files. It also treats the string as a format: a password
+   of `x%dy%@z` was logged as `x0y(null)z`. Don't log credentials at all.
 9. **Error messages reveal who has an account.** "No account exists" versus "Wrong password" lets
-   anyone test a list of emails — *account enumeration*. The 404 message also puts the email on
-   screen. One message for both: "Email or password is incorrect."
-10. **No protection against hammering.** Nothing stops five quick taps sending five requests, and
-    there's no handling of a server's rate limit (`429 Too Many Requests` with `Retry-After`). The
-    user gets no "try again in a minute"; the server sees a brute-force pattern.
-11. **Logout leaves the user half logged in.** The token stays in memory in `token`, so
-    `avatarURL()` keeps working; the remembered email and password stay in `UserDefaults` and are
-    filled in on next launch for whoever picks up the phone. The server is never told either.
-12. **Failures are silent.** No network, no data: `guard … else { return }`. The button does
+   anyone test a list of emails — *account enumeration*. One message for both: "Email or password
+   is incorrect."
+10. **The password stays in memory after login.** It sits in `password` for as long as the screen
+    lives. Clear it as soon as the request is built.
+11. **No protection against hammering.** Five quick taps send five requests, and a server's rate
+    limit (`429 Too Many Requests`) gets "Something went wrong." Block a second submit while one is
+    in flight.
+12. **Logout leaves the user half logged in.** The token stays in memory in `token`, so
+    `avatarURL()` keeps working, and the server is never told.
+13. **Failures are silent.** No network, no data: `guard … else { return }`. The button does
     nothing and the user taps again.
-13. **The password stays in memory after login.** Clear the field once it has been used.
-14. **Untestable.** `UserDefaults.standard` and `URLSession.shared` are reached for directly; none
-    of the above can be checked in a unit test.
+14. **The error never clears.** `errorMessage` is set on a failure and never reset, so a retry that
+    succeeds still shows the old error under a logged-in screen.
+15. **Unticking "remember me" forgets nothing.** Log in once with it on, once with it off: the
+    first login's data stays stored. Unticking has to delete what was saved.
+16. **`isLoggedIn` trusts any stored token.** A token from months ago, already expired, makes the
+    app look logged in until the first request fails. The fix keeps this; say what you'd add (below).
+17. **Untestable.** `UserDefaults.standard` and `URLSession.shared` are reached for directly, so
+    none of the above can be checked in a unit test.
 :::
 
 ::: The idea behind it
@@ -175,243 +178,116 @@ You keep the card in the room safe, not on the lobby table.
 :::
 
 ::: The fix
+Same class, same properties. `login()` becomes `async`, the token moves to the keychain behind one
+protocol, and the `NSAllowsArbitraryLoads` entry is deleted from `Info.plist`.
+
 ```swift
 import Foundation
-import Security
 
-protocol KeychainStoreType: Sendable {
-    func set(_ data: Data, for account: String) throws
-    func data(for account: String) throws -> Data?
-    func remove(_ account: String) throws
+struct LoginResponse: Decodable {
+    let token: String
 }
 
-struct KeychainError: Error, Equatable {
-    let status: OSStatus
+protocol TokenStore {                    // key 4: the one new seam; the app passes a keychain store
+    func token() -> String?
+    func set(_ token: String) throws
+    func remove()
 }
 
-struct KeychainStore: KeychainStoreType {
-    let service: String
-
-    func set(_ data: Data, for account: String) throws {
-        let attributes: [CFString: Any] = [
-            kSecValueData: data,
-            // Readable after the first unlock since boot, so a background refresh works while the
-            // phone is locked. ThisDeviceOnly: never synced, never restored onto another phone.
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
-        var status = SecItemUpdate(query(account) as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            let item = query(account).merging(attributes) { _, new in new }
-            status = SecItemAdd(item as CFDictionary, nil)
-        }
-        guard status == errSecSuccess else { throw KeychainError(status: status) }
-    }
-
-    func data(for account: String) throws -> Data? {
-        var request = query(account)
-        request[kSecReturnData] = true
-        request[kSecMatchLimit] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
-        switch status {
-        case errSecSuccess: return result as? Data
-        case errSecItemNotFound: return nil
-        default: throw KeychainError(status: status)
-        }
-    }
-
-    func remove(_ account: String) throws {
-        let status = SecItemDelete(query(account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError(status: status)
-        }
-    }
-
-    private func query(_ account: String) -> [CFString: Any] {
-        [kSecClass: kSecClassGenericPassword,
-         kSecAttrService: service,
-         kSecAttrAccount: account]
-    }
-}
-```
-
-```swift
-protocol HTTPClient: Sendable {
-    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
-}
-
-enum LoginOutcome: Equatable, Sendable {
-    case success(token: String)
-    case invalidCredentials
-    case rateLimited(retryAfterSeconds: Int)
-    case failed
-}
-
-struct AuthService: Sendable {
-    private let baseURL: URL
-    private let http: any HTTPClient
-
-    init(baseURL: URL, http: any HTTPClient) {
-        precondition(baseURL.scheme == "https", "Credentials only travel over HTTPS")
-        self.baseURL = baseURL
-        self.http = http
-    }
-
-    func login(email: String, password: String) async throws -> LoginOutcome {
-        var request = URLRequest(url: baseURL.appending(path: "v1/login"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["email": email, "password": password])
-
-        let (data, response) = try await http.send(request)
-        switch response.statusCode {
-        case 200:
-            struct Body: Decodable { let token: String }
-            return .success(token: try JSONDecoder().decode(Body.self, from: data).token)
-        case 401, 404:
-            return .invalidCredentials          // same answer whether or not the email exists
-        case 429:
-            let wait = response.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init) ?? 30
-            return .rateLimited(retryAfterSeconds: wait)
-        default:
-            return .failed
-        }
-    }
-}
-
-@MainActor
-final class SessionStore {
-    private(set) var token: String?
-    private let keychain: any KeychainStoreType
-    private let account = "session-token"
-
-    init(keychain: any KeychainStoreType) {
-        self.keychain = keychain
-        token = (try? keychain.data(for: account)).map { String(decoding: $0, as: UTF8.self) }
-    }
-
-    /// "Remember me" keeps the token in the keychain; otherwise it lives in memory only.
-    func start(token: String, remember: Bool) throws {
-        self.token = token
-        if remember {
-            try keychain.set(Data(token.utf8), for: account)
-        } else {
-            try keychain.remove(account)
-        }
-    }
-
-    func end() {
-        token = nil
-        try? keychain.remove(account)
-    }
-
-    func authorized(_ request: URLRequest) -> URLRequest {
-        var request = request
-        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        return request
-    }
-}
-
-@MainActor
+@MainActor                                                    // key 2
 final class LoginViewModel {
-    enum State: Equatable {
-        case idle, submitting, loggedIn
-        case failed(String)
-        case lockedOut(until: Date)
-    }
-
     var email = ""
     var password = ""
     var rememberMe = false
-    private(set) var state: State
+    var errorMessage: String?
+    var isLoggedIn = false
+    private var token: String?
+    private var isSubmitting = false                          // key 11
+    private let session: URLSession
+    private let tokenStore: TokenStore
 
-    private let auth: AuthService
-    private let session: SessionStore
-    private let now: () -> Date
-
-    init(auth: AuthService, session: SessionStore, now: @escaping () -> Date) {
-        self.auth = auth
+    init(session: URLSession = .shared, tokenStore: TokenStore) {   // key 17
         self.session = session
-        self.now = now
-        state = session.token == nil ? .idle : .loggedIn
-    }
-
-    var canSubmit: Bool {
-        if case .lockedOut(let until) = state, now() < until { return false }
-        return state != .submitting && !email.isEmpty && !password.isEmpty
+        self.tokenStore = tokenStore
+        email = UserDefaults.standard.string(forKey: "email") ?? ""   // key 3: never the password
+        token = tokenStore.token()
+        isLoggedIn = token != nil
     }
 
     func login() async {
-        guard canSubmit else { return }                    // no double submit
-        state = .submitting
-        let email = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isSubmitting else { return }                   // key 11: one request per tap burst
+        isSubmitting = true
+        defer { isSubmitting = false }
+        errorMessage = nil                                    // key 14
+        var request = URLRequest(url: URL(string: "https://api.example.com/v1/login")!)   // key 5
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["email": email, "password": password])  // key 6
+        password = ""                                         // key 10
+
         do {
-            switch try await auth.login(email: email, password: password) {
-            case .success(let token):
-                try session.start(token: token, remember: rememberMe)
-                password = ""
-                state = .loggedIn
-            case .invalidCredentials:
-                state = .failed("Email or password is incorrect.")
-            case .rateLimited(let seconds):
-                state = .lockedOut(until: now().addingTimeInterval(TimeInterval(seconds)))
-            case .failed:
-                state = .failed("Couldn't sign in. Please try again.")
+            let (data, response) = try await session.data(for: request)
+            switch (response as? HTTPURLResponse)?.statusCode {
+            case 200:
+                let token = try JSONDecoder().decode(LoginResponse.self, from: data).token  // key 1
+                try remember(token)
+                self.token = token
+                isLoggedIn = true
+            case 401, 404:
+                errorMessage = "Email or password is incorrect."                // key 9
+            default:
+                errorMessage = "Couldn't sign in. Please try again."
             }
         } catch {
-            state = .failed("Couldn't reach the server. Check your connection.")
+            errorMessage = "Couldn't sign in. Please try again."               // key 13
         }
     }
 
+    func avatarRequest() -> URLRequest {                      // key 7
+        var request = URLRequest(url: URL(string: "https://api.example.com/v1/me/avatar")!)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+
     func logout() {
-        session.end()
-        password = ""
-        state = .idle
+        tokenStore.remove()                                   // key 12
+        for key in ["authToken", "rememberMe", "email", "password"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        token = nil
+        isLoggedIn = false
+    }
+
+    private func remember(_ token: String) throws {
+        if rememberMe {
+            try tokenStore.set(token)                         // key 3, 4: only the token
+            UserDefaults.standard.set(email, forKey: "email")
+        } else {
+            tokenStore.remove()                               // key 15: unticking forgets
+            UserDefaults.standard.removeObject(forKey: "email")
+        }
     }
 }
 ```
 
-The `NSAllowsArbitraryLoads` entry is deleted from `Info.plist`.
-
-Run with a fake `HTTPClient` that answers 404, 401, 429 (`Retry-After: 60`), then 200, an
-in-memory `KeychainStoreType`, and a clock the test moves by hand (real output):
-
-```text
-unknown email -> failed("Email or password is incorrect.")
-wrong password -> failed("Email or password is incorrect.")
-rate limited -> lockedOut(until: 1970-01-01 00:01:00 +0000) | canSubmit: false
-61 s later canSubmit: true
-success -> loggedIn | password cleared: true
-requests sent: 4
-last request: POST https://api.example.com/v1/login
-body: {"password":"p@ss+w0rd&x","email":"Ana+Bank@Example.com"}
-keychain: ["session-token": "t-123"]
-authorized header: Bearer t-123
-after logout -> token: nil | keychain: [:] | idle
-```
-
-The success case was two `login()` calls fired at once — a double tap. Four replies, four
-requests: the second tap sent nothing.
-
 Why each piece:
 
-- **`KeychainStoreType`** — the view model never sees `SecItem…`, and tests swap in an in-memory
-  store. `SecItemUpdate` then `SecItemAdd` means saving twice updates instead of failing with
-  `errSecDuplicateItem`.
-- **`AfterFirstUnlockThisDeviceOnly`** — a token refresh can run in the background while the phone
-  is locked. If nothing in the app touches the token in the background, choose
-  `WhenUnlockedThisDeviceOnly`: a stolen locked phone then can't read it at all. `ThisDeviceOnly`
-  either way, because a session should never follow a backup onto another device.
-- **Only the token is remembered** — the password is never written anywhere and is cleared from
-  memory after use. Without "remember me" the token lives in memory and is gone on relaunch.
-- **HTTPS enforced at the seam, credentials in a JSON body** — no clear-text, nothing in a URL, and
-  `+` survives.
-- **One message for 401 and 404** — the screen can no longer tell an attacker which emails exist.
-- **`lockedOut(until:)`** — the server decides the limit; the app shows it and disables the button.
-  The injected `now` is how the test skipped 61 seconds.
-- **`submitting` blocks a second request**, and every failure shows a message.
-- **`@MainActor`** — all state the UI reads changes on main.
-- **`logout()` clears memory and keychain** — `authorized(_:)` adds nothing after logout.
+- **"Remember me" now means "stay signed in".** The original filled in the email *and* password.
+  The fix keeps the token, and still pre-fills the email — an email isn't a secret. The password
+  is never written anywhere.
+- **`TokenStore` is the one new seam.** The view model never sees `SecItem…`, and tests pass a
+  dictionary. The `URLSession` was already a dependency; it's now passed in, with `.shared` as the
+  default.
+- **`isSubmitting` with `defer`.** The flag is set before the first `await`, so a second tap on the
+  main actor sees it and returns; `defer` resets it on every path out.
+
+**Said out loud, not coded:** the keychain store is about ten lines — a generic-password query
+(`kSecClass`, service, account), `SecItemDelete` then `SecItemAdd` with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` (delete first, or a second save fails with
+`errSecDuplicateItem`), and `SecItemCopyMatching` to read; honour `429` and `Retry-After`; revoke
+the token on the server at logout; check the token's expiry before trusting `isLoggedIn`;
+`AfterFirstUnlock` if a background refresh needs the token; `Logger` with `privacy: .private` for
+other personal data.
 :::
 
 ::: Now write the tests
@@ -419,182 +295,155 @@ Why each piece:
 
 **What I'd test, and why**
 
-1. **A 401 and a 404 show the same message** — the reported leak: the screen must not tell anyone
-   which emails have an account.
-2. **A 429 locks the button until `Retry-After` has passed** — checked at 59 seconds (still
-   locked) and 61 seconds (open again).
-3. **A double tap sends one request** — two `login()` calls at once, one request on the wire.
-4. **"Remember me" stores only the token, and the password is cleared** — and without "remember
-   me" nothing is written at all.
-5. **The request is a `POST` with a JSON body over HTTPS, with nothing in the URL** — the password
-   must never appear in a URL, where proxies and logs keep it.
-6. **Logout clears memory and the keychain** — and requests stop getting an `Authorization`
-   header.
+1. **A 401 and a 404 show the same message** — the leak the review led with: the screen must not
+   tell anyone which emails have an account.
+2. **A double tap sends one request** — two `login()` calls at once, one request on the wire.
+3. **"Remember me" stores only the token** — the token lands in the store, the password field is
+   cleared, and nothing is written to `UserDefaults` under `password` or `authToken`.
+4. **The credentials go in a JSON `POST` body, not the URL** — the URL is exactly the HTTPS
+   endpoint with no query, and the body decodes to the email and password, `+` and `&` intact.
+5. **Logout forgets the session** — the store is empty, the remembered email is gone, and the
+   avatar request no longer carries an `Authorization` header.
 
-I wouldn't unit-test the real `KeychainStore`. It is a thin wrapper over Apple's `SecItem` calls,
-and the real keychain needs a signed app on a device or simulator. I'd cover it with one test in
-the app target, or check it by hand, as here. The `https` `precondition` isn't tested either: a
-failed precondition stops the whole test run, so there is nothing to assert after it.
+I wouldn't unit-test the real keychain store. It is a thin wrapper over Apple's `SecItem` calls,
+and the real keychain needs a signed app. One test in the app target, or a check by hand, covers it.
 
-**The seam.** Three of them, all through `init`: `HTTPClient` (a *fake* server that replays canned
-replies and records requests), `KeychainStoreType` (an in-memory dictionary instead of the real
-keychain), and `now` (a clock the test moves by hand, so "61 seconds later" takes no time at all).
+**The seam.** `TokenStore` gets an in-memory fake. For the network I don't add a protocol: the test
+gives the view model a `URLSession` whose configuration routes every request to a `URLProtocol`
+subclass — a fake server inside URLSession that answers with canned status codes and records each
+request. The suite is `.serialized` because that fake keeps one shared log.
 
 ```swift
-import Testing
 import Foundation
 import Synchronization
+import Testing
 
-/// A fake server: plays back canned replies in order and records every request.
-actor FakeHTTPClient: HTTPClient {
-    struct Reply: Sendable {
-        var status: Int
-        var body = ""
-        var headers: [String: String] = [:]
+/// A fake server inside URLSession: answers with canned status codes and records each request.
+final class StubServer: URLProtocol {
+    struct Log { var statuses: [Int] = []; var requests: [URLRequest] = []; var bodies: [Data] = [] }
+    static let log = Mutex(Log())
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        // Inside URLProtocol the body arrives as a stream, not as httpBody.
+        let body = request.httpBodyStream.map { stream in
+            stream.open(); defer { stream.close() }
+            var data = Data(), buffer = [UInt8](repeating: 0, count: 1024)
+            while case let n = stream.read(&buffer, maxLength: buffer.count), n > 0 { data.append(buffer, count: n) }
+            return data
+        } ?? Data()
+        let status = Self.log.withLock { log in
+            log.requests.append(request); log.bodies.append(body)
+            return log.statuses.isEmpty ? 500 : log.statuses.removeFirst()
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"token":"t-123"}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
     }
 
-    private var replies: [Reply]
-    private(set) var requests: [URLRequest] = []
-
-    init(_ replies: Reply...) { self.replies = replies }
-
-    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        requests.append(request)
-        guard !replies.isEmpty else { throw URLError(.notConnectedToInternet) }
-        let reply = replies.removeFirst()
-        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status,
-                                       httpVersion: nil, headerFields: reply.headers)!
-        return (Data(reply.body.utf8), response)
-    }
+    override func stopLoading() {}
 }
 
-/// The real keychain needs a signed app on a device or simulator, and it is Apple's code,
-/// not ours. Behind KeychainStoreType, a dictionary stands in for it.
-final class InMemoryKeychain: KeychainStoreType {
-    private let items = Mutex<[String: Data]>([:])
-
-    var contents: [String: Data] { items.withLock { $0 } }
-
-    func set(_ data: Data, for account: String) throws { items.withLock { $0[account] = data } }
-    func data(for account: String) throws -> Data? { items.withLock { $0[account] } }
-    func remove(_ account: String) throws { items.withLock { _ = $0.removeValue(forKey: account) } }
-}
-
-/// A clock the test moves by hand.
-final class TestClock {
-    var now = Date(timeIntervalSince1970: 0)
+/// The real keychain is Apple's code and needs a signed app; a dictionary stands in for it.
+final class InMemoryTokenStore: TokenStore {
+    var stored: String?
+    func token() -> String? { stored }
+    func set(_ token: String) throws { stored = token }
+    func remove() { stored = nil }
 }
 
 @MainActor
+@Suite(.serialized)   // one StubServer log, shared
 struct LoginViewModelTests {
-    let keychain = InMemoryKeychain()
-    let clock = TestClock()
+    let store = InMemoryTokenStore()
 
-    func makeViewModel(_ server: FakeHTTPClient) -> (LoginViewModel, SessionStore) {
-        let session = SessionStore(keychain: keychain)
-        let auth = AuthService(baseURL: URL(string: "https://api.example.com")!, http: server)
-        let viewModel = LoginViewModel(auth: auth, session: session, now: { [clock] in clock.now })
+    func makeViewModel(answering statuses: Int...) -> LoginViewModel {
+        StubServer.log.withLock { $0 = StubServer.Log(statuses: statuses) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubServer.self]
+        let viewModel = LoginViewModel(session: URLSession(configuration: configuration), tokenStore: store)
         viewModel.email = "ana@example.com"
         viewModel.password = "p@ss+w0rd&x"
-        return (viewModel, session)
+        return viewModel
     }
 
-    @Test func unknownEmailAndWrongPasswordLookTheSame() async {
-        let server = FakeHTTPClient(.init(status: 404), .init(status: 401))
-        let (viewModel, _) = makeViewModel(server)
+    @Test
+    func unknownEmailAndWrongPasswordLookTheSame() async {
+        let viewModel = makeViewModel(answering: 404, 401)
 
         await viewModel.login()
-        let unknownEmail = viewModel.state
+        let unknownEmail = viewModel.errorMessage
+        viewModel.password = "another try"
         await viewModel.login()
-        let wrongPassword = viewModel.state
 
-        #expect(unknownEmail == .failed("Email or password is incorrect."))
-        #expect(wrongPassword == unknownEmail)
+        #expect(unknownEmail == "Email or password is incorrect.")
+        #expect(viewModel.errorMessage == unknownEmail)
     }
 
-    @Test func tooManyAttemptsLocksOutUntilRetryAfterPasses() async {
-        let server = FakeHTTPClient(.init(status: 429, headers: ["Retry-After": "60"]))
-        let (viewModel, _) = makeViewModel(server)
-
-        await viewModel.login()
-
-        #expect(viewModel.state == .lockedOut(until: Date(timeIntervalSince1970: 60)))
-        #expect(!viewModel.canSubmit)
-        clock.now = Date(timeIntervalSince1970: 59)
-        #expect(!viewModel.canSubmit)
-        clock.now = Date(timeIntervalSince1970: 61)
-        #expect(viewModel.canSubmit)
-    }
-
-    @Test func doubleTapSendsOneRequest() async {
-        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
-        let (viewModel, _) = makeViewModel(server)
+    @Test
+    func doubleTapSendsOneRequest() async {
+        let viewModel = makeViewModel(answering: 200, 200)
 
         async let firstTap: Void = viewModel.login()
         async let secondTap: Void = viewModel.login()
         _ = await (firstTap, secondTap)
 
-        #expect(await server.requests.count == 1)
-        #expect(viewModel.state == .loggedIn)
+        #expect(StubServer.log.withLock { $0.requests.count } == 1)
+        #expect(viewModel.isLoggedIn)
     }
 
-    @Test func rememberMeStoresOnlyTheTokenAndClearsThePassword() async {
-        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
-        let (viewModel, session) = makeViewModel(server)
+    @Test
+    func rememberMeStoresOnlyTheToken() async {
+        let viewModel = makeViewModel(answering: 200)
         viewModel.rememberMe = true
 
         await viewModel.login()
 
-        #expect(viewModel.state == .loggedIn)
+        #expect(store.stored == "t-123")
         #expect(viewModel.password.isEmpty)
-        #expect(session.token == "t-123")
-        #expect(keychain.contents == ["session-token": Data("t-123".utf8)])
+        #expect(UserDefaults.standard.string(forKey: "password") == nil)
+        #expect(UserDefaults.standard.string(forKey: "authToken") == nil)
     }
 
-    @Test func withoutRememberMeTheTokenStaysInMemory() async {
-        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
-        let (viewModel, session) = makeViewModel(server)
+    @Test
+    func credentialsGoInAJSONPostBodyNotTheURL() async throws {
+        let viewModel = makeViewModel(answering: 401)
 
         await viewModel.login()
 
-        #expect(session.token == "t-123")
-        #expect(keychain.contents.isEmpty)
-    }
-
-    @Test func credentialsGoInAJSONPostBodyOverHTTPS() async throws {
-        let server = FakeHTTPClient(.init(status: 401))
-        let (viewModel, _) = makeViewModel(server)
-
-        await viewModel.login()
-
-        let request = try #require(await server.requests.first)
-        let url = try #require(request.url)
-        #expect(url.absoluteString == "https://api.example.com/v1/login")
-        #expect(url.query == nil)
+        let (request, body) = try #require(StubServer.log.withLock { log in
+            log.requests.first.map { ($0, log.bodies[0]) }
+        })
+        #expect(request.url?.absoluteString == "https://api.example.com/v1/login")
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
-        let body = try JSONDecoder().decode([String: String].self, from: try #require(request.httpBody))
-        #expect(body == ["email": "ana@example.com", "password": "p@ss+w0rd&x"])
+        let sent = try JSONDecoder().decode([String: String].self, from: body)
+        #expect(sent == ["email": "ana@example.com", "password": "p@ss+w0rd&x"])
     }
 
-    @Test func logoutClearsMemoryAndKeychain() async {
-        let server = FakeHTTPClient(.init(status: 200, body: #"{"token":"t-123"}"#))
-        let (viewModel, session) = makeViewModel(server)
+    @Test
+    func logoutForgetsTheSession() async {
+        let viewModel = makeViewModel(answering: 200)
         viewModel.rememberMe = true
         await viewModel.login()
 
         viewModel.logout()
 
-        #expect(viewModel.state == .idle)
-        #expect(session.token == nil)
-        #expect(keychain.contents.isEmpty)
-        let request = session.authorized(URLRequest(url: URL(string: "https://api.example.com/me")!))
-        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(!viewModel.isLoggedIn)
+        #expect(store.stored == nil)
+        #expect(UserDefaults.standard.string(forKey: "email") == nil)
+        #expect(viewModel.avatarRequest().value(forHTTPHeaderField: "Authorization") == nil)
     }
 }
 ```
 
-Ran with Swift 6.4: 7 tests, all passed.
+One thing that trips people up: inside a `URLProtocol`, the request's body arrives as
+`httpBodyStream`, not `httpBody`, so the fake reads the stream.
+
+Ran with Swift 6.4: 5 tests, all passed.
 :::
 
 ::: What I'd ask next

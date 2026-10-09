@@ -10,9 +10,7 @@ sources:
 
 *Shape: review, then extend · Reported: Meta — current stories `[A,B,C,D]`, refresh fetches
 `[D,E,F]`, the screen must show `[D,E,F,A,B,C]`, then "how would you improve the efficiency?" ·
-Compiled and run with Swift 6.4: the buggy snippet compiles cleanly in both Swift 5 and Swift 6
-mode (and misbehaves — real output below); the fix compiles in Swift 6 mode with zero warnings and
-was run on the sample, edge cases and a 20,000-story timing*
+Verified: snippet's bugs reproduced and the fix tested, Swift 6.4*
 
 > "The feed shows stories A, B, C, D. The user pulls to refresh and the server returns D, E, F. We
 > want D, E, F, A, B, C — new on top, no duplicates, order kept. Here's what a candidate wrote.
@@ -72,32 +70,43 @@ protocol FeedAPI {
 :::
 
 ::: The key — what I expect a senior to find
-1. **Data race on `stories`.** `fetchPage`'s completion runs on whatever queue the API picks —
+1. **`insert(contentsOf:at: offset)` can crash.** `offset` is read when the request starts. If the
+   list is shorter when the page arrives, the index is past the end and the app traps. A refresh
+   that collapses duplicates is enough: `[A,B,A,B]`, load-more at offset 4, refresh shrinks it to
+   `[A,B]`, page arrives — *Array replace: subrange extends past the end*. Append, never insert at
+   a remembered index.
+2. **Data race on `stories`.** `fetchPage`'s completion runs on whatever queue the API picks —
    usually a background one — and mutates `stories` while the main thread reads it for the table.
-   Swift 6 mode compiles this without a word (verified): nothing says the class or the closure
-   belongs to an actor, so the compiler can't see two threads. Mark the view model `@MainActor`.
-2. **Load-more in flight during a refresh puts the page in the middle.** `offset` is 4 when the
-   request starts; the refresh grows the list to 6; the page is then inserted at index 4. Real
-   output: `["D", "E", "F", "A", "X", "Y", "B", "C"]`. Cancel the load-more on refresh, and page by
-   a cursor (the last story's id), not by an index.
-3. **An edited story appears twice.** `contains(story)` compares the *whole* struct. The fresh D has
-   99 likes, the old D has 0, so they're "different" and both are kept. Real output:
-   `["D99", "E0", "F0", "A0", "B0", "C0", "D0"]`. Deduplicate by `id`.
-4. **The `Set` attempt loses order.** A `Set` has no order, and Swift seeds its hashing randomly per
-   process, so the order even changes between launches. Three runs of the same input printed
-   `["A", "E", "F", "B", "C", "D"]`, `["F", "C", "E", "B", "A", "D"]`, `["A", "B", "D", "E", "C", "F"]`.
-   Delete the comment too — dead code in a PR invites someone to "simplify" back to it.
-5. **`isLoadingMore` can get stuck.** The callback has no error case, so a failed page either never
-   calls back or can't say it failed — and load-more is then dead until the screen is rebuilt.
-6. **Duplicates inside `fetched` survive.** `merged = fetched` keeps them as-is. Servers do send
-   overlapping pages.
-7. **O(n × m) merge.** `contains` scans the merged array for every old story. With 20,000 stories on
-   screen and 50 fresh ones that took 0.93 s on my Mac — a visible hang on main.
-8. **`Hashable` on the whole struct mixes up identity and equality.** Identity is "which story";
-   equality is "same content". The feed needs `Identifiable`; `Equatable` is for "did it change?".
-9. **Strong `self` in the completion** — the view model lives until the request ends.
+   Swift 6 mode compiles this without a word: nothing says the class or the closure belongs to an
+   actor, so the compiler can't see two threads. Mark the view model `@MainActor` and hop back to
+   it in the callback.
+3. **Load-more in flight during a refresh puts the page in the middle.** `offset` is 4 when the
+   request starts; the refresh grows the list to 6; the page then lands at index 4:
+   `["D", "E", "F", "A", "X", "Y", "B", "C"]`. A refresh has to make an in-flight page stale.
+4. **An edited story appears twice.** `contains(story)` compares the *whole* struct. The fresh D has
+   99 likes, the old D has 0, so both are kept: `["D99", "E0", "F0", "A0", "B0", "C0", "D0"]`.
+   Deduplicate by `id`.
+5. **Load-more never deduplicates.** Paging by offset after new stories landed on top means the
+   next page starts with stories already on screen, and they're added again.
+6. **The `Set` attempt loses order.** A `Set` has no order, and Swift seeds its hashing randomly per
+   process, so the order even changes between launches. Delete the comment too — dead code in a PR
+   invites someone to "simplify" back to it.
+7. **`isLoadingMore` can get stuck, and errors can't be reported.** The callback has no error case,
+   so a failed page either never calls back or can't say it failed — and load-more is dead until
+   the screen is rebuilt. A refresh doesn't reset it either.
+8. **Duplicates inside `fetched` survive.** `merged = fetched` keeps them as they are. Servers do
+   send overlapping pages.
+9. **Nothing tells the view.** `stories` changes with no callback, no observation, no
+   notification. The table only finds out if something else makes it reload.
 10. **Nothing is testable.** `didRefresh` mixes the merge rule with the stored state. Pull the merge
     into a pure function and test it with the examples in the prompt.
+11. **O(n²) merge.** `contains` scans `merged`, which grows to n + m, once for every old story —
+    about n²/2 comparisons. With 20,000 stories on screen took about 0.7 s on my Mac (`-O`): a
+    visible hang on the main thread.
+12. **`Hashable` on the whole struct mixes up identity and equality.** Identity is "which story";
+    equality is "same content". The feed needs `Identifiable`; `Equatable` is for "did it change?".
+13. **Strong `self` in the completion.** Not a leak — the closure isn't stored by the view model —
+    but it keeps the view model alive until the request ends. `[weak self]` is the tidier default.
 :::
 
 ::: The idea behind it
@@ -109,8 +118,7 @@ must match on identity, then keep the newest content.
 The second idea is cost. Checking "have I seen this already?" by scanning an array means looking at
 every item, every time — *quadratic* work: double the stories, four times the time. A `Set` answers
 the same question in roughly one step, because it files each value by its hash, a number computed
-from it. So build a set of ids you've already placed, and the whole merge becomes one pass over each
-list.
+from it. So build a set of ids you've already placed, and the whole merge becomes one pass.
 
 A `Set` alone can't be the answer, though. It forgets order. Keep the array for order and the set
 for the "seen it?" question — two tools, each doing the one thing it's good at.
@@ -119,119 +127,105 @@ Think of a guest list at a door. You don't re-read the whole list for every arri
 on a clipboard, and you seat people in the order they walk in.
 :::
 
-::: The version I'd ship
+::: The fix
+Same class, same methods, same completion handler. The callback gains a `Result`, and a counter
+marks which list a page belongs to.
+
 ```swift
 import Foundation
 
-struct Story: Identifiable, Equatable, Sendable {
+struct Story: Identifiable, Equatable {                 // key 12: identity is the id
     let id: String
     var title: String
     var likes: Int
 }
 
-enum FeedMerge {
-    /// `top` first, then the items of `bottom` whose id isn't already shown.
-    /// Order inside each list is kept; on a clash the `top` copy wins. O(n + m).
-    static func merging<Item: Identifiable>(top: [Item], bottom: [Item]) -> [Item] {
-        var seen = Set<Item.ID>(minimumCapacity: top.count + bottom.count)
-        var result: [Item] = []
-        result.reserveCapacity(top.count + bottom.count)
-        for item in top where seen.insert(item.id).inserted { result.append(item) }
-        for item in bottom where seen.insert(item.id).inserted { result.append(item) }
-        return result
-    }
-}
-
-protocol FeedAPI: Sendable {
-    func latest() async throws -> [Story]
-    func page(after cursor: Story.ID) async throws -> [Story]
-}
-
-@MainActor
+@MainActor                                               // key 2
 final class FeedViewModel {
     private(set) var stories: [Story] = []
+    private var isLoadingMore = false
+    private var generation = 0                           // key 3: which list a page belongs to
     private let api: FeedAPI
-    private var loadMoreTask: Task<Void, Never>?
 
     init(api: FeedAPI) { self.api = api }
 
-    func refresh() async {
-        loadMoreTask?.cancel()          // its cursor belongs to the list we're replacing
-        loadMoreTask = nil
-        guard let fresh = try? await api.latest() else { return }
-        stories = FeedMerge.merging(top: fresh, bottom: stories)
+    func didRefresh(with fetched: [Story]) {
+        generation += 1                                  // key 3: a page in flight is now stale
+        isLoadingMore = false
+        stories = Self.merging(top: fetched, bottom: stories)
     }
 
     func loadMore() {
-        guard loadMoreTask == nil, let cursor = stories.last?.id else { return }
-        loadMoreTask = Task {
-            let page = try? await api.page(after: cursor)
-            guard !Task.isCancelled else { return }   // a refresh owns the list now
-            loadMoreTask = nil
-            if let page { stories = FeedMerge.merging(top: stories, bottom: page) }
+        guard !isLoadingMore else { return }
+        isLoadingMore = true
+        let offset = stories.count
+        let generation = generation
+        api.fetchPage(after: offset) { [weak self] result in   // key 13
+            Task { @MainActor in                         // key 2: back on main
+                guard let self, generation == self.generation else { return }
+                self.isLoadingMore = false               // key 7: reset on failure too
+                if case .success(let page) = result {    // key 1, 5: append and dedupe, no insert
+                    self.stories = Self.merging(top: self.stories, bottom: page)
+                }
+            }
         }
     }
+
+    /// `top` first, then the stories of `bottom` not already there. On a clash `top` wins.
+    static func merging(top: [Story], bottom: [Story]) -> [Story] {   // key 10
+        var seen = Set<Story.ID>()                       // key 4, 8, 11: one hash lookup per story
+        return (top + bottom).filter { seen.insert($0.id).inserted }
+    }
+}
+
+protocol FeedAPI {
+    func fetchPage(after offset: Int,
+                   completion: @escaping @Sendable (Result<[Story], Error>) -> Void)   // key 7
 }
 ```
 
-What the harness printed (a number in brackets is the like count of an edited story):
-
-```text
-sample:       D,E,F,A,B,C
-edited D:     D(99),E,F,A,B,C
-dup in fresh: E,D,A,B,C
-nothing new:  A,B,C,D
-first load:   A,B,C,D
-race:         D(99),E,F
-load more:    D(99),E,F,X,Y
-quadratic:    20050 items, 0.933690041 seconds
-set of ids:   20050 items, 0.004308208 seconds
-```
-
-`race` started a slow load-more, then refreshed: the stale page was dropped instead of landing in
-the middle. The next load-more appended normally. The timing is 20,000 stories on screen plus 51
-fetched, built with `-O` on my Mac — about 200 times faster, and the gap grows with the list.
-
 Why each piece:
 
-- **`Set<Item.ID>` of seen ids** — "already placed?" is one hash lookup, so the merge is one pass
-  over each list: O(n + m) time.
-- **`seen.insert(_:).inserted`** — inserts and answers "was it new?" in one call. Used on both lists,
-  so duplicates inside the fresh page and inside the old list are dropped too.
-- **`top` wins on a clash** — the fresh D replaces the old D in place at the top, with its new like
-  count. For load-more I pass the current list as `top`, so a story already on screen is never
-  moved down.
-- **Generic over `Identifiable`** — the rule isn't about stories. The same function merges comments
-  or messages, and it's a pure function, so the examples in the prompt become unit tests.
-- **`@MainActor` and a stored `Task`** — every write to `stories` is on main, refresh cancels the
-  load-more, and paging by cursor means a refresh can't shift the page's position.
+- **`seen.insert(_:).inserted`** — inserts and answers "was it new?" in one call, so one pass over
+  both lists drops every duplicate, the old ones and the ones inside the page.
+- **`top` wins on a clash** — the fresh D replaces the old D at the top, with 99 likes. For
+  load-more the current list is `top`, so a story already on screen never moves down.
+- **`generation`** — a refresh bumps it; a page that comes back with an older number is dropped.
+  That's the smallest change that keeps the completion-handler API. A cursor is better (below).
+- **Merged, not inserted** — load-more goes through the same merge, so there is no index to go
+  stale and nothing to crash.
+
+The merge with the prompt's sample, an edited story and 20,000 stories gave the right lists; the
+set of ids took the 20,000-story merge from about 0.7 s to 3 ms.
+
+**Said out loud, not coded:** page by a cursor (the last story's id) instead of an offset; make the
+view model `@Observable` (or give it a change callback) so the view hears about changes; a generic
+merge over `Identifiable` if comments or messages need it too; an `async` API with a stored `Task`
+that refresh cancels.
 :::
 
 ::: Now write the tests
 > "Good. Now show me the tests — for the merge, and for the race you found."
 
-What I'd test, and why:
+**What I'd test, and why**
 
-1. **The prompt's example.** `[A,B,C,D]` plus `[D,E,F]` gives `[D,E,F,A,B,C]`. Because the merge
-   is a pure function — same input, same output, no state — the interviewer's example becomes a
-   test as written.
-2. **An edited story appears once, with its new content.** The fresh D has 99 likes; the result
-   has one D, on top, with 99. This is the duplicate bug from the review.
-3. **Duplicates inside the fresh page are dropped.** Servers send overlapping pages.
-4. **Empty inputs.** First load (nothing on screen) and "nothing new" (empty page) both leave the
-   other list as it was.
-5. **A refresh drops an in-flight load-more.** The old page arrives after the refresh and must not
+1. **The prompt's example.** `[A,B,C,D]` plus `[D,E,F]` gives `[D,E,F,A,B,C]`. The merge is a pure
+   function — same input, same output, no state — so the interviewer's example becomes a test as
+   written.
+2. **An edited story appears once, with its new content.** The fresh D has 99 likes; the result has
+   one D, on top, with 99. That's the duplicate bug from the review.
+3. **A refresh drops an in-flight load-more.** The old page arrives after the refresh and must not
    land. That's the page-in-the-middle bug.
-6. **Load-more still works after that refresh.** Cancelling must not leave load-more stuck, the
-   way `isLoadingMore` could in the original.
+4. **Load-more after a refresh still works, without duplicates.** Regression for the stuck
+   `isLoadingMore`: the next request goes out, and an overlapping offset page only adds what's new.
 
 I wouldn't time the merge in a unit test. Timing on a shared CI machine is noisy, so it's a
 benchmark to run by hand, not a pass/fail check.
 
-**The seam.** The merge needs none: it's a pure function. The view model takes its `FeedAPI`
-through `init`, so the tests pass a *fake* — a small stand-in whose `page(after:)` records the
-cursor and holds the request open until the test hands over the page. That lets the test refresh
-*while* a page is in flight, every time, with no sleeps.
+**The seam.** The merge needs none: it's a pure function. The view model already takes its
+`FeedAPI` through `init`, so the tests pass a *fake* — a small stand-in that records each offset
+and holds the completion until the test answers. That lets the test refresh *while* a page is in
+flight, every time, with no sleeps.
 
 ```swift
 import Testing
@@ -240,141 +234,94 @@ func story(_ id: String, likes: Int = 0) -> Story {
     Story(id: id, title: "Story \(id)", likes: likes)
 }
 
-struct FeedMergeTests {
+/// A fake server: records each page request and holds its completion until the test answers.
+final class FakeFeedAPI: FeedAPI {
+    private(set) var offsets: [Int] = []
+    private var completions: [@Sendable (Result<[Story], Error>) -> Void] = []
 
-    @Test
-    func freshStoriesGoOnTopWithoutDuplicates() {
-        // Given A, B, C, D on screen and D, E, F from the server (the prompt's example)
-        let onScreen = ["A", "B", "C", "D"].map { story($0) }
-        let fetched = ["D", "E", "F"].map { story($0) }
-
-        // When they are merged
-        let merged = FeedMerge.merging(top: fetched, bottom: onScreen)
-
-        // Then the screen shows D, E, F, A, B, C
-        #expect(merged.map(\.id) == ["D", "E", "F", "A", "B", "C"])
+    func fetchPage(after offset: Int,
+                   completion: @escaping @Sendable (Result<[Story], Error>) -> Void) {
+        offsets.append(offset)
+        completions.append(completion)
     }
 
-    @Test
-    func anEditedStoryAppearsOnceWithItsNewContent() {
-        // Given D on screen with 0 likes, and the server's D with 99
-        let onScreen = [story("A"), story("D", likes: 0)]
-        let fetched = [story("D", likes: 99)]
-
-        // When they are merged
-        let merged = FeedMerge.merging(top: fetched, bottom: onScreen)
-
-        // Then D shows once, on top, with the new like count
-        #expect(merged == [story("D", likes: 99), story("A")])
-    }
-
-    @Test
-    func duplicatesInsideTheFreshPageAreDropped() {
-        // Given a server page that repeats E
-        let merged = FeedMerge.merging(top: ["E", "D", "E"].map { story($0) },
-                                       bottom: ["A", "D"].map { story($0) })
-
-        // Then each story appears once, first copy kept
-        #expect(merged.map(\.id) == ["E", "D", "A"])
-    }
-
-    @Test
-    func emptyInputs() {
-        let some = ["A", "B"].map { story($0) }
-        #expect(FeedMerge.merging(top: [Story](), bottom: []) == [])
-        #expect(FeedMerge.merging(top: some, bottom: []) == some)   // first load
-        #expect(FeedMerge.merging(top: [], bottom: some) == some)   // nothing new
-    }
+    func answer(_ request: Int, with page: [Story]) { completions[request](.success(page)) }
 }
 
-/// A fake feed server: `latest()` answers at once with whatever the test set;
-/// `page(after:)` records the cursor and waits until the test hands over the page.
+/// Gives the view model's main-actor task a turn, up to a fixed number of times. No clocks.
 @MainActor
-final class ControlledFeedAPI: FeedAPI {
-    var latestStories: [Story] = []
-    private(set) var pageCursors: [String] = []
-    private var pendingPage: CheckedContinuation<[Story], Error>?
-
-    func latest() async throws -> [Story] { latestStories }
-
-    func page(after cursor: Story.ID) async throws -> [Story] {
-        pageCursors.append(cursor)
-        return try await withCheckedThrowingContinuation { pendingPage = $0 }
-    }
-
-    func deliverPage(_ stories: [Story]) {
-        pendingPage?.resume(returning: stories)
-        pendingPage = nil
-    }
-}
-
-/// Gives the view model's task a turn on the main actor, up to a fixed number of times.
-@MainActor
-func settle(until done: () -> Bool = { false }, yields: Int = 100) async {
-    for _ in 0..<yields where !done() { await Task.yield() }
+func waitUntil(maxYields: Int = 100, _ done: () -> Bool) async {
+    for _ in 0..<maxYields where !done() { await Task.yield() }
 }
 
 @MainActor
 struct FeedViewModelTests {
 
     @Test
-    func refreshDropsAnInFlightLoadMore() async {
-        // Given A, B, C, D on screen and a slow load-more waiting for its page
-        let api = ControlledFeedAPI()
-        let viewModel = FeedViewModel(api: api)
-        api.latestStories = ["A", "B", "C", "D"].map { story($0) }
-        await viewModel.refresh()
-        viewModel.loadMore()
-        await settle(until: { !api.pageCursors.isEmpty })
+    func freshStoriesGoOnTopWithoutDuplicates() {
+        let merged = FeedViewModel.merging(top: ["D", "E", "F"].map { story($0) },
+                                           bottom: ["A", "B", "C", "D"].map { story($0) })
 
-        // When the user refreshes, and then the old page arrives
-        api.latestStories = [story("D", likes: 99), story("E"), story("F")]
-        await viewModel.refresh()
-        api.deliverPage([story("X"), story("Y")])
-        await settle()
-
-        // Then the stale page never lands
-        #expect(viewModel.stories.map(\.id) == ["D", "E", "F", "A", "B", "C"])
-        #expect(viewModel.stories.first?.likes == 99)
+        #expect(merged.map(\.id) == ["D", "E", "F", "A", "B", "C"])
     }
 
     @Test
-    func loadMoreAfterARefreshAppends() async {
-        // Given a refresh that replaced an in-flight load-more
-        let api = ControlledFeedAPI()
+    func anEditedStoryAppearsOnceWithItsNewContent() {
+        let merged = FeedViewModel.merging(top: [story("D", likes: 99)],
+                                           bottom: [story("A"), story("D", likes: 0)])
+
+        #expect(merged == [story("D", likes: 99), story("A")])
+    }
+
+    @Test
+    func aRefreshDropsAnInFlightLoadMore() async {
+        // Given A, B, C, D on screen and a page still loading
+        let api = FakeFeedAPI()
         let viewModel = FeedViewModel(api: api)
-        api.latestStories = ["A", "B"].map { story($0) }
-        await viewModel.refresh()
+        viewModel.didRefresh(with: ["A", "B", "C", "D"].map { story($0) })
         viewModel.loadMore()
-        await settle(until: { api.pageCursors.count == 1 })
-        api.latestStories = ["C"].map { story($0) }
-        await viewModel.refresh()
-        api.deliverPage([story("stale")])
-        await settle()
 
-        // When the user scrolls to the bottom again
+        // When a refresh lands first, then the old page arrives
+        viewModel.didRefresh(with: ["D", "E", "F"].map { story($0) })
+        api.answer(0, with: [story("X"), story("Y")])
+        await waitUntil(maxYields: 20) { false }
+
+        // Then the stale page never lands in the middle
+        #expect(viewModel.stories.map(\.id) == ["D", "E", "F", "A", "B", "C"])
+    }
+
+    @Test
+    func loadMoreAfterARefreshAppendsWithoutDuplicates() async {
+        // Given a refresh that dropped an in-flight load-more
+        let api = FakeFeedAPI()
+        let viewModel = FeedViewModel(api: api)
+        viewModel.didRefresh(with: ["A", "B"].map { story($0) })
         viewModel.loadMore()
-        await settle(until: { api.pageCursors.count == 2 })
-        api.deliverPage([story("X"), story("Y")])
-        await settle(until: { viewModel.stories.count == 5 })
+        viewModel.didRefresh(with: [story("C")])
 
-        // Then the page is asked for after the last story on screen (B) and appended at the end
-        #expect(api.pageCursors == ["B", "B"])
-        #expect(viewModel.stories.map(\.id) == ["C", "A", "B", "X", "Y"])
+        // When the user scrolls down again and the offset page overlaps what's shown
+        viewModel.loadMore()
+        api.answer(1, with: [story("B"), story("X")])
+        await waitUntil { viewModel.stories.count == 4 }
+
+        // Then the second request went out, and only the new story was appended
+        #expect(api.offsets == [2, 3])
+        #expect(viewModel.stories.map(\.id) == ["C", "A", "B", "X"])
     }
 }
 ```
 
-`settle` gives the view model's task a few turns on the main actor after the fake answers. It's
-bounded by a count, not a time, so a slow machine can't make it flaky.
+`waitUntil` gives the view model's main-actor task a few turns after the fake answers. It's
+bounded by a count of yields, not a time, so a slow machine can't make it flaky. In the third test
+nothing should change, so it just spends its turns.
 
-Ran with Swift 6.4: 6 tests, all passed.
+Ran with Swift 6.4: 4 tests, all passed.
 :::
 
 ::: What I'd ask next
 - *"How would you improve the efficiency?"* (Meta's follow-up) — Three levels. **The algorithm:**
-  the set of ids above takes it from O(n × m) to O(n + m). **Memory and work:** the fresh page is
-  small, so a set of just the fresh ids (O(m) memory) is enough for a refresh: `fresh +
+  the set of ids takes it from O(n²) to O(n + m). **Memory and work:** the fresh page is small, so
+  a set of just the fresh ids (O(m) memory) is enough for a refresh: `fresh +
   stories.filter { !freshIDs.contains($0.id) }`. **The UI:** don't call `reloadData()` — apply a
   diffable data source snapshot of ids, so only the three new rows animate in and an edited story
   is reconfigured in place. And ask the server for `?since=<newest id>`, so it only sends what's new.
@@ -386,6 +333,7 @@ Ran with Swift 6.4: 6 tests, all passed.
   resync), or the merge will quietly keep stale items.
 - *"Why `Equatable` at all, if you match on `id`?"* — For change detection: the diffable snapshot or
   SwiftUI's `ForEach` uses identity to know which row it is and equality to know whether to redraw it.
-- *"How would you test the race?"* — A fake API whose page call is slower than the refresh call, as
-  the harness does. Assert the page didn't land and that a later load-more still works.
+- *"In SwiftUI, what goes wrong if two rows share an id?"* — `List` and `ForEach` track rows by
+  `id`. Two rows with the same id confuse the diff: rows animate wrongly, state sticks to the wrong
+  row, and SwiftUI logs a warning. That's one more reason the merge must never keep a duplicate id.
 :::

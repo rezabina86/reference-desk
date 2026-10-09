@@ -10,7 +10,7 @@ sources:
 ---
 
 *Shape: what does this print · Reported: closure capture and escaping questions at Revolut and
-Delivery Hero · Compiled and run with Swift 6.2*
+Delivery Hero · Verified: run with Swift 6.4*
 
 > "Line by line — what prints?"
 
@@ -92,6 +92,21 @@ closure holds the address (without keeping the house standing), not what's insid
 
 `defer` runs when the function is on its way out — after the return value has already been worked
 out. Changing a variable in `defer` can't change what was returned.
+:::
+
+::: How to make it unsurprising
+```swift
+let box = Box()
+let snapshot = { [value = box.value] in print("box", value) }
+box.value = 5
+snapshot()                                   // box 0
+```
+
+- **To freeze an object's state, capture the value, not the object.** `[value = box.value]` copies
+  the `Int` when the closure is made; `[box]` only copies the address.
+- **Write the capture list on purpose** whenever a closure outlives the line it's on, so the reader
+  sees what's a snapshot and what's live.
+- **Use `defer` for clean-up only** — closing, unlocking, resetting. Never to change a value you return.
 :::
 
 ::: What I'm really scoring

@@ -11,7 +11,8 @@ sources:
 ---
 
 *Shape: review this PR · Reported: retain-cycle scenarios (Delivery Hero), UIKit code review
-(fintech manager rounds) · UIKit — the fix typechecks against the iOS SDK (iOS 18 target) in Swift 6 mode; behaviour checked by hand*
+(fintech manager rounds) · Verified: the fix builds in Swift 6 mode with no warnings and its
+tests ran on the iOS 18.5 Simulator, Swift 6.4*
 
 > "This is a feed screen a teammate opened a PR for. Users say photos sometimes appear in the wrong
 > rows, and memory grows every time they open and close the feed. Review it — ten minutes."
@@ -74,36 +75,46 @@ final class FeedViewController: UIViewController, UITableViewDataSource {
 - Table cells are reused. What happens if a download finishes after its cell has moved to another row?
 - Who keeps a `Timer` alive, and what does the timer keep alive?
 - Where is the only `invalidate()`, and when does that code run?
-- How much memory does a decoded 12-megapixel photo take?
+- The timer and the app coming back to the foreground can both call `refresh()`. Whose answer lands last?
 :::
 
 ::: The key — what I expect a senior to find
+The two reported bugs come first; the rest is by severity.
+
 1. **Wrong photo in a row (the reported bug).** Cells are reused. A slow download for row 3
    finishes after the cell has been reused for row 40 and writes row 3's image into it. Nothing
-   cancels the old request or checks that the cell still wants that URL.
-2. **No `prepareForReuse`.** The old image stays visible until the new one arrives.
-3. **The timer leaks the screen.** A target-based `Timer` holds its target strongly, and the run
-   loop holds the timer. The controller can never deallocate, so `deinit` — where the only
-   `invalidate()` lives — never runs. Classic circular fix that can't fire.
-4. **The observer leaks it too.** The block captures `self` strongly, and the returned token is
+   cancels the old request or checks that the cell still wants that URL. Keep the load as a task
+   and cancel it on reuse.
+2. **The timer leaks the screen (the reported memory growth).** A target-based `Timer` holds its
+   target strongly, and the run loop holds the timer. So the controller is never freed, and
+   `deinit` — where the only `invalidate()` lives — never runs. The cleanup lives in the one place
+   that can never run. Invalidate when the screen disappears.
+3. **The observer leaks it too.** The block captures `self` strongly, and the returned token is
    thrown away, so it can never be removed. NotificationCenter keeps the block — and the
-   controller — alive for the life of the app.
-5. **Each leaked controller keeps refreshing.** Open and close the feed five times and five timers
-   fire every 30 seconds, each doing network work for an invisible screen. That's the memory growth.
-6. **`refresh` updates UI from an unknown thread.** Nothing says `PhotoAPI` calls back on main.
-7. **`refresh` captures `self` strongly** — milder than 3–4, but it extends the lifetime for every
-   request.
-8. **Images decoded at full size.** A 12-megapixel photo becomes ~48 MB of bitmap to show in a
-   100-point row. Downsample to the display size, in pixels (points × screen scale).
-9. **No caching.** Scrolling back up downloads every image again.
-10. **Errors ignored** — no placeholder, no retry.
-11. **`as!` on dequeue** — acceptable to many teams, but say you know it crashes on a
+   controller — alive for the life of the app. Capture `[weak self]`, keep the token, remove it.
+4. **Each leaked screen keeps refreshing.** Open and close the feed five times and five timers
+   fire every 30 seconds, each doing network work for an invisible screen.
+5. **`refresh` updates the UI from an unknown thread.** Nothing says `PhotoAPI` calls back on
+   main. Hop to main before touching `photos` and the table.
+6. **Overlapping refreshes.** The timer and `didBecomeActive` can both fire close together. Two
+   requests run, and the older reply can land last and overwrite the newer list. Allow one refresh
+   at a time, or drop a reply that isn't the latest.
+7. **`refresh` captures `self` strongly** — milder than 2–3, but every request keeps the screen
+   alive until it answers. Use `[weak self]`.
+8. **No `prepareForReuse`.** The old photo stays visible in the new row until the new one arrives.
+9. **Images decoded at full size, on the main thread.** `UIImage(data:)` doesn't decode yet; the
+   decode happens on main at first draw, which is a scroll hitch. And a 12-megapixel photo becomes
+   ~48 MB of bitmap for a 100-point row. Prepare the image off main, and downsample it to the
+   display size in pixels (points × screen scale).
+10. **The timer fires while off screen.** Start it in `viewWillAppear`, stop it in
+    `viewDidDisappear` — which is also the leak fix.
+11. **No caching.** Scrolling back up downloads every image again.
+12. **Errors ignored** — no placeholder, no retry.
+13. **The cell does networking.** A view shouldn't know about URLs and sessions. Give it an image
+    loader it can be handed — which is also the test seam.
+14. **Singletons** — `URLSession.shared`, `PhotoAPI.shared` — make the screen hard to test.
+15. **`as!` on dequeue** — acceptable to many teams, but say you know it crashes on a
     misconfigured identifier.
-12. **Singletons** — `URLSession.shared`, `PhotoAPI.shared` — nothing here is testable.
-13. **The cell does networking.** A view shouldn't know about URLs and sessions; give it an image
-    or an image-loading dependency.
-14. **Timer fires while off screen** — start it in `viewWillAppear`, stop it in
-    `viewDidDisappear`.
 :::
 
 ::: The idea behind it
@@ -123,84 +134,107 @@ other. A block-based notification observer does the same: NotificationCenter kee
 the block keeps `self`.
 
 The cure has two parts. Hold `self` *weakly* (`[weak self]`) — a reference that doesn't keep the
-object alive. And stop timers and observers when the screen goes away, not in `deinit`.
+object alive. And stop timers and observers when the screen goes away, not in `deinit`. Once
+`invalidate()` runs, the run loop lets go of the timer and the timer lets go of the screen.
 :::
 
 ::: The fix
 ```swift
-final class PhotoCell: UITableViewCell {
-    @IBOutlet private var photoView: UIImageView!
-    private var loadTask: Task<Void, Never>?
+protocol ImageLoading: Sendable {                                    // key 13: the one seam
+    func image(for url: URL) async throws -> UIImage
+}
 
-    override func prepareForReuse() {
+extension URLSession: ImageLoading {
+    func image(for url: URL) async throws -> UIImage {
+        let (data, _) = try await data(from: url)
+        guard let image = await UIImage(data: data)?.byPreparingForDisplay()   // key 9: decode off main
+        else { throw URLError(.cannotDecodeContentData) }
+        return image
+    }
+}
+
+final class PhotoCell: UITableViewCell {
+    @IBOutlet var photoView: UIImageView!
+    var loader: ImageLoading = URLSession.shared                     // tests pass a fake
+    private var loadTask: Task<Void, Never>?                         // key 1
+
+    override func prepareForReuse() {                                // key 8
         super.prepareForReuse()
         loadTask?.cancel()
         photoView.image = nil
     }
 
-    // The caller passes the size the image will be shown at (the row height and the
-    // image view's fixed width). Don't read photoView.bounds here: cellForRow runs
-    // before layout, so bounds are usually .zero.
-    func configure(with url: URL, loader: ImageLoading, displaySize: CGSize) {
-        loadTask?.cancel()
-        let scale = traitCollection.displayScale
-        let pixels = CGSize(width: displaySize.width * scale,
-                            height: displaySize.height * scale)
-        loadTask = Task { [weak self] in
-            guard let image = try? await loader.image(for: url, fittingPixels: pixels),
-                  !Task.isCancelled else { return }
+    func configure(with url: URL) {
+        loadTask?.cancel()                                           // key 1
+        loadTask = Task { [weak self, loader] in
+            guard let image = try? await loader.image(for: url),
+                  !Task.isCancelled else { return }                  // key 1: reused, so cancelled: drop it
             self?.photoView.image = image
         }
     }
 }
 
-protocol ImageLoading: Sendable {
-    // Cached in an NSCache, downsampled off the main thread
-    // (CGImageSource with kCGImageSourceThumbnailMaxPixelSize, or
-    // byPreparingThumbnail(ofSize:)). Both take pixels, not points.
-    @MainActor func image(for url: URL, fittingPixels size: CGSize) async throws -> UIImage
+final class FeedViewController: UIViewController, UITableViewDataSource {
+    @IBOutlet var tableView: UITableView!
+    private var timer: Timer?
+    private var observer: NSObjectProtocol?                          // key 3: keep the token
+    private var photos: [URL] = []
+
+    override func viewWillAppear(_ animated: Bool) {                 // key 2, 10: start on appear...
+        super.viewWillAppear(animated)
+        stopRefreshing()                                             // a cancelled swipe-back appears twice
+        timer = Timer.scheduledTimer(timeInterval: 30, target: self,
+                                     selector: #selector(refresh),
+                                     userInfo: nil, repeats: true)
+        observer = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in            // key 3
+            MainActor.assumeIsolated { self?.refresh() }             // queue: .main, so we are on main
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {               // ...stop on disappear, not in deinit
+        super.viewDidDisappear(animated)
+        stopRefreshing()
+    }
+
+    private func stopRefreshing() {
+        timer?.invalidate()                                          // key 2
+        timer = nil
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+    }
+
+    @objc func refresh() {
+        PhotoAPI.shared.latest { [weak self] urls in                 // key 7
+            DispatchQueue.main.async {                               // key 5
+                self?.photos = urls
+                self?.tableView.reloadData()
+            }
+        }
+    }
+
+    // numberOfRowsInSection and cellForRowAt are unchanged; deinit is gone.
 }
 ```
 
-```swift
-private var timer: Timer?
-private var observer: NSObjectProtocol?
+**Said out loud, not coded:** downsampling to points × screen scale (`CGImageSource` thumbnails)
+and an `NSCache` inside the loader; one refresh at a time (key 6); `PhotoAPI` injected instead of
+`.shared`; placeholder and retry on error.
 
-override func viewWillAppear(_ animated: Bool) {
-    super.viewWillAppear(animated)
-    stopRefreshing()   // a cancelled swipe-back calls viewWillAppear again without viewDidDisappear
-    // Both closures are nonisolated in Swift 6, but both run on main: the timer is on the
-    // main run loop and the observer uses queue: .main. assumeIsolated states that (and traps if wrong).
-    timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-        MainActor.assumeIsolated { self?.refresh() }
-    }
-    observer = NotificationCenter.default.addObserver(
-        forName: UIApplication.didBecomeActiveNotification,
-        object: nil, queue: .main) { [weak self] _ in
-        MainActor.assumeIsolated { self?.refresh() }
-    }
-}
+Why each piece:
 
-override func viewDidDisappear(_ animated: Bool) {
-    super.viewDidDisappear(animated)
-    stopRefreshing()
-}
-
-private func stopRefreshing() {
-    timer?.invalidate()
-    timer = nil
-    if let observer { NotificationCenter.default.removeObserver(observer) }
-    observer = nil
-}
-```
-
-Why `Task` in the cell: cancellation comes for free and `self` is the main-actor cell, so the
-assignment is on main by construction. The `!Task.isCancelled` check is the identity check — a
-reused cell has cancelled the old task before it can write.
-
-Why `stopRefreshing()` at the top of `viewWillAppear`: start a swipe-back and let go, and UIKit
-calls `viewWillDisappear` then `viewWillAppear` again, but never `viewDidDisappear`. Without the
-reset, that creates a second timer and a second observer, and the first ones are never removed.
+- **A `Task` in the cell** — cancellation comes for free, and the task runs on the main actor (the
+  cell is a view), so the image is set on main. The `!Task.isCancelled` check is the identity
+  check: a reused cell has cancelled the old task before it can write.
+- **The target-based `Timer` stays.** It was never the problem — the problem was invalidating in
+  `deinit`. Invalidating in `viewDidDisappear` breaks the cycle, so no closure timer is needed.
+- **`MainActor.assumeIsolated` in the observer** — in Swift 6 the block isn't known to be on the
+  main actor, so it can't call `refresh()` directly. `queue: .main` means it runs on main;
+  `assumeIsolated` says so, and traps if that is ever wrong.
+- **`stopRefreshing()` at the top of `viewWillAppear`** — start a swipe-back and let go, and UIKit
+  calls `viewWillAppear` again without `viewDidDisappear`. Without the reset, that makes a second
+  timer and observer.
 :::
 
 ::: Now write the tests
@@ -211,41 +245,49 @@ reset, that creates a second timer and a second observer, and the first ones are
 1. **A late reply for the old URL never shows.** Configure the cell for A, reuse it for B, then let
    A's photo arrive. The cell must not show A. This is the reported bug, so it goes first.
 2. **Reuse clears the old photo** — no stale image while the new one loads.
-3. **A load that finishes after reuse is dropped** — the cell scrolled off before its photo came back.
-4. **The cell asks for pixels, not points** — at 3× scale a 100 × 80 row needs a 300 × 240 image.
-   That's the downsampling bug from the review.
-5. **The screen is freed after it closes.** A *weak reference* (one that doesn't keep the object
+3. **The screen is freed after it closes.** A *weak reference* (one that doesn't keep the object
    alive) becomes `nil` only if nothing else holds the screen — so the test fails if the timer or
-   observer still does.
-6. **A closed screen stops refreshing, and a cancelled swipe-back keeps one observer.** One app
-   wake-up must mean one refresh, not two.
+   the observer still does. This is the reported leak.
+4. **A closed screen stops refreshing.** Post `didBecomeActive` after the screen closed; no
+   refresh may happen.
 
 I wouldn't test `Timer` or `NotificationCenter` themselves, or the image loader's cache — that has
 its own tests.
 
-**The seam.** The cell takes an `ImageLoading` in `configure`, so the test passes a *fake*: a
-stand-in that records what it was asked and holds each load until the test says which photo
-arrives, and when. That's how the test makes A arrive *after* B was asked for — every run, no
-timing. The outlet is private, so the test connects it by key, the way a storyboard does. The
-chapter shows the controller fix as a fragment; for the test I put it in a minimal
-`FeedViewController` whose `refresh()` just counts calls (`refreshCount`), so the test can see how
-many refreshes one notification causes. UIKit's `beginAppearanceTransition` drives the appear and
-disappear callbacks by hand.
+**The seam.** The cell's `loader` property defaults to `URLSession.shared`; the test sets a
+*fake*: a stand-in that holds each load until the test says which photo arrives, and when. That's
+how the test makes A arrive *after* B was asked for — every run, no timing. The snippet doesn't
+show `PhotoAPI`, so the test project defines a small stand-in next to the screen that counts
+calls to `latest` and never answers. UIKit's `beginAppearanceTransition` drives the appear and disappear callbacks by
+hand.
+
+```swift
+import Synchronization
+
+// Next to the screen in the test project: a stand-in for PhotoAPI that counts calls and never answers.
+final class PhotoAPI: Sendable {
+    static let shared = PhotoAPI()
+    private let calls = Mutex(0)
+    var latestCallCount: Int { calls.withLock { $0 } }
+
+    func latest(_ completion: @escaping @Sendable ([URL]) -> Void) {
+        calls.withLock { $0 += 1 }
+    }
+}
+```
 
 ```swift
 import Testing
 import UIKit
 
-// A fake loader: it records what it was asked for, and each load waits
-// until the test says which photo arrives, and when.
+/// A fake loader: each load waits until the test says which photo arrives.
 @MainActor
 final class FakeImageLoader: ImageLoading {
-    private(set) var requestedPixels: [CGSize] = []
     private var waiting: [URL: CheckedContinuation<UIImage, any Error>] = [:]
+    var requestCount: Int { waiting.count }
 
-    func image(for url: URL, fittingPixels size: CGSize) async throws -> UIImage {
-        requestedPixels.append(size)
-        return try await withCheckedThrowingContinuation { waiting[url] = $0 }
+    func image(for url: URL) async throws -> UIImage {
+        try await withCheckedThrowingContinuation { waiting[url] = $0 }
     }
 
     func finish(_ url: URL, with image: UIImage) {
@@ -253,88 +295,18 @@ final class FakeImageLoader: ImageLoading {
     }
 }
 
-extension PhotoCell {
-    // A storyboard connects outlets by key. The test does the same.
-    static func make() -> PhotoCell {
-        let cell = PhotoCell(style: .default, reuseIdentifier: "PhotoCell")
-        cell.setValue(UIImageView(), forKey: "photoView")
-        return cell
-    }
-
-    var shownImage: UIImage? { (value(forKey: "photoView") as? UIImageView)?.image }
-}
-
-/// Lets the main actor run what is queued, so a finished load can reach the cell. No clock.
-func settle() async {
-    for _ in 0..<10 { await Task.yield() }
-}
-
-@Suite(.timeLimit(.minutes(1)))
+/// Gives queued main-actor work a turn until `condition` holds. Bounded by a count, not a clock.
 @MainActor
-struct PhotoCellTests {
-    let urlA = URL(string: "https://example.com/a.jpg")!
-    let urlB = URL(string: "https://example.com/b.jpg")!
-    let photoA = UIImage(systemName: "a.circle")!
-    let photoB = UIImage(systemName: "b.circle")!
-    let rowSize = CGSize(width: 100, height: 80)
+func waitUntil(maxYields: Int = 1_000, _ condition: () -> Bool) async {
+    for _ in 0..<maxYields where !condition() { await Task.yield() }
+}
 
-    @Test func lateReplyForTheOldURLNeverShows() async {
-        // Given a cell configured for A, then reused for B before A arrived
-        let loader = FakeImageLoader()
-        let cell = PhotoCell.make()
-        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
-        cell.configure(with: urlB, loader: loader, displaySize: rowSize)
-        await settle()                      // both loads are now in flight
-
-        // When A's photo arrives late
-        loader.finish(urlA, with: photoA)
-        await settle()
-
-        // Then the cell shows nothing yet, and B's photo once it arrives
-        #expect(cell.shownImage == nil)
-        loader.finish(urlB, with: photoB)
-        await settle()
-        #expect(cell.shownImage === photoB)
-    }
-
-    @Test func reuseClearsTheOldPhoto() async {
-        let loader = FakeImageLoader()
-        let cell = PhotoCell.make()
-        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
-        await settle()
-        loader.finish(urlA, with: photoA)
-        await settle()
-        #expect(cell.shownImage === photoA)
-
-        cell.prepareForReuse()
-
-        #expect(cell.shownImage == nil)
-    }
-
-    @Test func loadThatFinishesAfterReuseIsDropped() async {
-        let loader = FakeImageLoader()
-        let cell = PhotoCell.make()
-        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
-        await settle()
-
-        cell.prepareForReuse()              // scrolled off before the photo came back
-        loader.finish(urlA, with: photoA)
-        await settle()
-
-        #expect(cell.shownImage == nil)
-    }
-
-    @Test func asksForPixelsNotPoints() async {
-        let loader = FakeImageLoader()
-        let cell = PhotoCell.make()
-        cell.traitOverrides.displayScale = 3
-
-        cell.configure(with: urlA, loader: loader, displaySize: rowSize)
-        await settle()
-
-        #expect(loader.requestedPixels == [CGSize(width: 300, height: 240)])
-        loader.finish(urlA, with: photoA)
-    }
+@MainActor
+func makeCell(loader: FakeImageLoader) -> PhotoCell {
+    let cell = PhotoCell(style: .default, reuseIdentifier: "PhotoCell")
+    cell.photoView = UIImageView()                  // what the storyboard would connect
+    cell.loader = loader
+    return cell
 }
 
 extension UIViewController {
@@ -344,12 +316,51 @@ extension UIViewController {
 }
 
 @MainActor
-struct FeedViewControllerTests {
+@Suite(.serialized)
+struct FeedTests {
+    let urlA = URL(string: "https://example.com/a.jpg")!
+    let urlB = URL(string: "https://example.com/b.jpg")!
+    let photoA = UIImage(systemName: "a.circle")!
+    let photoB = UIImage(systemName: "b.circle")!
+
+    @Test func lateReplyForTheOldURLNeverShows() async {
+        // Given a cell configured for A, then reused for B before A arrived
+        let loader = FakeImageLoader()
+        let cell = makeCell(loader: loader)
+        cell.configure(with: urlA)
+        cell.prepareForReuse()
+        cell.configure(with: urlB)
+        await waitUntil { loader.requestCount == 2 }
+
+        // When A's photo arrives late
+        loader.finish(urlA, with: photoA)
+        await waitUntil(maxYields: 100) { false }   // give the late reply its turns
+
+        // Then the cell ignores it, and shows B once B arrives
+        #expect(cell.photoView.image == nil)
+        loader.finish(urlB, with: photoB)
+        await waitUntil { cell.photoView.image != nil }
+        #expect(cell.photoView.image === photoB)
+    }
+
+    @Test func reuseClearsTheOldPhoto() async {
+        let loader = FakeImageLoader()
+        let cell = makeCell(loader: loader)
+        cell.configure(with: urlA)
+        await waitUntil { loader.requestCount == 1 }
+        loader.finish(urlA, with: photoA)
+        await waitUntil { cell.photoView.image != nil }
+
+        cell.prepareForReuse()
+
+        #expect(cell.photoView.image == nil)
+    }
+
     @Test func screenIsReleasedAfterItCloses() {
         weak var weakScreen: FeedViewController?
         autoreleasepool {
             let screen = FeedViewController()
-            screen.appear()                    // starts the timer and the observer
+            screen.appear()                         // starts the timer and the observer
             screen.disappear()
             weakScreen = screen
         }
@@ -357,32 +368,25 @@ struct FeedViewControllerTests {
     }
 
     @Test func closedScreenStopsRefreshing() {
+        // Given a screen that was shown and closed
         let screen = FeedViewController()
         screen.appear()
         screen.disappear()
+        let before = PhotoAPI.shared.latestCallCount
 
+        // When the app becomes active again
         NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
 
-        #expect(screen.refreshCount == 0)
-    }
-
-    @Test func cancelledSwipeBackKeepsOneObserver() {
-        let screen = FeedViewController()
-        screen.appear()
-        // A swipe-back the user let go of: will-disappear, then will-appear again.
-        screen.beginAppearanceTransition(false, animated: true)
-        screen.beginAppearanceTransition(true, animated: true)
-        screen.endAppearanceTransition()
-
-        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
-
-        #expect(screen.refreshCount == 1)
-        screen.disappear()
+        // Then the closed screen doesn't refresh
+        #expect(PhotoAPI.shared.latestCallCount == before)
     }
 }
 ```
 
-Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 7 tests, all passed.
+The suite is `.serialized` because the stand-in `PhotoAPI` and the notification are shared by
+every test in the process.
+
+Ran on the iOS Simulator (Swift 6 mode): 4 tests, all passed.
 :::
 
 ::: What I'd ask next
@@ -390,9 +394,11 @@ Ran on the iOS Simulator (iOS 18.5, Swift 6 mode): 7 tests, all passed.
   `totalCostLimit` in bytes; it also evicts under memory pressure.
 - *"Why not just check `cell.url == url` before setting the image?"* — Works for correctness, but
   the download still runs and wastes data; cancellation fixes both.
-- *"How would you prove the leak is gone?"* — Open and close the feed in the Memory Graph
-  debugger or Instruments' Leaks; or a test that holds a `weak` reference and asserts it's `nil`
-  after the screen is dismissed.
+- *"How would you stop two refreshes overlapping?"* — Keep a counter: bump it on each refresh,
+  capture it in the callback, and ignore a reply whose number isn't the latest. Or skip a refresh
+  while one is running.
+- *"How would you prove the leak is gone in the app?"* — Open and close the feed, then check the
+  Memory Graph debugger or Instruments' Leaks; the test above is the automated version.
 - *"Two rows show the same URL. What happens?"* — Two downloads; dedupe in-flight requests in the
-  loader (see chapter 05).
+  loader (see chapter 05's follow-ups).
 :::
