@@ -4,5 +4,6 @@
   "tagline": "89 problems, 18 topics, mostly medium",
   "summary": "The coding problems interviews keep asking, grouped by topic. Each topic opens with a primer: the technique, the words that point to it, a Swift template. Each problem gives starter code and tests to paste into Xcode or a playground, then — hidden until you have tried — the cue, the approach in plain words, a compiled and tested Swift solution, the Swift trap and the follow-ups. Blind 75 at its core, plus the problems German loops (Zalando, Sixt, Delivery Hero, N26) are documented asking.",
   "status": "in progress",
-  "accentIndex": 2
+  "accentIndex": 2,
+  "order": 4
 }

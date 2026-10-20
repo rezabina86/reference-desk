@@ -454,6 +454,8 @@ def load_topics(public=False):
                 all_sources[s["url"]] = s
         topic["sources"] = list(all_sources.values())
         topics.append(topic)
+    # Parts run in the order a loop runs its rounds, then the foundations (topic.json "order").
+    topics.sort(key=lambda t: (t.get("order", 99), t["slug"]))
     return topics
 
 # ------------------------------------------------------------------------ page

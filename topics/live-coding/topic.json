@@ -4,5 +4,7 @@
   "tagline": "Fix the project, then extend it",
   "summary": "Small starter projects in the shape companies hand out for the live round: make it build, find what's wrong, fix what matters, then add a feature on top of your fixes and test it. Each round has a runnable project in LiveCodingLab.",
   "status": "in progress",
-  "accentIndex": 6
+  "accentIndex": 6,
+  "order": 1,
+  "unit": "rounds"
 }

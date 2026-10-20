@@ -1,54 +1,56 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Reference Desk</title>
+<title>The iOS Interview Field Guide</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
 
 <style>
 :root{
-  --ground:#FBFAFC; --panel:#F2EFF5; --raised:#FFFFFF;
-  --ink:#17161C; --muted:#5D6C79; --faint:#8E93A0;
-  --rule:#E2DDE8; --rule-soft:#EDE9F1;
-  --accent:#AD3DA4; --accent-soft:#F6E9F5;
-  --link:#0B4F79; --warm:#B4472F; --warm-soft:#FBEDE9;
-  --code-bg:#F6F4F8;
-  --t-kw:#AD3DA4; --t-typ:#0B4F79; --t-str:#C0331C; --t-com:#5D6C79; --t-num:#1C00CF; --t-atr:#7A3E9D;
-  --shadow:0 1px 2px rgba(23,22,28,.05), 0 8px 24px -12px rgba(23,22,28,.18);
-  --serif:'Newsreader',Georgia,'Times New Roman',serif;
+  --ground:#F6F1E6; --panel:#EFE8DA; --raised:#FBF8F1;
+  --ink:#1D1B16; --muted:#4E4738; --faint:#6B6252;
+  --rule:#DCD2BF; --rule-soft:#E7DFCE;
+  --accent:#8C2F2B; --accent-soft:#F0DFD8;
+  --link:#1F4E5F; --warm:#9A5B12; --warm-soft:#F5E7CF;
+  --code-bg:#F0EADD;
+  --t-kw:#9B2C6E; --t-typ:#1F4E5F; --t-str:#A33A1F; --t-com:#6B6252; --t-num:#3B3B8C; --t-atr:#6A3D8F;
+  --shadow:0 1px 2px rgba(60,45,20,.06), 0 10px 24px -14px rgba(60,45,20,.22);
+  --serif:'Fraunces',Georgia,'Times New Roman',serif;
+  --body:'Source Serif 4',Georgia,'Times New Roman',serif;
   --sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
-    --ground:#1B1B20; --panel:#232329; --raised:#26262E;
-    --ink:#E7E4EC; --muted:#9AA2AE; --faint:#7A818D;
-    --rule:#33333C; --rule-soft:#2B2B33;
-    --accent:#FF7AB2; --accent-soft:#33202C;
-    --link:#6BDFFF; --warm:#FF8170; --warm-soft:#32231F;
-    --code-bg:#1F1F26;
-    --t-kw:#FF7AB2; --t-typ:#6BDFFF; --t-str:#FF8170; --t-com:#7F8C98; --t-num:#D9C97C; --t-atr:#C5A3E0;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    --ground:#1A1814; --panel:#211E19; --raised:#27231D;
+    --ink:#ECE5D6; --muted:#B8AE9A; --faint:#968B77;
+    --rule:#3A342B; --rule-soft:#2D2922;
+    --accent:#E58C76; --accent-soft:#3A2420;
+    --link:#8CC6D8; --warm:#E3B062; --warm-soft:#33291A;
+    --code-bg:#211E19;
+    --t-kw:#FF8FB8; --t-typ:#8CC6D8; --t-str:#F0987A; --t-com:#968B77; --t-num:#D9C97C; --t-atr:#C9A6E6;
+    --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 24px -14px rgba(0,0,0,.7);
   }
 }
 :root[data-theme="dark"]{
-  --ground:#1B1B20; --panel:#232329; --raised:#26262E;
-  --ink:#E7E4EC; --muted:#9AA2AE; --faint:#7A818D;
-  --rule:#33333C; --rule-soft:#2B2B33;
-  --accent:#FF7AB2; --accent-soft:#33202C;
-  --link:#6BDFFF; --warm:#FF8170; --warm-soft:#32231F;
-  --code-bg:#1F1F26;
-  --t-kw:#FF7AB2; --t-typ:#6BDFFF; --t-str:#FF8170; --t-com:#7F8C98; --t-num:#D9C97C; --t-atr:#C5A3E0;
-  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    --ground:#1A1814; --panel:#211E19; --raised:#27231D;
+    --ink:#ECE5D6; --muted:#B8AE9A; --faint:#968B77;
+    --rule:#3A342B; --rule-soft:#2D2922;
+    --accent:#E58C76; --accent-soft:#3A2420;
+    --link:#8CC6D8; --warm:#E3B062; --warm-soft:#33291A;
+    --code-bg:#211E19;
+    --t-kw:#FF8FB8; --t-typ:#8CC6D8; --t-str:#F0987A; --t-com:#968B77; --t-num:#D9C97C; --t-atr:#C9A6E6;
+    --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 24px -14px rgba(0,0,0,.7);
 }
 
 *{box-sizing:border-box}
 body{
   margin:0; background:var(--ground); color:var(--ink);
-  font-family:var(--sans); font-size:16px; line-height:1.65;
+  font-family:var(--body); font-size:18px; line-height:1.7;
   -webkit-font-smoothing:antialiased;
 }
 a{color:var(--link)}
+.rail,.topbar,.outline,.pager,.card,table,.dg,.find input,.results .where,.burger,.ix-head .meta{font-family:var(--sans)}
 a:focus-visible,button:focus-visible,input:focus-visible{
   outline:2px solid var(--accent); outline-offset:2px; border-radius:3px;
 }
@@ -511,19 +513,19 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 :root{
   --b-pres:#E3EEFC; --b-pres-s:#3D74C4; --b-dom:#F1E6F7; --b-dom-s:#9248B0;
   --b-data:#E2F3E8; --b-data-s:#2E8553; --b-net:#FCE9E2; --b-net-s:#C25230;
-  --b-reuse:#F1F1F4; --b-reuse-s:#8E93A0; --b-lane:#FFFFFF;
+  --b-reuse:#EFE9DC; --b-reuse-s:#857B68; --b-lane:#FBF8F1;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     --b-pres:#1F2B3D; --b-pres-s:#6EA6EE; --b-dom:#2D2236; --b-dom-s:#C88BE0;
     --b-data:#1C2E24; --b-data-s:#6CC795; --b-net:#36241F; --b-net-s:#FF8F75;
-    --b-reuse:#26262E; --b-reuse-s:#7A818D; --b-lane:#202026;
+    --b-reuse:#2A261F; --b-reuse-s:#968B77; --b-lane:#201D18;
   }
 }
 :root[data-theme="dark"]{
   --b-pres:#1F2B3D; --b-pres-s:#6EA6EE; --b-dom:#2D2236; --b-dom-s:#C88BE0;
   --b-data:#1C2E24; --b-data-s:#6CC795; --b-net:#36241F; --b-net-s:#FF8F75;
-  --b-reuse:#26262E; --b-reuse-s:#7A818D; --b-lane:#202026;
+  --b-reuse:#2A261F; --b-reuse-s:#968B77; --b-lane:#201D18;
 }
 .board{margin:0 0 22px; padding:20px 16px; border:1px solid var(--rule); border-radius:10px;
   background:var(--panel) radial-gradient(var(--rule) 1px, transparent 1.2px) 0 0/18px 18px; overflow-x:auto}
@@ -533,21 +535,107 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
    seven-participant flow to fit makes its text unreadable. */
 .board-svg svg[aria-roledescription="sequence"]{max-width:none}
 .board-svg foreignObject{overflow:visible}
+/* ======================================================= the field guide */
+.mark{font-size:19px; line-height:1.12; font-weight:500; letter-spacing:-.01em; padding-right:40px}
+.mark-sub{margin-top:6px}
+.topbar{gap:14px}
+.tb-brand{font-family:var(--serif); font-size:16.5px; font-weight:500; color:var(--ink); text-decoration:none;
+  flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.tb-brand:hover{color:var(--accent)}
+.tb-brand .short{display:none}
+@media (max-width:620px){ .tb-brand .long{display:none} .tb-brand .short{display:inline} }
+/* the eyebrow wraps as a line of text, not as flex columns */
+.eyebrow{display:block; line-height:1.9}
+.eyebrow .dot{vertical-align:middle; margin:0 9px}
+.tb-find{font:13px/1.2 var(--sans); color:var(--ink); background:var(--raised); border:1px solid var(--rule);
+  border-radius:7px; padding:7px 10px; width:220px; min-width:0}
+.tb-find::placeholder{color:var(--faint)}
+@media (max-width:520px){ .tb-find{width:110px} }
+
+/* the home page is a title page: no rail, a running head instead */
+.shell.home{grid-template-columns:minmax(0,1fr) !important}
+.shell.home .rail, .shell.home .outline, .shell.home .burger{display:none}
+.shell.home .topbar{display:flex}
+.shell.home .wrap{max-width:1080px}
+
+.fg-title{text-align:center; padding:64px 0 52px; border-bottom:1px solid var(--rule)}
+.fg-bar{width:54px; height:4px; background:var(--accent); margin:0 auto 30px}
+.fg-title h1{font-family:var(--serif); font-weight:500; font-size:clamp(40px,7vw,78px); line-height:1;
+  letter-spacing:-.02em; margin:0}
+.fg-sub{font-style:italic; font-size:21px; color:var(--muted); margin:22px auto 0; max-width:40ch; line-height:1.5; text-wrap:balance}
+.fg-by{font:12px/1.5 var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin:26px 0 0}
+.fg-prog{display:flex; align-items:baseline; justify-content:space-between; gap:16px; max-width:640px;
+  margin:40px auto 0; padding:16px 20px; border:1px solid var(--rule); border-radius:10px; background:var(--raised);
+  color:var(--ink); text-decoration:none; font-family:var(--sans); font-size:15px}
+.fg-prog:hover{border-color:var(--accent)}
+.fg-prog span{font:12px var(--mono); color:var(--faint)}
+.fg-contents{padding:48px 0 8px}
+.fg-contents > h2{font:500 12px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--accent);
+  text-align:center; margin:0 0 36px}
+.fg-parts{display:grid; grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr)); gap:48px 64px}
+.fg-ph{display:flex; align-items:baseline; gap:10px; padding-bottom:10px; border-bottom:1px solid var(--ink);
+  color:var(--ink); text-decoration:none}
+.fg-ph:hover .fg-pt{color:var(--accent)}
+.fg-pn{font-family:var(--serif); font-size:15px; color:var(--accent); min-width:58px; white-space:nowrap}
+.fg-pt{font-family:var(--serif); font-size:26px; font-weight:500; letter-spacing:-.01em; flex:1; line-height:1.2}
+.fg-pc{font:12px var(--mono); color:var(--faint); white-space:nowrap}
+.fg-tag{font-style:italic; font-size:16.5px; color:var(--muted); margin:10px 0 12px 68px; line-height:1.5}
+.fg-toc{list-style:none; margin:0 0 0 68px; padding:0; display:flex; flex-direction:column; gap:6px}
+.fg-toc a{display:flex; align-items:baseline; gap:8px; font-size:16px; line-height:1.4; color:var(--ink); text-decoration:none}
+.fg-toc a:hover .t{color:var(--accent)}
+.fg-toc .n{font:11.5px var(--mono); color:var(--faint); min-width:22px}
+.fg-toc .t{min-width:0}
+.fg-toc .lead{flex:1; min-width:16px; border-bottom:1px dotted var(--faint); opacity:.6; transform:translateY(-5px)}
+.fg-toc .m{font:11.5px var(--mono); color:var(--faint); white-space:nowrap}
+.fg-all{display:inline-block; margin:12px 0 0 68px; font:12px var(--mono); letter-spacing:.06em; text-transform:uppercase;
+  color:var(--accent); text-decoration:none}
+.fg-all:hover{text-decoration:underline}
+.fg-foot{margin-top:72px; padding:28px 0 8px; border-top:1px solid var(--rule); text-align:center;
+  font-style:italic; font-size:15.5px; color:var(--muted)}
+.fg-foot .meta{display:block; margin-top:8px; font:11.5px var(--mono); font-style:normal; letter-spacing:.06em; color:var(--faint)}
+.fg-foot .meta a{color:var(--faint)}
+@media (max-width:620px){
+  .fg-tag,.fg-toc,.fg-all{margin-left:0}
+  .fg-pn{min-width:0}
+  .fg-title{padding:40px 0 36px}
+  .fg-pt{font-size:23px}
+}
+
+/* part openers and chapter pages */
+.ix-part{font:12px var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin:56px 0 12px}
+.ix-part a{color:inherit; text-decoration:none}
+.ix-head h1{font-size:clamp(34px,5vw,50px); letter-spacing:-.02em; line-height:1.08}
+.ix-lede{font-style:italic; font-size:19px; line-height:1.55; margin-top:10px}
+.chapters a{grid-template-columns:34px 1fr auto}
+.chapters .ch-t{font-family:var(--serif); font-size:19px; font-weight:500; letter-spacing:-.005em}
+.chapters .ch-s{font-size:15.5px}
+.chapters .num, .chapters .ch-m{font-size:11.5px}
+.wrap{max-width:700px}
+.eyebrow .part{color:var(--accent)}
+article h1.title{font-size:clamp(34px,5vw,48px); line-height:1.1}
+.lede{font-style:italic; font-size:20px; line-height:1.55}
+article h2{font-weight:500; font-size:29px; letter-spacing:-.015em}
+article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spacing:0}
+.tp > button .pn{font-family:var(--serif); font-size:12.5px; color:var(--accent); min-width:26px}
 </style>
 
 <div class="shell">
   <aside class="rail" id="rail">
     <div class="rail-head">
       <button class="rail-hide" id="rail-hide" title="Hide the sidebar" aria-label="Hide the sidebar">«</button>
-      <button class="mark" id="home-link">The Reference Desk</button>
-      <span class="mark-sub">Engineering notes</span>
+      <button class="mark" id="home-link">The iOS Interview<br>Field Guide</button>
+      <span class="mark-sub">Reza Bina · Berlin</span>
     </div>
-    <div class="find"><input id="find" type="search" placeholder="Filter chapters…" autocomplete="off"></div>
+    <div class="find"><input id="find" type="search" placeholder="Search every chapter…" autocomplete="off" aria-label="Search every chapter"></div>
     <nav class="tree" id="tree"></nav>
     <div class="rail-foot"><a href="https://reza-bina.com" class="rail-home">reza-bina.com</a><span id="foot"></span></div>
   </aside>
   <main>
-    <div class="topbar"><button class="burger" id="burger">Contents</button></div>
+    <div class="topbar">
+      <button class="burger" id="burger">Contents</button>
+      <a class="tb-brand" href="#/"><span class="long">The iOS Interview Field Guide</span><span class="short">Field Guide</span></a>
+      <input id="find2" class="tb-find" type="search" placeholder="Search…" autocomplete="off" aria-label="Search every chapter">
+    </div>
     <div class="wrap" id="view"></div>
   </main>
   <aside class="outline" id="outline"></aside>
@@ -583,9 +671,38 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     var m = /^(\d+) · (.*)$/.exec(c.title);
     return m ? { n: m[1], t: m[2] } : { n: '', t: c.title };
   }
+  // "00 · How the round works" is the method, not a problem.
   function problemCount(g) {
-    return g.items.filter(function (x) { return splitTitle(x.c).n; }).length;
+    return g.items.filter(function (x) { var n = splitTitle(x.c).n; return n && !/^0+$/.test(n); }).length;
   }
+  function roman(n) {
+    return ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][n] || String(n);
+  }
+  // Parts are the reference topics in order; the private day sessions are not a part.
+  function partOf(t) {
+    var parts = DATA.topics.filter(function (x) { return x.kind !== 'sessions'; });
+    var i = parts.indexOf(t);
+    return i === -1 ? '' : 'Part ' + roman(i + 1);
+  }
+  // A chapter's number: the one in its title ("03 · Chat client"), else its position.
+  function chNum(t, c, i) {
+    var st = splitTitle(c);
+    if (st.n) return st;
+    var numbered = t.chapters.some(function (x) { return splitTitle(x).n; });
+    return { n: numbered ? '·' : pad(i + 1), t: c.title };
+  }
+  function countLabel(t) {
+    var gs = groupsOf(t);
+    return gs ? topicCount(t) + ' ' + (t.unit || 'problems') : t.chapters.length + ' ' + (t.unit || 'chapters');
+  }
+  // "Chapter 02 of 16" uses the number in the title when the topic numbers its titles.
+  function chapterOf(t, c, idx) {
+    var numbered = t.chapters.filter(function (x) { var n = splitTitle(x).n; return n && !/^0+$/.test(n); });
+    var st = splitTitle(c);
+    if (!numbered.length) return 'Chapter ' + pad(idx + 1) + ' of ' + pad(t.chapters.length);
+    return st.n && !/^0+$/.test(st.n) ? 'Chapter ' + st.n + ' of ' + pad(numbered.length) : 'Start here';
+  }
+  var SITE = 'The iOS Interview Field Guide';
   function topicBy(slug) { return DATA.topics.filter(function (t) { return t.slug === slug; })[0]; }
 
   document.getElementById('foot').textContent = 'Built ' + DATA.built;
@@ -630,7 +747,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     var others = DATA.topics.filter(function (t) { return t.kind !== 'sessions'; });
 
     var html = sessions.map(function (t) { return sessionRail(t, route); }).join('');
-    if (others.length) html += '<p class="tl-sect">Reference</p>';
+    if (others.length) html += '<p class="tl-sect">Contents</p>';
 
     html += others.map(function (t) {
       var open = route.topic === t.slug;
@@ -648,12 +765,12 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
                  '<span class="num">' + esc(st.n) + '</span><span>' + esc(st.t) + '</span></a>';
         }).join('');
       }).join('') + '</div>' : '<div class="kids">' + t.chapters.map(function (c, i) {
-        var on = route.chapter === c.slug;
+        var on = route.chapter === c.slug, st = chNum(t, c, i);
         return '<a class="' + (on ? 'on' : '') + '" href="#/' + t.slug + '/' + c.slug + '">' +
-               '<span class="num">' + pad(i + 1) + '</span><span>' + esc(c.title) + '</span></a>';
+               '<span class="num">' + esc(st.n) + '</span><span>' + esc(st.t) + '</span></a>';
       }).join('') + '</div>';
       return '<div class="tp' + (open ? ' open' : '') + '"><button data-topic="' + esc(t.slug) + '">' +
-        '<span class="chev">' + (open ? '▾' : '▸') + '</span><span class="nm">' + esc(t.title) + '</span>' +
+        '<span class="chev">' + (open ? '▾' : '▸') + '</span><span class="pn">' + roman(DATA.topics.filter(function (x) { return x.kind !== 'sessions'; }).indexOf(t) + 1) + '</span><span class="nm">' + esc(t.title) + '</span>' +
         '<span class="ct">' + topicCount(t) + '</span></button>' + kids + '</div>';
     }).join('');
 
@@ -668,35 +785,55 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
   });
 
   /* ---------------------------------------------------------------- home */
+  function partToc(t) {
+    var gs = groupsOf(t), items;
+    if (gs && gs.length >= 4) {
+      items = gs.slice(0, 4).map(function (g, i) {
+        var n = problemCount(g);
+        return '<li><a href="#/' + t.slug + '/' + g.items[0].c.slug + '"><span class="n">' + pad(i + 1) + '</span>' +
+          '<span class="t">' + esc(g.name) + '</span><span class="lead"></span>' +
+          '<span class="m">' + (n ? n + (n === 1 ? ' problem' : ' problems') : 'start') + '</span></a></li>';
+      });
+      return { list: items.join(''), all: 'All ' + countLabel(t) };
+    }
+    items = t.chapters.slice(0, 4).map(function (c, i) {
+      var st = chNum(t, c, i);
+      return '<li><a href="#/' + t.slug + '/' + c.slug + '"><span class="n">' + esc(st.n) + '</span>' +
+        '<span class="t">' + esc(st.t) + '</span><span class="lead"></span>' +
+        '<span class="m">' + (c.minutes ? esc(c.minutes) + ' min' : '') + '</span></a></li>';
+    });
+    return { list: items.join(''), all: 'All ' + countLabel(t) };
+  }
+
   function home() {
-    var cards = DATA.topics.map(function (t) {
-      var gs = groupsOf(t);
-      var list = gs ? '' : t.chapters.map(function (c, i) {
-        return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
-          '<span class="num">' + pad(i + 1) + '</span>' +
-          '<span class="ch-t">' + esc(c.title) + '</span>' +
-          '<span class="ch-m">' + esc(c.minutes) + ' min</span>' +
-          '<span class="ch-s">' + esc(c.summary) + '</span></a></li>';
-      }).join('');
-      return '<section class="topic-card">' +
-        '<p class="tagline">' + esc(t.tagline || '') + '</p>' +
-        '<h2><a href="#/' + t.slug + '">' + esc(t.title) + '</a></h2>' +
-        '<p class="blurb">' + esc(t.summary || '') + '</p>' +
-        (gs ? '<ul class="groups-list">' + gs.map(function (g) {
-          return '<li><a href="#/' + t.slug + '/' + g.items[0].c.slug + '"><span>' + esc(g.name) + '</span>' +
-                 '<span class="ct">' + (problemCount(g) || '') + '</span></a></li>';
-        }).join('') + '</ul>' : '<ul class="chapters">' + list + '</ul>') +
-        '<div class="facts"><span><b>' + (gs ? topicCount(t) : t.chapters.length) + '</b> ' + (gs ? 'problems' : 'chapters') + '</span>' +
-        '<span><b>' + t.minutes + '</b> min end to end</span>' +
-        '<span><b>' + t.sources.length + '</b> sources</span></div></section>';
+    var parts = DATA.topics.filter(function (t) { return t.kind !== 'sessions'; });
+    var sessions = DATA.topics.filter(function (t) { return t.kind === 'sessions'; });
+    var pages = parts.reduce(function (a, t) { return a + t.chapters.length; }, 0);
+
+    var prog = sessions.map(function (t) {
+      return '<a class="fg-prog" href="#/' + t.slug + '">' + esc(t.title) + '<span>' + t.chapters.length +
+        ' written · ' + (t.total || t.chapters.length) + ' planned</span></a>';
+    }).join('');
+
+    var contents = parts.map(function (t) {
+      var toc = partToc(t);
+      return '<section class="fg-part">' +
+        '<a class="fg-ph" href="#/' + t.slug + '"><span class="fg-pn">' + partOf(t) + '</span>' +
+        '<span class="fg-pt">' + esc(t.title) + '</span><span class="fg-pc">' + countLabel(t) + '</span></a>' +
+        '<p class="fg-tag">' + esc(t.tagline || '') + '</p>' +
+        '<ol class="fg-toc">' + toc.list + '</ol>' +
+        '<a class="fg-all" href="#/' + t.slug + '">' + toc.all + ' →</a></section>';
     }).join('');
 
     view.innerHTML =
-      '<header class="hero"><h1>The Reference Desk</h1>' +
-      '<p>Things worth understanding properly rather than looking up again. Each topic builds from the ground ' +
-      'up, every claim about mechanism carries its source, and the sources are linked where they are used.</p></header>' +
-      '<div class="hr"></div>' + cards;
-    document.title = 'The Reference Desk';
+      '<header class="fg-title"><div class="fg-bar"></div>' +
+      '<h1>The iOS Interview<br>Field Guide</h1>' +
+      '<p class="fg-sub">Every round of a senior iOS loop, worked through from the interviewer’s chair.</p>' +
+      '<p class="fg-by">Reza Bina · Berlin · ' + pages + ' pages, free to read</p>' + prog + '</header>' +
+      '<section class="fg-contents"><h2>Contents</h2><div class="fg-parts">' + contents + '</div></section>' +
+      '<footer class="fg-foot">Every claim about how something works carries its source, linked where it is used.' +
+      '<span class="meta">Updated ' + esc(DATA.built) + ' · <a href="https://reza-bina.com">reza-bina.com</a></span></footer>';
+    document.title = SITE;
   }
 
   /* -------------------------------------------------------- session index */
@@ -724,16 +861,16 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
         return '<section class="build"><h3>' + esc(g) + '</h3><div class="cards">' +
                byGroup[g].join('') + '</div></section>';
       }).join('');
-    document.title = t.title + ' · The Reference Desk';
+    document.title = t.title + ' · Field Guide';
   }
 
   /* ---------------------------------------------------------- topic index */
   function topicIndex(t) {
     var gs = groupsOf(t);
     if (gs) {
-      view.innerHTML =
-        '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + topicCount(t) +
-        ' problems · ' + gs.filter(problemCount).length + ' topics</span></div>' +
+      view.innerHTML = '<p class="ix-part">' + partOf(t) + '</p>' +
+        '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + countLabel(t) +
+        ' · ' + gs.filter(problemCount).length + ' groups</span></div>' +
         '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
         gs.map(function (g) {
           return '<section class="ix-group"><h3>' + esc(g.name) + '</h3><ul class="chapters">' +
@@ -745,21 +882,22 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
                 '<span class="ch-s">' + esc(x.c.summary) + '</span></a></li>';
             }).join('') + '</ul></section>';
         }).join('');
-      document.title = t.title + ' · The Reference Desk';
+      document.title = t.title + ' · Field Guide';
       return;
     }
     var list = t.chapters.map(function (c, i) {
+      var st = chNum(t, c, i);
       return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
-        '<span class="num">' + pad(i + 1) + '</span><span class="ch-t">' + esc(c.title) + '</span>' +
+        '<span class="num">' + esc(st.n) + '</span><span class="ch-t">' + esc(st.t) + '</span>' +
         '<span class="ch-m">' + esc(c.minutes) + ' min</span>' +
         '<span class="ch-s">' + esc(c.summary) + '</span></a></li>';
     }).join('');
-    view.innerHTML =
+    view.innerHTML = '<p class="ix-part">' + partOf(t) + '</p>' +
       '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + t.chapters.length +
       ' chapters · ' + t.minutes + ' min</span></div>' +
       '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
       '<ul class="chapters">' + list + '</ul>';
-    document.title = t.title + ' · The Reference Desk';
+    document.title = t.title + ' · Field Guide';
   }
 
   /* ------------------------------------------------------------- chapter */
@@ -792,13 +930,14 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     }
 
     view.innerHTML = '<article>' + prog +
-      '<div class="eyebrow"><a href="#/' + t.slug + '">' + esc(t.title) + '</a><span class="dot"></span>' +
-      (c.group ? esc(c.group) + (splitTitle(c).n ? ' · problem ' + splitTitle(c).n + ' of ' + topicCount(t) : '') : 'Chapter ' + pad(idx + 1) + ' of ' + pad(t.chapters.length)) +
+      '<div class="eyebrow">' + (partOf(t) ? '<a class="part" href="#/' + t.slug + '">' + partOf(t) + '</a><span class="dot"></span>' : '') +
+      '<a href="#/' + t.slug + '">' + esc(t.title) + '</a><span class="dot"></span>' +
+      (c.group ? esc(c.group) + (splitTitle(c).n && !/^0+$/.test(splitTitle(c).n) ? ' · ' + splitTitle(c).n + ' of ' + topicCount(t) : '') : chapterOf(t, c, idx)) +
       '<span class="dot"></span>' + esc(c.minutes) + ' min</div>' +
       '<h1 class="title">' + esc(c.title) + '</h1>' +
       '<p class="lede">' + esc(c.summary) + '</p>' +
       c.html + srcs + pager + '</article>';
-    document.title = c.title + ' · The Reference Desk';
+    document.title = c.title + ' · Field Guide';
     paintOutline(c);
     renderBoards();
     addCopyButtons();
@@ -972,6 +1111,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     var q = find.value.trim().toLowerCase();
     var parts = (location.hash || '#/').replace(/^#\/?/, '').split('/').filter(Boolean);
     var r = { topic: parts[0], chapter: parts[1] };
+    shell.classList.toggle('home', !r.topic);
     paintTree(r);
     if (q.length > 1) { search(q); return; }
 
@@ -990,9 +1130,11 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     rail.classList.remove('open');
   }
 
-  window.addEventListener('hashchange', route);
-  find.addEventListener('input', route);
   var shell = rail.parentNode;
+  var find2 = document.getElementById('find2');
+  window.addEventListener('hashchange', route);
+  find.addEventListener('input', function () { find2.value = find.value; route(); });
+  find2.addEventListener('input', function () { find.value = find2.value; route(); });
   function wide() { return window.matchMedia('(min-width:881px)').matches; }
   function setRailHidden(hidden) {
     shell.classList.toggle('rail-hidden', hidden);
@@ -1006,7 +1148,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
     if (wide()) setRailHidden(true); else rail.classList.remove('open');
   });
   document.getElementById('home-link').addEventListener('click', function () {
-    find.value = ''; location.hash = '#/';
+    find.value = ''; find2.value = ''; location.hash = '#/';
     if (location.hash === '#/') route();
   });
   route();
