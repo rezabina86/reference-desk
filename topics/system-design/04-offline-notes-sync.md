@@ -4,16 +4,21 @@ summary: "Design a notes app that works fully offline and syncs."
 minutes: 50
 sources:
 - weeeBox · Mobile system design, a framework for mobile system design interviews | https://github.com/weeeBox/mobile-system-design
-- WWDC23 · Meet SwiftData | https://developer.apple.com/videos/play/wwdc2023/10187/
 - WWDC24 · Track model changes with SwiftData history | https://developer.apple.com/videos/play/wwdc2024/10075/
 - Apple · ModelActor | https://developer.apple.com/documentation/swiftdata/modelactor
+- Apple · HistoryDescriptor (iOS 18) | https://developer.apple.com/documentation/swiftdata/historydescriptor
+- Apple · NavigationSplitView | https://developer.apple.com/documentation/swiftui/navigationsplitview
 - Apple · NWPathMonitor | https://developer.apple.com/documentation/network/nwpathmonitor
+- Apple · beginBackgroundTask(withName:expirationHandler:) | https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)
 - Apple · BGAppRefreshTask | https://developer.apple.com/documentation/backgroundtasks/bgapprefreshtask
 - Apple · BGTaskScheduler | https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler
 - Apple · Encrypting your app's files (data protection) | https://developer.apple.com/documentation/uikit/encrypting-your-app-s-files
+- Apple · FileProtectionType.completeUntilFirstUserAuthentication | https://developer.apple.com/documentation/foundation/fileprotectiontype/completeuntilfirstuserauthentication
+- Apple · WidgetCenter | https://developer.apple.com/documentation/widgetkit/widgetcenter
+- SE-0461 · Run nonisolated async functions on the caller's actor by default (@concurrent) | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md
 ---
 
-*Offline-first notes is a recurring senior mobile prompt. The answer stays small: the phone's database is the truth, syncing is one background job, and each note's changes go out in order and are safe to retry. Start simple; add parts only when asked.*
+*A recurring senior mobile prompt. The answer stays small: the phone's database is the truth and owns every write that must land together, one background job syncs, and a pure policy decides conflicts.*
 
 > **Interviewer:** "Design a notes app that works fully offline and syncs."
 
@@ -26,54 +31,56 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 | 0:00–0:02 | The prompt | Repeat it back in one sentence |
 | 0:02–0:07 | Clarify | Ask yours, then read section 1 |
 | 0:07–0:12 | Scope | Out of scope first, then required, then later |
-| 0:12–0:24 | High level | The idea · the parts · the sketch · each part · two flows |
+| 0:12–0:24 | High level | The idea · the parts · the sketch · one line each · two flows |
 | 0:24–0:40 | Deep dives | The interviewer picks one of sections 9–11 |
 | 0:40–0:45 | Recap | Follow-ups, then the 60-second summary |
 
 ## What this question is really testing
 
 - **Where the truth lives.** The phone's database, not the server. The screen never waits for the network.
-- **A queue of unsent changes** that survives the app being killed, goes out in order per note, and is safe to retry.
-- **Conflicts:** the same note edited on two devices while offline.
+- **A queue of unsent changes** saved with the note in one transaction, sent in order per note, safe to retry.
+- **Conflicts as a product rule:** the same note edited on two devices offline. Never lose text.
 - **Deletes that travel:** a note deleted offline must disappear everywhere.
-- **Keeping it small.** Sync is one background job, not something every screen does.
+- **Keeping it small.** Sync is one background job, not something the screen does.
 
-**Traps:** saving to the server first; "last write wins" that loses typing; retries without an ID; deleting rows instead of marking them deleted; "No notes" when the first sync failed; promising background sync at a set time.
+**Traps:** saving to the server first; "one transaction" across two databases; "last write wins"; retries without an ID; deleting rows instead of tombstones; "No notes" when the first sync failed; background sync at a set time.
 
 ::: Words used in this chapter
-- **Offline-first** — the app works fully without a network; the network only catches it up.
-- **Source of truth** — the one place whose answer is right. Here: the database on the phone.
-- **Sync** — making the phone and the server agree: send what changed here, fetch what changed there.
-- **Pending change** — an edit saved on the phone that the server hasn't got yet. They wait in a queue.
-- **Version** — a number the server bumps each time a note changes, so both sides can tell which copy is newer.
-- **Conflict** — the same note changed on two devices before either synced.
-- **Tombstone** — a "this note was deleted" marker kept instead of the note, so other devices learn about the delete.
-- **Cursor** — a bookmark from the server: "you've seen every change up to here". Only the server can read it.
+- **Repository** — the one owner of one kind of data. It turns the server's format into the app's model. Here, the database's.
+- **Composite** — a repository that only reads: it asks two repositories and combines their answers into one model. Not used here.
+- **Store** — in-memory state that several screens show at once. Not needed here yet.
+- **Use case** — one user intent with a product rule, like "only the latest tap counts". Not needed here.
+- **View model** — the screen's brain. It owns the screen's state and hands the screen one view state.
+- **Policy** — a product rule as a pure function: no disk, no network, no state.
+- **Source of truth** — the one place whose answer is right: the phone's database.
+- **Pending change** — an edit the server hasn't got. Its **change ID** makes a resend harmless (idempotent).
 - **Transaction** — several writes saved together, all or none.
-- **Idempotent** — sending the same request twice has the same effect as once. A **change ID** on each request lets the server spot a repeat.
-- **Repository, composite** — a repository is where the app asks for data; a composite combines several sources into one model.
+- **Version, conflict** — the server bumps a note's version on each change; a conflict is an edit of an old version.
+- **Tombstone, cursor** — a tombstone marks a deleted note. The cursor is the server's bookmark in its changes feed.
 :::
 
 ::: 1 · The interviewer answers your clarifying questions
-**"What's in a note?"** → *A title and plain text. No images or attachments for now.*
+**"What's in a note?"** → *A title and plain text. No attachments for now.*
 
 **"One device or several?"** → *Phone, iPad and the web, same account.*
 
-**"Shared notes, collaboration?"** → *No. One owner per note.*
+**"Shared notes?"** → *No. One owner per note.*
 
-**"What if two devices edit the same note offline?"** → *Never lose what someone typed. How you show it is up to you.*
+**"Two devices edit the same note offline?"** → *Never lose what someone typed. How you show it is up to you.*
+
+**"An edit on one device, a delete on another?"** → *Your call. Say what you'd pick.*
 
 **"How fresh must other devices be?"** → *Seconds when online is nice. Minutes is fine.*
 
-**"How many notes?"** → *Most users have hundreds, a few KB each. Some have ten thousand.*
+**"How many notes?"** → *Hundreds, a few KB each. Some users have ten thousand.*
 
-**"How many users?"** → *Say five million, each saving a few dozen times a day. Don't design the backend.*
+**"How many users?"** → *Five million, a few dozen saves a day each. Don't design the backend.*
 
-**"Minimum OS?"** → *iOS 17, SwiftUI.*
+**"Minimum OS?"** → *iOS 17, SwiftUI, Swift 6.*
 :::
 
 ::: 2 · Requirements and scope — what you should have said
-**Out of scope, said first:** attachments, sharing and collaboration, rich text, search on the server, the web client, how the server stores notes.
+**Out of scope, said first:** attachments, sharing, rich text, server search, the web client, how the server stores notes.
 
 **Required for the prompt**
 
@@ -82,9 +89,9 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 3. A conflict never loses text.
 4. Show which notes haven't synced, and whether the last sync failed.
 
-**What must feel good:** instant (never waits for the network) · durable (nothing typed is lost, even if killed) · correct (each change lands once, in order) · cheap (sync sends only what changed).
+**What must feel good:** instant · durable, even if killed · each change lands once, in order · only changes are sent.
 
-**Production considerations** (say them, don't draw them): token refresh, safe retries and backoff, 429s, data protection on the database, metrics. They're in section 12.
+**Production considerations** (say, don't draw): token refresh, safe retries, data protection, metrics. Section 12.
 
 **Optional follow-ups** (add only when asked):
 
@@ -99,26 +106,28 @@ Real-time collaboration        → a different design (CRDT or OT)
 :::
 
 ::: 3 · The idea, in 30 seconds — before you draw anything
-> *"The phone's database is the truth: the screen reads and writes only there, so it works offline. Every save also adds a pending change, in the same transaction. A sync engine sends pending changes with `PUT /notes/{id}` and `DELETE /notes/{id}`, one at a time per note, each with a change ID so a retry is harmless, and fetches other devices' changes with `GET /notes/changes?since=` and an opaque cursor. A composite repository combines the notes and the pending changes, so each note knows if it's synced. A failed sync means 'not up to date', never 'no notes'. Three layers: presentation, domain, data."*
+> *"The phone's database is the truth, so the screen reads and writes only there. One database owns the notes and the pending changes, so a save writes both in one transaction. A sync engine sends pending changes with `PUT /notes/{id}` and `DELETE /notes/{id}`, one at a time per note, each with a change ID, then pulls other devices' changes with `GET /notes/changes?since={cursor}`. When the server says 'conflict', a pure conflict policy decides: keep both copies, and an edit beats a delete. Sync status is its own stream, so a failed sync reads 'not up to date', never 'no notes'."*
 :::
 
 ::: 4 · What we need — the components, before the sketch
 | # | Part | Type | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Notes screen** | `NotesView` | Presentation | Draws the view state. |
-| 2 | **Notes view model** | `NotesViewModel` | Presentation | Turns notes into a view state. |
-| 3 | **Notes repository** | `NotesRepository` | Domain | Promises notes: watch, save, delete. |
-| 4 | **Composite notes repository** | `CompositeNotesRepository` | Data | Combines notes and pending changes into `Note`. |
-| 5 | **Notes database** | `NoteStore` | Data | Keeps every note on the phone. |
-| 6 | **Pending changes** | `PendingChangeQueue` | Data | Keeps edits the server hasn't got. |
-| 7 | **Sync engine** | `SyncEngine` | Data | Sends pending changes, fetches remote ones. |
-| 8 | **Remote notes repository** | `RemoteNotesRepository` | Data | Calls the three endpoints. |
+| 1 | **Notes screen** | `NotesView` | Presentation | Draws the view state, forwards actions. |
+| 2 | **Notes view model** | `NotesViewModel` | Presentation | Notes + sync status → one view state; owns the draft. |
+| 3 | **Notes repository** | `LocalNotesRepository` | Data | Note rows → `Note`; save and delete. |
+| 4 | **Sync status repository** | `LocalSyncStatusRepository` | Data | The status row → `SyncStatus`. |
+| 5 | **Notes database** | `NotesDatabase` | Data | Notes, tombstones, pending changes, status; atomic writes. |
+| 6 | **Sync engine** | `NotesSyncEngine` | Data | Triggers; push one change at a time, then pull. |
+| 7 | **Conflict policy** | `ConflictPolicy` | Domain | Decides a 409: keep both, edit beats delete. |
+| 8 | **Notes API client** | `NotesAPIClient` | Data | The three endpoints → DTOs. |
+| chip | **Notes repository** | `NotesRepository` | Domain | The promise card 3 keeps. |
+| chip | **Sync status repository** | `SyncStatusRepository` | Domain | The promise card 4 keeps. |
 
-The `Note` model isn't a card: it's what the composite returns, written on its card.
+Eight cards, two chips. `Note` and `SyncStatus` are written on cards 3 and 4.
 
-No use case: the screen's three calls would only pass through one. The one real rule, conflicts, lives in the sync engine, the only part that meets them.
+**No use case:** watch, save and delete have no rule. The one rule, conflicts, is a pure policy: no user taps "resolve".
 
-Not on the list yet: everything under "optional follow-ups" in section 2, and a search index. *"I'll add those if we go there."*
+**Not drawn:** the `HTTPClient` inside card 8, and a network monitor wrapping `NWPathMonitor` behind a `NetworkPath` protocol (card 6's trigger). **Not on the list yet:** the optional follow-ups, a search index.
 :::
 
 ::: 5 · The sketch
@@ -130,110 +139,112 @@ NotesView`"] -- "actions → view state" --> VM["`**2 · Notes view model**
 NotesViewModel`"]
   end
   subgraph D["DOMAIN"]
-    Repo["`**3 · Notes repository**
-«protocol»`"]
+    NotesP["`«protocol»
+NotesRepository`"]
+    StatusP["`«protocol»
+SyncStatusRepository`"]
+    Policy["`**7 · Conflict policy**
+ConflictPolicy
+pure, no I/O`"]
   end
   subgraph DA["DATA"]
-    Comp["`**4 · Composite notes repository**
-CompositeNotesRepository
-notes + pending → Note`"]
-    Sync["`**7 · Sync engine**
-SyncEngine`"]
+    Notes["`**3 · Notes repository**
+LocalNotesRepository
+rows → Note`"]
+    Status["`**4 · Sync status repository**
+LocalSyncStatusRepository
+row → SyncStatus`"]
+    Sync["`**6 · Sync engine**
+NotesSyncEngine
+app-scoped actor`"]
     DB["`**5 · Notes database**
-NoteStore`"]
-    Pend["`**6 · Pending changes**
-PendingChangeQueue`"]
-    Remote["`**8 · Remote notes repository**
-RemoteNotesRepository
-GET changes · PUT · DELETE`"]
+NotesDatabase
+one writer, atomic`"]
+    API["`**8 · Notes API client**
+NotesAPIClient
+GET /notes/changes
+PUT /notes/{id}
+DELETE /notes/{id}`"]
   end
-  VM -- "watch, save → notes" --> Repo
-  Repo ~~~ Comp
-  Comp -. "implements" .-> Repo
-  Repo ~~~ Sync
-  Comp -- "add → ok" --> Pend
-  Sync -- "next → change" --> Pend
-  Sync -- "push, pull → DTOs" --> Remote
-  Pend ~~~ DB
-  Pend ~~~ Remote
-  Comp -- "read, write → rows" --> DB
-  Sync -- "apply → ok" --> DB
+  VM -- "watch, save → notes" --> NotesP
+  VM -- "watch → status" --> StatusP
+  VM ~~~ Policy
+  NotesP ~~~ Notes
+  Notes -. "implements" .-> NotesP
+  StatusP ~~~ Status
+  Status -. "implements" .-> StatusP
+  Policy ~~~ Sync
+  Sync -- "conflict → decision" --> Policy
+  Notes -- "save → rows" --> DB
+  Status -- "watch → row" --> DB
+  Sync -- "next, apply → ok" --> DB
+  Sync -- "push, pull → DTOs" --> API
   class View,VM pres
-  class Repo dom
-  class Comp,Sync,DB,Pend data
-  class Remote net
+  class NotesP,StatusP,Policy dom
+  class Notes,Status,Sync,DB data
+  class API net
 ```
 
-**How to read it.** A solid arrow points from the part that asks to the part that answers: *request → reply*. The dashed arrow means *implements*.
+**How to read it.** A solid arrow points from the asker to the answerer: *request → reply*. Dashed arrows mean *implements*. Only the orange card touches the network.
 
-**Dependency inversion, in one line.** The domain writes the promise (card 3); the data layer keeps it (card 4). The arrow points **up**, so the domain never depends on the database or the network.
+**Dependency inversion, in one line.** The domain writes the two promises (the chips); cards 3 and 4 keep them, so both dashed arrows point **up**.
 
-**On Miro:** three frames (blue, purple, green), eight cards, eight arrows. Point at card 7 and say: *"the screen never waits for this."*
+**One class, three promises.** Card 5 keeps a narrow protocol per caller: `NoteRecords` (card 3), `SyncStatusRecords` (card 4), `SyncRecords` (card 6). That makes "one transaction" honest: note and pending change live in one database.
+
+**No shared store:** list and editor are one screen; a second screen would watch the same database.
+
+**On Miro:** three frames, eight cards, two chips. Point at card 6: *"the screen never waits for this."*
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
-**The model everyone shares.** It's what the composite returns.
+**The models everyone shares.** The screen never sees a record or a DTO.
 
 ```swift
 struct Note: Identifiable, Hashable, Sendable {
-    /// Made on the phone, so a new note has an ID before the server knows it
+    /// Made on the phone, so it exists offline
     let id: NoteID
-    var title: String
-    var body: String
-    var updatedAt: Date
-    /// synced, pending, or failed (the server refused this note's change)
-    var sync: NoteSyncState
+    let title: String
+    let body: String
+    let updatedAt: Date
+    /// synced, pending, or refused (the server won't take it)
+    let sync: NoteSyncState
 }
 
-/// What the repository streams: the notes, plus how the last sync went
-struct NotesSnapshot: Equatable, Sendable {
-    let notes: [Note]
+struct SyncStatus: Equatable, Sendable {
     /// nil = this device has never finished a sync
     let lastSyncedAt: Date?
     let isSyncing: Bool
-    let lastSyncFailed: Bool
+    let lastRunFailed: Bool
 }
 ```
-
-The sync engine writes its status into a small row in the same database, so the screen learns about sync by watching, like everything else.
 
 ### 1 · Notes screen (`NotesView`)
 
 **Job:** shows the list and the editor, and reports what the user does. It decides nothing.
 
-**Interface:** reads `viewModel.viewState`; calls `select(_:)`, `create()`, `edit(title:body:)`, `delete(_:)`.
+**Interface:** reads `viewModel.viewState`; calls `onAppear()`, `select(_:)`, `create()`, `edit(title:body:)`, `delete(_:)`.
 
-**Choice:** `NavigationSplitView`, so the same screen works as list-and-editor on iPad and pushes on iPhone.
+**Choice:** `NavigationSplitView`: side by side on iPad, pushed on iPhone, one screen.
 
 ### 2 · Notes view model (`NotesViewModel`)
 
-**Job:** turns the notes into one view state, and saves edits.
+**Job:** combines the notes and status streams into one view state, and owns the draft.
 
 ```swift
 struct NotesViewState: Equatable {
+    /// title, preview, formatted date, badge ("Not synced")
     let rows: [NoteRow]
-    /// noNotes, firstSyncRunning, or firstSyncFailed — nil when there are rows
+    /// noNotes, firstSyncRunning, firstSyncFailed; nil when there are rows
     let empty: EmptyState?
-    /// "Syncing…", shown next to the rows
     let isSyncing: Bool
-    /// e.g. "Couldn't sync · last synced 10:42" — the rows stay
+    /// e.g. "Couldn't sync · last synced 10:42"; the rows stay
     let syncProblem: String?
     let editor: EditorState?
 }
 
-struct NoteRow: Equatable, Identifiable {
-    let id: NoteID
-    let title: String
-    let preview: String
-    /// already formatted, e.g. "Yesterday"
-    let date: String
-    /// none, "Not synced", or "Couldn't sync"
-    let badge: SyncBadge
-}
-
 @MainActor @Observable
 final class NotesViewModel {
-    init(repository: NotesRepository)
+    init(notes: NotesRepository, status: SyncStatusRepository)
 
     var viewState: NotesViewState { get }
 
@@ -247,182 +258,253 @@ final class NotesViewModel {
 
 **Choices:**
 
-- **It watches, it doesn't fetch.** A fresh snapshot arrives whenever the database changes, from this screen or from sync.
-- **Small states that coexist, not one status enum.** The list can have rows *and* be syncing *and* show that the last sync failed. Separate fields say that without a dozen cases.
-- **A failed sync is "unknown", not "empty".** On a new device, "No notes yet" appears only after a sync succeeded; before that, "Loading your notes…" or "Couldn't load them yet".
-- **The draft is the view model's until saved.** Saves are debounced (half a second after typing stops, and when leaving the note). An incoming snapshot never overwrites text the user is typing.
+- **It watches, it doesn't fetch.** Each stream replays its value, then every change, from this screen or from sync.
+- **Small states that coexist:** rows, syncing and "last sync failed" at once, without a dozen enum cases.
+- **A failed sync is "unknown", not "empty".** "No notes yet" appears only after a sync succeeded; before that, "Loading your notes…" or "Couldn't load them yet".
+- **The draft is the view model's until saved,** debounced (half a second after typing stops, and on leaving). An incoming list never overwrites it.
 
-### 3 · Notes repository (`NotesRepository`)
+### 3 · Notes repository (`LocalNotesRepository`)
 
-**Job:** the promise the view model needs.
+**Job:** reads rows as `Note`s; turns a save or delete into one atomic database call.
 
 ```swift
 protocol NotesRepository: Sendable {
-    /// A new snapshot every time the notes or the sync status change
-    func notes() -> AsyncStream<NotesSnapshot>
-    func save(_ note: Note) async throws
+    /// Replays the current notes, then each change. One stream per
+    /// caller; it finishes when the caller's task is cancelled.
+    func notes() -> AsyncStream<[Note]>
+    /// Saves the note and its pending change, all or none. Throws
+    /// only if the disk write fails. Not cancelled by the caller.
+    func save(id: NoteID, title: String, body: String) async throws
+    /// Marks a tombstone and queues the delete, all or none.
     func delete(_ id: NoteID) async throws
 }
+
+final class LocalNotesRepository: NotesRepository {
+    init(records: NoteRecords)
+}
 ```
-
-**Choice:** a protocol in the domain; it earns a fake for the view model's tests. No "sync now" method: the screen saves, the engine decides when to sync.
-
-### 4 · Composite notes repository (`CompositeNotesRepository`)
-
-**Job:** combines the notes and the pending changes into `Note`s, and records the user's edits.
-
-**Interface:** conforms to `NotesRepository`. Built with `init(store: NoteStoreType, pending: PendingChangeQueueType)`.
-
-**How it combines:** watch the notes, look up which IDs have a pending or failed change, set each note's `sync`, and add the sync-status row.
-
-**How it saves:** write the note **and** add a pending change in **one transaction**. Either both are saved or neither, so an edit can't exist without its pending change.
 
 **Choices:**
 
-- **It never calls the server.** That's why saving is instant and works offline.
-- **A delete is a tombstone:** the note is marked deleted, hidden from the list, and a pending delete is added.
+- **`save(id:title:body:)`, not `save(_ note: Note)`,** so a caller can't set `sync` or a version. Only the database decides those.
+- **One source, so no composite.** The pending flag is a join inside one database. No "sync now": the engine notices saves.
 
-### 5 · Notes database (`NoteStore`)
+### 4 · Sync status repository (`LocalSyncStatusRepository`)
 
-**Job:** keeps every note on the phone, including tombstones and each note's server version.
+**Job:** reads the status row the engine writes, as `SyncStatus`.
 
 ```swift
-protocol NoteStoreType: Sendable {
-    func observeNotes() -> AsyncStream<[NoteRecord]>
-    func write(_ record: NoteRecord) async throws
-    /// Server changes and the new cursor, saved together.
-    /// Skips notes that have a pending change at that moment.
-    func apply(_ changes: [NoteRecord], cursor: Cursor) async throws
-    func recordSync(_ status: SyncStatus) async throws
+protocol SyncStatusRepository: Sendable {
+    /// Replays the current status, then each change. One stream per
+    /// caller; finishes when the caller's task is cancelled.
+    func status() -> AsyncStream<SyncStatus>
+}
+
+final class LocalSyncStatusRepository: SyncStatusRepository {
+    init(records: SyncStatusRecords)
 }
 ```
 
-**Choices:**
+**Choice:** its own protocol, so the notes stream carries notes only, not the engine's state.
 
-- **SwiftData behind a `@ModelActor`**, off the main thread with its own context. *Switch to* Core Data for finer control of migrations or fetches.
-- **A protocol, for the sync engine's tests** (an in-memory store).
+### 5 · Notes database (`NotesDatabase`)
 
-### 6 · Pending changes (`PendingChangeQueue`)
-
-**Job:** keeps the edits the server hasn't got yet, oldest first.
+**Job:** keeps notes, tombstones, versions, pending changes, the cursor and the status row, and runs each write that must land together as one transaction.
 
 ```swift
-struct PendingChange: Sendable {
-    /// Made once; every retry of this change reuses it
-    let id: ChangeID
-    let noteID: NoteID
-    /// upsert or delete
-    let kind: ChangeKind
-    /// Title, body and baseVersion, frozen when the change is first sent
-    var sent: ChangeSnapshot?
+/// Card 3's half
+protocol NoteRecords: Sendable {
+    func noteRows() -> AsyncStream<[NoteRecord]>
+    /// Note row + its waiting change, one transaction
+    func saveNote(id: NoteID, title: String, body: String) async throws
+    func deleteNote(id: NoteID) async throws
 }
 
-protocol PendingChangeQueueType: Sendable {
-    /// Replaces this note's waiting change, never the one in flight
-    func add(_ change: PendingChange) async throws
-    /// The oldest waiting change whose note has nothing in flight
-    func next() async -> PendingChange?
-    func remove(_ id: ChangeID) async throws
-    func markFailed(_ id: ChangeID) async throws
+/// Card 4's half
+protocol SyncStatusRecords: Sendable {
+    func statusRow() -> AsyncStream<SyncStatusRecord>
+}
+
+/// Card 6's half
+protocol SyncRecords: Sendable {
+    /// The "after each save" trigger
+    func pendingCount() -> AsyncStream<Int>
+    /// Oldest change whose note has nothing in flight, frozen
+    /// with its text and base version. nil = nothing to send.
+    func nextChange() async throws -> SentChange?
+    func complete(_ change: ChangeID, version: Int) async throws
+    func markRefused(_ change: ChangeID) async throws
+    /// One transaction: server copy in, optional new note queued,
+    /// the stale change dropped
+    func settleConflict(_ change: ChangeID, serverCopy: NoteRecord?,
+                        newNote: NoteRecord?) async throws
+    /// Changes + cursor, one transaction. Skips notes with a pending
+    /// change; refuses a run for another account.
+    func apply(_ changes: [NoteRecord], cursor: Cursor,
+               account: AccountID) async throws
+    func cursor() async throws -> Cursor?
+    func recordStatus(_ status: SyncStatusRecord) async throws
+}
+
+actor NotesDatabase: NoteRecords, SyncStatusRecords, SyncRecords {
+    init(fileURL: URL)
 }
 ```
 
 **Choices:**
 
-- **A table in the same database**, so the note and its pending change are saved in one transaction.
-- **Per note: at most one in flight, one waiting.** Ten offline edits become one "upload the latest" change. An edit made during a send waits behind it, so a note's changes arrive in order.
-- **A sent change is frozen.** Its snapshot and change ID never change, so a retry is exactly the same request.
+- **One owner of the tables that change together.** "Note + change" and "changes + cursor" are one transaction each only because one database runs both.
+- **SQLite behind one actor on iOS 17.** The only writer, so it publishes after each commit. *Rejected:* SwiftData behind a `@ModelActor` has no change history on iOS 17; `HistoryDescriptor` is iOS 18. *Switch* at an iOS 18 minimum.
+- **Records only;** cards 3, 4 and 6 map.
 
-### 7 · Sync engine (`SyncEngine`)
+### 6 · Sync engine (`NotesSyncEngine`)
 
-**Job:** sends pending changes to the server, then fetches what changed elsewhere.
+**Job:** the one background job: wake on a trigger, push pending changes one at a time, then pull.
 
 ```swift
-protocol SyncEngineType: Sendable {
-    /// Starts the loop: at launch, when the network returns, after each save
-    func start()
+protocol SyncEngine: Sendable {
+    /// Starts the triggers: launch, network back, foreground, a newly
+    /// queued change. Calling it twice changes nothing.
+    func start() async
+    /// Sign-out. A reply still in flight is refused by apply's
+    /// account check.
+    func stop() async
+}
+
+actor NotesSyncEngine: SyncEngine {
+    init(records: SyncRecords, api: NotesAPI,
+         policy: ConflictPolicy, network: NetworkPath)
 }
 ```
 
-Built with the queue, the store and the remote repository.
+**Choices:**
+
+- **One loop, one change at a time,** oldest first: no two syncs race, and each note's changes arrive in order. Push first, then pull.
+- **It asks the policy, it doesn't own the rule.** On a 409 it calls `ConflictPolicy`, then `settleConflict`. The DTO → record mapper is a pure helper inside it.
+
+### 7 · Conflict policy (`ConflictPolicy`)
+
+**Job:** decides what a conflict becomes. Pure: no disk, no network, no state.
+
+```swift
+enum Side: Equatable, Sendable {
+    case edited(title: String, body: String)
+    case deleted
+}
+
+enum ConflictResolution: Equatable, Sendable {
+    /// Server copy stays the note; local text becomes a new note
+    case keepBoth(copyTitle: String)
+    /// The server deleted it; local text comes back as a new note
+    case recreate
+    /// Our delete lost to a newer edit; the note comes back
+    case keepServer
+}
+
+struct ConflictPolicy: Sendable {
+    /// Same input, same answer. Never throws.
+    func resolve(local: Side, server: Side) -> ConflictResolution
+}
+```
 
 **Choices:**
 
-- **One loop, one change at a time,** oldest first. No two syncs race, and each note's changes go in order. Parallel notes are a later optimisation.
-- **A failure only touches that note.** A conflict or refusal affects that note's change; the loop moves on. It never rolls a note back to older text.
-- **Push first, then pull.** The server sees our edits before we ask for everyone else's.
-- **Part inside: the conflict resolver.** When the server says "conflict", it keeps both copies (see deep dive 9). The rule lives here because only the sync engine meets conflicts. That's why there's no use case.
+- **Domain, because a PM states it** without naming HTTP: "never lose text, and an edit beats a delete".
+- **A policy, not a use case:** no user intent starts it, and it does no I/O. Tested with plain inputs.
 
-### 8 · Remote notes repository (`RemoteNotesRepository`)
+### 8 · Notes API client (`NotesAPIClient`)
 
 **Job:** calls the three endpoints and decodes the replies into DTOs.
 
 ```swift
-protocol RemoteNotesRepositoryType: Sendable {
+protocol NotesAPI: Sendable {
+    /// Throws on failure. Cancelling the caller cancels the request.
     func changes(since cursor: Cursor?) async throws -> ChangesPageDTO
-    /// Throws .conflict(serverNote) if baseVersion is stale
-    func put(_ note: NoteDTO, baseVersion: Int?, change: ChangeID) async throws -> Int
-    func delete(_ id: NoteID, baseVersion: Int, change: ChangeID) async throws
+    /// Throws .conflict(NoteDTO) on 409; the DTO says deleted: true
+    /// for a tombstone. A repeated change ID gets the first answer.
+    func put(_ id: NoteID, _ note: NoteBodyDTO, baseVersion: Int?,
+             change: ChangeID) async throws -> Int
+    func delete(_ id: NoteID, baseVersion: Int,
+                change: ChangeID) async throws
 }
 ```
 
 **Choices:**
 
-- **DTOs stay in the data layer**; the sync engine maps them to database records. The domain never sees the server's shape.
-- **A protocol, for a fake server** that answers 409 or times out in tests.
-- **Auth in its HTTP client:** on a 401, refresh the token once and retry; if that fails, sign in again, pending changes kept.
+- **A client, not a repository:** it returns DTOs. A fake that answers 409 or times out tests the engine.
+- **Auth in its HTTP client:** on a 401, refresh once and retry. Decoding is `@concurrent` under Swift 6.2, off the engine's actor.
 
-**Why these parts, and no more.** Each changes for a different reason: the screen with design, the view model with screen behaviour, the composite with what a `Note` shows, the store and queue with the schema, the sync engine with sync rules, the remote repository with the API. The domain protocol earns a fake for the view model; the data protocols earn fakes for the sync engine's tests. What I'd *not* add: a pass-through use case, a protocol for the view model, a DI container, a generic repository, a sync framework or CRDT library. Constructor injection is enough.
+**Why these parts, and no more.** Each card changes for one reason:
+
+| Card | Changes when |
+|---|---|
+| 1 · Notes screen | the screen's design |
+| 2 · Notes view model | the screen's behaviour |
+| 3 · Notes repository | a storage schema (how note rows read as `Note`) |
+| 4 · Sync status repository | a storage schema (the status row) |
+| 5 · Notes database | a storage schema (tables, transactions) |
+| 6 · Sync engine | a connection's lifecycle (when and in what order sync runs) |
+| 7 · Conflict policy | a product rule (what a conflict becomes) |
+| 8 · Notes API client | an endpoint or payload |
+
+Each protocol earns a fake or a smaller promise. Not added: a use case for saving (a pass-through), a composite (one source), a shared store (the database is shared), a DI container, a CRDT library.
 :::
 
 ::: 7 · Key flows through the sketch
-**Flow 1 — editing offline, then syncing.**
+**Flow 1 — edit offline, then the network comes back.**
 
 ```mermaid
 sequenceDiagram
   participant VM as View model
-  participant C as Composite
+  participant N as Notes repo
   participant DB as Database
   participant S as Sync engine
-  participant R as Server
-  VM->>C: save(note)
-  C->>DB: note + pending change, one transaction
+  participant A as API client
+  VM->>N: save(id, title, body)
+  N->>DB: saveNote, one transaction
   DB-->>VM: notes, "Not synced"
-  Note over S,R: later, the network is back
-  S->>DB: next pending change
-  S->>R: PUT /notes/{id}, base 4, change c7
+  Note over S: network back
+  S->>DB: nextChange()
+  DB-->>S: c7, base 4, frozen
+  S->>A: PUT /notes/{id}, change c7
   alt accepted
-    R-->>S: 200, version 5
-    S->>DB: version 5, remove pending
-    DB-->>VM: notes, synced
+    A-->>S: version 5
+    S->>DB: complete(c7, 5)
   else conflict
-    R-->>S: 409, server copy
-    S->>DB: keep both copies
+    A-->>S: 409, server copy
+    Note over S: ConflictPolicy says keepBoth
+    S->>DB: settleConflict, one transaction
   else no reply
-    Note over S: keep c7, retry it unchanged
+    Note over S: keep c7, retry unchanged
   end
 ```
 
-A timeout doesn't say whether the server saved the change, so the retry sends the same change ID, base version and text. The server answers a repeat with its first answer.
+A timeout doesn't say whether the server saved it, so the retry is identical; the server answers a repeat with its first answer.
 
 **Flow 2 — another device changed a note.**
 
 ```mermaid
 sequenceDiagram
   participant S as Sync engine
-  participant R as Server
+  participant A as API client
   participant DB as Database
-  participant C as Composite
+  participant N as Notes repo
   participant VM as View model
-  S->>R: GET /notes/changes?since=cursor
-  R-->>S: changed notes, tombstones, new cursor
-  S->>DB: apply(changes, cursor), one transaction
-  Note over DB: skips notes with pending edits
-  DB-->>C: notes changed
-  C-->>VM: new snapshot
+  S->>A: GET /notes/changes?since=cursor
+  alt loaded
+    A-->>S: changes, tombstones, new cursor
+    S->>DB: apply(changes, cursor, account)
+    Note over DB: skips notes with pending edits
+    DB-->>N: new rows
+    N-->>VM: new notes
+  else failed
+    A-->>S: error
+    S->>DB: recordStatus(failed)
+    Note over VM: "Couldn't sync", rows stay
+  end
 ```
 
-If the pull fails, nothing is applied and the cursor doesn't move. The screen shows "Couldn't sync", not fewer notes.
+A failed pull applies nothing and keeps the cursor.
 :::
 
 ::: 8 · The server contract
@@ -433,62 +515,63 @@ GET    /v1/notes/changes?since={cursor}&limit=200
            "nextCursor": "…", "hasMore": false }
 
 PUT    /v1/notes/{id}   Idempotency-Key: {changeId}
-       { "title", "body", "baseVersion": 4 }      // null for a new note
+       { "title", "body", "baseVersion": 4 }   // null for a new note
        → 200 { "version": 5 }
-       → 409 { "note": { …the server's copy… } }
+       → 409 { "note": { …server copy…, "deleted": false } }
 
 DELETE /v1/notes/{id}?baseVersion=5   Idempotency-Key: {changeId}
-       → 204, or 409 if it changed since
+       → 204, or 409 with the newer copy
 ```
 
-- **The phone makes the note ID and the change ID.** `PUT` creates or updates. A repeated change ID gets the first answer back, so a retry never applies twice.
-- **`baseVersion`** says "I edited version 4". If the server is past 4, it refuses with 409 instead of overwriting.
-- **The cursor is opaque and the server's.** Ordering and "no change skipped" are the server's promise. The client sends the cursor back untouched, and ignores a change whose version isn't newer than the one it has. Deletes come through the same feed as `"deleted": true`. An expired cursor gets `410 Gone`: do a full resync.
+- **The phone makes the note ID and the change ID.** `PUT` creates or updates; a repeated change ID gets the first answer.
+- **`baseVersion` says "I edited version 4".** If the server is past it, or holds a tombstone, it answers 409.
+- **The cursor is opaque and the server's.** Order is its promise; the client returns it untouched and ignores a change no newer than its copy. Expired: `410 Gone`, full resync. Personal data, never on a shared cache.
 :::
 
-::: 9 · Deep dive — "The same note is edited on the phone and the laptop, both offline. What happens?"
-**Decision: keep both copies. Never lose text.**
+::: 9 · Deep dive — "The same note is edited on the phone and the laptop, both offline."
+**Decision: keep both copies. The rule lives in `ConflictPolicy`.**
 
-1. The phone syncs first: `PUT` with base version 4 is accepted, the note is now version 5.
-2. The laptop syncs: `PUT` with base version 4 gets **409** and the server's version 5.
-3. The laptop keeps the server's copy as the note. Its **latest** local text, including anything typed since the request went out, becomes a new note, "Groceries (conflict copy)", with its own pending change. The note's waiting change is dropped; its text is in the copy.
+1. The phone syncs first: `PUT` with base 4 is accepted; the note is version 5.
+2. The laptop's `PUT` with base 4 gets **409** and the server's version 5.
+3. The policy sees two edits: `keepBoth`. In one transaction the server's copy becomes the note, and the laptop's **latest** text becomes a new note, "Groceries (conflict copy)", with its own pending change.
 4. The user merges by hand, if they care.
 
-Only this note is affected. Nothing typed is rolled back: the newest text survives under a new name.
-
-*Rejected:* last write wins. Simple, and it silently throws away one device's typing. *Later:* merging line by line, when users complain about copies. *Out of this design:* CRDTs or operational transforms, which solve real-time collaboration.
+*Rejected:* last write wins, which silently throws away one device's typing. *Later:* merge edits to different lines. *Out of this design:* CRDTs, which solve real-time collaboration.
 :::
 
 ::: 10 · Deep dive — "The user deletes a note offline. How do the other devices find out?"
 **Decision: a tombstone, not a removed row.**
 
-1. The phone marks the note deleted and hides it, and adds a pending delete.
-2. The sync engine sends `DELETE` with the base version.
+1. The phone marks the note deleted, hides it, and queues a delete, in one transaction.
+2. The engine sends `DELETE` with the base version.
 3. The server keeps a tombstone and returns it in everyone's changes feed.
 4. Other devices apply it: mark deleted, hide.
 
-**Why not just remove the row?** Then the next pull can't tell "deleted here" from "never had it", and the note comes back.
+**Why not remove the row?** A pull couldn't tell "deleted here" from "never had it", and the note would return.
 
-**Edit on one device, delete on another:** whichever arrives second gets 409. Keep the edit; the note reappears, which is safer than losing text.
+**Edit here, delete there.** The policy says an edit beats a delete:
 
-**Cleaning up:** tombstones are purged after a long window (say 30 days). A device offline for longer gets `410` for its cursor and does a full resync, keeping its pending changes.
+- *The delete landed first.* Our `PUT` gets 409 with `deleted: true`. `recreate`: our text returns as a new note, new ID.
+- *The edit landed first.* Our `DELETE` gets 409 with the newer copy. `keepServer`: the note reappears.
+- *Both deleted.* No conflict; the server answers 204.
+
+**Cleaning up:** tombstones are purged after, say, 30 days. A device offline longer gets `410` and resyncs, keeping pending changes.
 :::
 
 ::: 11 · Deep dive — "The app is killed in the middle of syncing."
 **Nothing is lost, and nothing is applied twice.**
 
-- **Killed after saving, before sending.** The note and its pending change were saved together; at next launch the change is sent.
-- **Killed after the server accepted, before we removed the pending change.** At launch we send the frozen change again, same change ID. The server recognises it and returns the first answer, version 5. No 409, no duplicate.
-- **Killed while applying a pull.** The changes and the new cursor are saved in one transaction, so either both landed or neither, and the next pull repeats safely.
+- **After saving, before sending.** Note and change were one transaction; next launch sends it.
+- **After the server accepted, before `complete`.** The frozen change goes again, same change ID; the server returns its first answer. No 409, no duplicate.
+- **Mid-pull.** Changes and cursor are one transaction, so the pull repeats.
 
-**Concurrency:** the database lives behind one `@ModelActor`; the sync engine is one loop, so two syncs never run at once. The view model is on the main actor and only reads finished snapshots.
+**Concurrency:** database and engine are each one app-scoped actor; the view model is on the main actor.
 
-**Stale results.** Cancellation in Swift is cooperative: a reply can still arrive after we cancel. Two guards:
+**The stale-result guard, carried by the account ID.** Cancellation is cooperative, so a reply can land after sign-out; `apply` refuses another account's results. Inside the same transaction it also skips notes edited while the pull was out.
 
-1. Each sync run carries the signed-in account; after sign-out, `apply` refuses results from the old run.
-2. `apply` checks for pending edits *inside* its transaction, so an edit made while the pull was out is never overwritten.
+**Sign-out with pending changes:** warn ("3 notes haven't synced and will be lost"), then stop the engine, delete the database.
 
-**Background.** `UIApplication.beginBackgroundTask` gives a push a little time to finish as the user leaves. A `BGAppRefreshTask` (via `BGTaskScheduler`) may pull now and then, but the system decides if and when. A bonus, never relied on.
+**Background.** `beginBackgroundTask(withName:expirationHandler:)` gives a push a little time as the user leaves. A `BGAppRefreshTask` from `BGTaskScheduler` may pull, but the system decides if and when. A bonus.
 :::
 
 ::: 12 · Failure modes, production and scale
@@ -500,37 +583,37 @@ Only this note is affected. Nothing typed is rolled back: the newest text surviv
 | Push times out | Keep the change, retry it unchanged with backoff |
 | Pull fails | Apply nothing, keep the cursor; "Couldn't sync", rows stay |
 | First sync fails on a new device | "Couldn't load your notes yet", never "No notes" |
-| 409 conflict | Server copy kept, our latest text as a conflict copy |
-| Refused for good (4xx, not 409) | Stop retrying that change; "Couldn't sync" on that note only |
-| Token expired (401) | Refresh once and retry; if that fails, sign in again, keep pending |
-| Too many requests (429) | Wait for `Retry-After`, then resume |
+| 409 conflict | The policy decides; no text is lost |
+| Refused for good (other 4xx) | Stop retrying; "Couldn't sync" on that note only |
+| 401 | Refresh once and retry; else sign in again, keep pending |
+| 429 | Wait for `Retry-After` |
 | Cursor expired (410) | Full resync, keeping pending changes |
 
 **Production notes** (short, not on the board)
 
-- **Networking:** a timeout per request; retry timeouts and 5xx with backoff, safe because every write has a change ID. `NWPathMonitor` is a hint to retry now, not a promise the server is reachable. Cancel the sync run on sign-out.
-- **Caching:** the database *is* the cache; the changes feed isn't HTTP-cached.
-- **Metrics:** sync latency (save to server ack), queue depth and oldest pending age, sync failure rate, conflict rate, full resyncs. No note text in logs.
-- **Security:** HTTPS; tokens in the Keychain. Keep the default data-protection class (until first unlock): full `complete` protection locks the database while the phone is locked, so background sync fails. Delete the database on sign-out.
+- **Networking:** timeouts; retry timeouts and 5xx with backoff, safe because every write has a change ID. `NWPathMonitor` is a hint to try now, not a promise.
+- **Caching:** the database *is* the cache.
+- **Metrics:** save-to-ack latency, oldest pending age, sync failures, conflict rate, full resyncs. No note text in logs.
+- **Security:** tokens in the Keychain; the database file uses `completeUntilFirstUserAuthentication`, because `complete` locks it while the phone is locked and background sync fails.
 
-**Scale, back of the envelope.** Use the interviewer's numbers; the shape is what matters.
+**Scale, back of the envelope**, with the interviewer's numbers:
 
 ```text
-notes per user × average note size         = local storage
-users × saves synced a day × payload size  = sync traffic
+notes per user × average note size        = local storage
+users × saves synced a day × payload size = sync traffic
 ```
 
-10,000 notes × 2 KB is 20 MB: fine on the phone, too much to download at every launch, hence the changes feed. Five million users × 30 saves × 2 KB is about 300 GB of uploads a day; debouncing and one waiting change per note keep it down, diffs come next.
+10,000 notes × 2 KB is 20 MB: fine on the phone, too much to download each launch, hence the changes feed. Five million × 30 × 2 KB is about 300 GB a day; debouncing keeps it down.
 
 **Grow only when asked**
 
 ```text
-Another screen or a widget   → free: it reads the same database
-Seconds-fresh across devices → a silent push that starts a pull (also not guaranteed)
+A second screen or a widget  → watches the same database, no store
+Seconds-fresh across devices → a silent push that starts a pull
 Ten thousand notes           → paged pulls, a lazy list
 Long notes                   → send diffs, not whole bodies
 Attachments                  → separate uploads, referenced from the note
-Collaboration                → a different design (CRDT or OT), only if asked
+Collaboration                → a different design (CRDT or OT)
 ```
 :::
 
@@ -540,117 +623,125 @@ Answer out loud first, then open.
 ### Scope and architecture
 
 <details>
-<summary>"Where does the truth live?"</summary>
-
-On the phone, in the database. The screen only reads and writes there; the server is something we catch up with.
-</details>
-
-<details>
 <summary>"Walk me through the layers."</summary>
 
-Presentation: the notes screen and view model. Domain: the notes repository protocol and the Note model. Data: the composite repository, the database, the pending queue, the sync engine and the remote repository.
+Presentation: screen and view model. Domain: the models, two repository protocols, the conflict policy. Data: two local repositories, the database, the engine, the API client.
 </details>
 
 <details>
 <summary>"Why no use case?"</summary>
 
-The screen only watches, saves and deletes, one call each. The one rule, conflicts, lives in the sync engine, the only part that meets them.
+Watch, save and delete have no product rule; a use case would only pass them through. Conflicts have no user intent and no I/O, so they're a pure policy.
 </details>
 
 <details>
-<summary>"What does the composite combine?"</summary>
+<summary>"Why is the conflict rule in the domain and not in the sync engine?"</summary>
 
-The notes from the database and the pending changes, so each Note says whether it has synced.
+A PM states it without naming HTTP. In the engine it would hide in a loop and change whenever the sync order does.
 </details>
 
 <details>
 <summary>"Show me dependency inversion."</summary>
 
-The notes repository protocol lives in the domain; the composite in the data layer implements it. The arrow points up, so the domain never imports SwiftData or networking.
+The two repository protocols live in the domain; cards 3 and 4 implement them. Both arrows point up, so the view model never imports SQLite or networking.
 </details>
 
 <details>
-<summary>"Why is the sync engine not behind the repository protocol?"</summary>
+<summary>"Where does mapping happen?"</summary>
 
-The screen never asks for a sync; it just saves. Syncing is a background job started at launch.
+Rows → models in cards 3 and 4, DTO → record in a pure mapper inside the engine. The client returns DTOs; the database knows records only.
+</details>
+
+<details>
+<summary>"Where does the combined state come from? Is there a composite?"</summary>
+
+No composite: one source, and the pending flag is a join inside it. The view model combines notes and sync status, since only it needs both.
+</details>
+
+<details>
+<summary>"Why isn't sync status part of the notes stream?"</summary>
+
+It's the engine's state, not a note's. Its own protocol keeps each promise, and each fake, small.
 </details>
 
 ### Saving and the queue
 
 <details>
-<summary>"Why one transaction?"</summary>
+<summary>"Why does one database own both the notes and the queue?"</summary>
 
-So an edit can never exist without its pending change. Otherwise a crash between the two writes would lose the sync forever.
+So a save is one transaction. Two databases can't commit together; a crash between them leaves an edit that never syncs.
 </details>
 
 <details>
 <summary>"The user edits a note ten times offline."</summary>
 
-There's one pending change per note, holding "upload the latest". Ten edits, one request.
-</details>
-
-<details>
-<summary>"A PUT times out. Did the server save it?"</summary>
-
-We can't know. We resend the same frozen change with the same change ID; the server returns its first answer if it already saved it.
+One waiting change per note: "upload the latest". Ten edits, one request.
 </details>
 
 <details>
 <summary>"The user keeps typing while a change is in flight."</summary>
 
-The new text becomes the note's waiting change, behind the one in flight. It's sent next, with the version the first one got back.
+It becomes the waiting change, sent next with the version the first one got back.
 </details>
 
 <details>
-<summary>"An old change fails after a newer edit. Do you roll back?"</summary>
+<summary>"A PUT times out. Did the server save it?"</summary>
 
-No. The database already holds the newer text, and nothing reverts it. A conflict keeps the user's latest text as a copy; a refusal marks the note "Couldn't sync".
+We can't know. We resend the frozen change, same ID; the server returns its first answer.
 </details>
 
 <details>
 <summary>Follow-up chain: "The app is killed."</summary>
 
-1. *"Killed right after saving."* → The pending change was saved with the note; it's sent at next launch.
-2. *"Killed after the server accepted."* → We resend the same change ID; the server returns its first answer.
-3. *"Killed mid-pull."* → Changes and cursor are saved together, so the pull just repeats.
+1. *"Right after saving."* → The change was saved with the note; it goes at next launch.
+2. *"After the server accepted."* → Same change ID again; the server returns its first answer.
+3. *"Mid-pull."* → Changes and cursor are one transaction, so the pull repeats.
 </details>
 
 ### Sync and the API
 
 <details>
-<summary>"What's inside the cursor, and what if it expires?"</summary>
+<summary>"What's in the cursor, and what if it expires?"</summary>
 
-It's opaque: the server might encode a position in its change log. If it's too old the server says so (410), and we do a full resync, keeping pending changes.
+Opaque, maybe a position in the server's log. Too old gets 410: full resync, keeping pending changes.
 </details>
 
 <details>
 <summary>"Can the feed send a change twice, or out of order?"</summary>
 
-Ordering is the server's promise, not something the client can check. The client applies a change only if its version is newer than the one it has, so a repeat is harmless.
+Order is the server's promise. The client applies a change only if its version is newer, so a repeat is harmless.
 </details>
 
 <details>
-<summary>"Push first or pull first?"</summary>
+<summary>"A pulled change arrives for a note with unsent edits."</summary>
 
-Push first, so the server has our edits before we ask for everyone else's.
-</details>
-
-<details>
-<summary>"A pulled change arrives for a note we have unsent edits on."</summary>
-
-Skip it; our pending change will be pushed and the server's answer, accept or conflict, settles it.
+`apply` skips it inside its transaction. Our push goes, and the server's answer, accept or 409, settles it.
 </details>
 
 <details>
 <summary>"When does sync run? Every 15 minutes in the background?"</summary>
 
-At launch, after each save, and when the network comes back, one loop at a time. Background refresh runs when `BGTaskScheduler` chooses, or not at all, so it's a bonus.
+At launch, on foreground, when the network returns, and when a change is queued. Background refresh runs when `BGTaskScheduler` chooses, or not at all.
+</details>
+
+<details>
+<summary>"How does the engine know there's a new save?"</summary>
+
+It watches the database's pending count; the repository never calls it.
 </details>
 
 <details>
 <summary>"The sync fails. What does the screen show?"</summary>
 
-The notes it has, plus "Couldn't sync" and the last-synced time. On a new device with no completed sync, "Couldn't load your notes yet", never "No notes".
+Its notes, "Couldn't sync" and the last-synced time. On a new device, "Couldn't load your notes yet", never "No notes".
+</details>
+
+<details>
+<summary>Follow-up chain: "Sign-out."</summary>
+
+1. *"Sign-out mid-sync."* → Stop the engine; a reply can still arrive.
+2. *"It arrives."* → It carries the old account, and `apply` refuses it. That's the stale-result guard.
+3. *"There are unsent changes."* → Warn that they'll be lost, then delete the database.
 </details>
 
 ### Conflicts and deletes
@@ -658,60 +749,41 @@ The notes it has, plus "Couldn't sync" and the last-synced time. On a new device
 <details>
 <summary>"Two devices edit the same note offline."</summary>
 
-The second `PUT` gets 409 with the server's copy. We keep both: the server's as the note, ours as a conflict copy. No text is lost.
+The second `PUT` gets 409. The policy says keep both: the server's copy as the note, our latest text as a conflict copy.
 </details>
 
 <details>
-<summary>"How are deletes synced?"</summary>
+<summary>"Edit on one device, delete on another."</summary>
 
-With tombstones: the note is marked deleted, the server keeps the marker, and the changes feed tells other devices.
-</details>
-
-<details>
-<summary>Follow-up chain: "Merging."</summary>
-
-1. *"Users hate conflict copies."* → Merge automatically when the two edits touch different lines.
-2. *"They touch the same line."* → Fall back to a conflict copy.
-</details>
-
-### Storage, testing and change
-
-<details>
-<summary>"The user signs out mid-sync."</summary>
-
-Cancel the run, but cancellation is cooperative, so a reply can still land. Each run carries the account, and apply refuses results from an old run.
-</details>
-
-<details>
-<summary>"What would you measure in production?"</summary>
-
-Sync latency, queue depth and oldest pending age, sync failures, conflict rate, full resyncs. Never note text.
-</details>
-
-<details>
-<summary>"What changes at 10x?"</summary>
-
-Mostly the server. On the client: paged pulls, diffs for long notes, backing off on 429s.
-</details>
-
-<details>
-<summary>"Why not a sync framework or a CRDT?"</summary>
-
-One owner per note and "never lose text" are met by versions and conflict copies. A CRDT pays off for real-time collaboration, which wasn't asked for.
+An edit beats a delete. A `PUT` on a tombstone comes back as a new note; a `DELETE` against a newer edit loses, and the note reappears.
 </details>
 
 <details>
 <summary>"How do you test conflicts?"</summary>
 
-A fake remote that answers 409 with a known copy; check the database ends with both notes.
+The policy with plain inputs. The engine with a fake API answering 409 and an in-memory database: both notes exist.
+</details>
+
+### Change and scale
+
+<details>
+<summary>"Why not SwiftData?"</summary>
+
+On iOS 17 a `@ModelActor` gives no change history; SwiftData history is iOS 18. Then I'd reconsider.
+</details>
+
+<details>
+<summary>"What changes at 10x?"</summary>
+
+Mostly the server. Client: paged pulls, diffs, honouring 429s.
 </details>
 
 <details>
 <summary>Follow-up chain: "A second screen."</summary>
 
-1. *"Add a widget showing the latest notes."* → It reads the same database, moved into an App Group container.
-2. *"Does it see an edit at once?"* → In the app, yes, by watching; the widget after `WidgetCenter` reloads its timeline.
-3. *"Any extra sync code?"* → None. The database is the truth, so every reader agrees.
+1. *"Add a widget with the latest notes."* → It reads the same database, moved into an App Group container.
+2. *"Does it see an edit at once?"* → The app does, by watching; the widget after `WidgetCenter` reloads its timeline.
+3. *"Do you need a shared store now?"* → No. The database is the shared state; a store would only duplicate it.
 </details>
 :::
 
@@ -723,13 +795,13 @@ A fake remote that answers 409 with a known copy; check the database ends with b
 | 3 | Give a trade-off for each choice | |
 | 4 | Say out of scope first; separate required from later | |
 | 5 | Say the idea, list the parts, then sketch | |
-| 6 | Keep the sketch to about nine cards | |
-| 7 | Make the phone's database the truth; note + pending change in one transaction | |
+| 6 | Keep the sketch to nine type cards, one line each | |
+| 7 | Make the phone's database the truth, one owner for note + change | |
 | 8 | Name the three endpoints; call the cursor opaque and server-owned | |
 | 9 | Send each note's changes in order, one in flight, with a change ID | |
-| 10 | Use versions and a 409 for conflicts; never roll back newer text | |
-| 11 | Sync deletes with tombstones | |
-| 12 | Treat a failed sync as unknown, not empty | |
+| 10 | Put the conflict rule in a pure policy; never lose text | |
+| 11 | Sync deletes with tombstones; say what beats what | |
+| 12 | Keep sync status off the notes stream; failed is unknown, not empty | |
 | 13 | Survive being killed; call background sync opportunistic | |
 | 14 | Land the recap inside 60 seconds | |
 
@@ -737,5 +809,5 @@ A fake remote that answers 409 with a known copy; check the database ends with b
 :::
 
 ::: 15 · The 60-second recap
-The phone's database is the truth, so the app works fully offline and never waits for the network. Every save writes the note and a pending change in one transaction; ten edits to one note stay one pending change. A composite repository combines notes and pending changes, so each note shows whether it has synced. One background sync engine pushes pending changes with `PUT` and `DELETE`, one at a time per note, each with the version it was based on and a change ID so retries are harmless. Then it pulls `GET /notes/changes?since=` with the server's opaque cursor and applies changes and the new cursor together. A 409 means a conflict: keep both copies, never lose text. Deletes are tombstones. A failed sync means "not up to date", never "no notes". Being killed at any step is safe, and background refresh is a bonus the system schedules, not a promise.
+The phone's database is the truth, so the app never waits for the network. One database actor owns notes, tombstones and pending changes, so a save writes note and change in one transaction. Notes and sync status are separate streams the view model combines, so a failed sync reads "not up to date", never "no notes". One background engine pushes with `PUT` and `DELETE`, one change at a time, each with its base version and a change ID so retries are harmless, then pulls `GET /notes/changes?since=` and applies changes and cursor together. On a 409, a pure conflict policy decides: keep both copies, and an edit beats a delete. Being killed at any step is safe, and background refresh is a bonus.
 :::

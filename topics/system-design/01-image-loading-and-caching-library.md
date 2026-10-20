@@ -8,15 +8,21 @@ sources:
 - WWDC21 · Make blazing fast lists and collection views | https://developer.apple.com/videos/play/wwdc2021/10252/
 - WWDC19 · Advances in networking, part 1 (Low Data Mode) | https://developer.apple.com/videos/play/wwdc2019/712/
 - Apple · CGImageSourceCreateThumbnailAtIndex | https://developer.apple.com/documentation/imageio/cgimagesourcecreatethumbnailatindex(_:_:_:)
-- Apple · UIImage.preparingForDisplay() | https://developer.apple.com/documentation/uikit/uiimage/3750834-preparingfordisplay
-- Apple · NSCache | https://developer.apple.com/documentation/foundation/nscache
+- Apple · kCGImageSourceThumbnailMaxPixelSize | https://developer.apple.com/documentation/imageio/kcgimagesourcethumbnailmaxpixelsize
+- Apple · kCGImageSourceShouldCacheImmediately | https://developer.apple.com/documentation/imageio/kcgimagesourceshouldcacheimmediately
+- Apple · NSCache.totalCostLimit | https://developer.apple.com/documentation/foundation/nscache/totalcostlimit
+- Apple · NSCache.setObject(_:forKey:cost:) | https://developer.apple.com/documentation/foundation/nscache/setobject(_:forkey:cost:)
+- Apple · didReceiveMemoryWarningNotification | https://developer.apple.com/documentation/uikit/uiapplication/didreceivememorywarningnotification
+- Apple · URLCache | https://developer.apple.com/documentation/foundation/urlcache
+- Apple · AsyncImage | https://developer.apple.com/documentation/swiftui/asyncimage
+- Apple · task(id:name:priority:file:line:_:) | https://developer.apple.com/documentation/swiftui/view/task(id:name:priority:file:line:_:)
+- Apple · URLSessionTask.priority | https://developer.apple.com/documentation/foundation/urlsessiontask/priority
 - Apple · allowsConstrainedNetworkAccess | https://developer.apple.com/documentation/foundation/urlsessionconfiguration/allowsconstrainednetworkaccess
 - Apple · UICollectionViewDataSourcePrefetching | https://developer.apple.com/documentation/uikit/uicollectionviewdatasourceprefetching
-- SE-0461 · Run nonisolated async functions on the caller's actor by default | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md
-- Nuke · request coalescing and the pipeline | https://github.com/kean/Nuke
+- SE-0461 · Run nonisolated async functions on the caller's actor by default (@concurrent) | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md
 ---
 
-*A recurring senior mobile prompt. The answer below stays small on purpose: seven parts, one shared download per picture, one idea per part.*
+*A recurring senior mobile prompt. The answer stays small: six cards, two keys said the same way everywhere, one download per picture, decoding off the main thread.*
 
 > **Interviewer:** "We show a lot of images — feeds, avatars, a photo grid. Design the image loading library we'd build for that. Something like Kingfisher or Nuke."
 
@@ -28,52 +34,53 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 |---|---|---|
 | 0:00–0:02 | The prompt | Repeat it back in one sentence |
 | 0:02–0:07 | Clarify | Ask yours, then read section 1 |
-| 0:07–0:12 | Scope | Out of scope first, then features, then what must feel good |
-| 0:12–0:24 | High level | The idea · the parts · the sketch · each part · two flows |
+| 0:07–0:12 | Scope | Out of scope first, then required, then later |
+| 0:12–0:24 | High level | The idea · the parts · the sketch · one line each · two flows |
 | 0:24–0:40 | Deep dives | The interviewer picks one of sections 9–11 |
 | 0:40–0:45 | Recap | Follow-ups, then the 60-second summary |
 
 ## What this question is really testing
 
 - **The cost of a decoded image:** width × height × 4 bytes, whatever the file size.
-- **One download for two rows** that want the same picture.
-- **Cancelling on cell reuse**, without killing a download another row still needs.
-- **Shrinking off the main thread**, so decoding doesn't stutter scrolling.
+- **Cache keys that are true.** The CDN sends different bytes per width, so the key names the width.
+- **One download for two rows** that want the same picture, and cancelling without killing a download another row still needs.
+- **Decoding off the main thread**, at the size shown, so scrolling never waits.
 - **Knowing when to stop.** `AsyncImage`, `URLCache` and `NSCache` are fine for a small app. Say when.
 
-**Traps:** designing the CDN; a cache with no limit; forgetting cancellation; decoding on the main thread; calling prefetching a guarantee; saying "the app's memory stays flat"; listing Kingfisher's features instead of designing.
+**Traps:** designing the CDN; a cache with no byte limit; "bytes are the same at every size" when the CDN resizes; decoding on the main thread or inside the pipeline actor; calling prefetching a guarantee; "the app's memory stays flat".
 
 ::: Words used in this chapter
-- **Library** — reusable code the whole app calls. Here, the code that loads every picture.
-- **Pixel** — one dot on the screen. A picture's pixel size is how many dots wide and tall it is.
-- **Decode** — unpack a compressed file (JPEG, HEIC) into pixels the screen can draw. Unpacked, it's much bigger.
-- **Downsample** — decode straight to a smaller size, so the big version never exists.
-- **Memory vs disk** — memory is fast, small and emptied when the app quits. Disk is slower, bigger and survives.
-- **Cache** — a kept copy, so the next time is fast. *Eviction* throws old entries out when it's full.
-- **CDN** — servers that keep copies of files close to users. Ours can also resize a picture before sending it.
-- **Main thread** — the one lane that draws the screen. Slow work there freezes scrolling.
-- **Actor** — a Swift object that runs one piece of its code at a time, so its data is never changed twice at once.
-- **Protocol** — a promise of what a part can do, without saying how. A fake can keep the same promise in tests.
-- **Prefetch** — fetch pictures just before they come into view.
-- **Deduplicate** — when two callers want the same thing, do the work once and give both the result.
+- **Repository** — the one owner of one kind of data. It turns the server's format into the app's model.
+- **Composite** — a repository that only reads: it asks two repositories and combines their answers into one model.
+- **Store** — in-memory state that several screens show at once. Here, the memory cache.
+- **Use case** — one user intent with a product rule, like "only the latest tap counts".
+- **View model** — the screen's brain. It owns the screen's state and hands the screen one view state.
+- **Decode, downsample** — decoding unpacks a JPEG into pixels; downsampling decodes straight to a smaller size, so the big version never exists.
+- **Width bucket** — one of a few widths the CDN serves (160, 320, 640, 1280), so nearby sizes share one file.
+- **Fetch URL** — the picture's URL plus its bucket. The disk cache and downloads use it as their key.
+- **Image key** — the fetch URL plus the pixel size it was decoded at. The memory cache uses it.
+- **Actor** — a Swift object that runs one piece of its code at a time.
+- **Coalesce** — when two callers want the same thing, do the work once and give both the result.
 :::
 
 ::: 1 · The interviewer answers your clarifying questions
-**"One app, or an SDK other teams adopt?"** → *One app, but shaped so it could become a package.*
+**"One app, or an SDK other teams adopt?"** → *One app, shaped so it could become a package.*
 
-**"Where do images come from?"** → *The network. A few bundled assets, but skip those.*
+**"Where do images come from?"** → *The network. Skip bundled assets.*
 
-**"Who uses it?"** → *UIKit image views and SwiftUI. Sometimes code that wants an image to share.*
+**"Who calls it?"** → *SwiftUI views, some UIKit image views, and sometimes code that wants an image to share.*
 
-**"Heaviest screen?"** → *A thumbnail grid you can fling through, plus a full-screen detail view.*
+**"Heaviest screen?"** → *A thumbnail grid you can fling through, and a full-screen view when you tap one.*
 
 **"Can the server resize?"** → *Yes. The CDN takes `?w=` and sends `ETag` and `Cache-Control`.*
 
 **"Offline?"** → *Pictures the user has seen should still show.*
 
-**"Any public images, or private ones too?"** → *Public for now. Profile photos may go private later.*
+**"Public or private images?"** → *Public for now. Profile photos may go private later.*
 
-**"How big?"** → *Ten million users a day, each sees about 200 pictures. A grid shows about 30 at once.*
+**"How big?"** → *Ten million users a day, about 200 pictures each. A grid shows about 30 at once.*
+
+**"Minimum OS?"** → *iOS 17, SwiftUI, Swift 6.*
 
 **"What hurts today?"** → *Stutter on older phones, and the app gets killed for using too much memory.*
 :::
@@ -83,14 +90,14 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 
 **Required for the prompt**
 
-1. Load an image by URL, at the size it will be shown, into a view or back to a caller.
+1. Load a picture by URL, at the size it will be shown, into a view or back to a caller.
 2. Cache in memory, and on disk so seen pictures show offline.
-3. One download per picture, even when two rows ask.
-4. Cancel when a row no longer needs the picture.
+3. One download per picture and width, even when two rows ask.
+4. Cancel when no row needs the picture any more.
 
-**What must feel good:** smooth (no decoding or disk work on the main thread) · bounded *cache* memory (a byte limit) · no repeat download while a picture is loading or cached · a reused row only shows the picture for its current request.
+**What must feel good:** smooth (no decoding or disk work on the main thread) · bounded *cache* memory · no repeat download · no wrong picture in a reused row.
 
-**Production considerations** (say them, don't draw them): prefetching as an optimization, visible-first priority, freshness from the CDN's cache headers, metrics, HTTPS and private URLs. They're in sections 10 and 12.
+**Production considerations** (say, don't draw): prefetching, visible-first priority, freshness from the CDN's headers, metrics, private URLs. See sections 10–12.
 
 **Optional follow-ups** (add only when asked):
 
@@ -106,23 +113,27 @@ Other teams adopt it           → a Swift package with a small public API
 :::
 
 ::: 3 · The idea, in 30 seconds — before you draw anything
-> *"A view asks for a picture by URL and by the size it will show it at. One pipeline checks a memory cache with a byte limit, and if the same picture at the same size is already loading for another row, it waits for that load instead of starting a second. On a miss, it reads the bytes from a disk cache or downloads them from the CDN at a width bucket, shrinks them to the display size off the main thread, and keeps the result in memory. It's a library, so three frames of its own: the API callers touch, the core that coordinates, and the I/O that does the work."*
+> *"A view asks for a picture by URL and by its size in pixels. One pipeline turns that into a fetch URL, the picture plus the smallest CDN width bucket that covers it, `GET /images/{id}?w={width}`. It checks a memory cache keyed by fetch URL plus pixel size, then a disk cache keyed by the fetch URL, then downloads. If another row is already loading the same thing, it joins that load. A decoder shrinks the bytes to the pixel size off every actor, and the result goes into memory. It's a library, so three frames: the API callers touch, the core that coordinates, and the I/O that does the work."*
 :::
 
 ::: 4 · What we need — the components, before the sketch
 | # | Part | Type | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Image view** | `setImage` · `LazyImage` | API | Shows one request in one view. |
-| 2 | **Image pipeline** | `ImagePipeline` | Core | Coordinates loads, one per picture. |
-| 3 | **Memory cache** | `ImageMemoryCache` | Core | Keeps pictures ready to draw. |
-| 4 | **Disk cache** | `ImageDiskCache` | I/O | Keeps downloaded files on the phone. |
-| 5 | **Data loader** | `DataLoader` «protocol» | Core | Promises bytes for a URL. |
-| 6 | **Network loader** | `NetworkDataLoader` | I/O | Downloads the bytes. |
-| 7 | **Decoder** | `ImageDecoder` | I/O | Turns bytes into a small picture. |
+| 1 | **Image view** | `LazyImageView` | API | Shows one picture in one view; cancels on reuse. |
+| 2 | **Image pipeline** | `CoalescingImagePipeline` | Core | Memory → disk → network → decode, one load per key. |
+| 3 | **Memory cache** | `NSCacheImageMemoryCache` | Core | Decoded pictures by image key, within a byte budget. |
+| 4 | **Disk cache** | `FileImageDiskCache` | I/O | Compressed bytes by fetch URL, with a size cap. |
+| 5 | **Network loader** | `NetworkDataLoader` | I/O | `GET /images/{id}?w={width}` → bytes. |
+| 6 | **Decoder** | `ImageIODecoder` | I/O | Bytes → a picture at the pixel size. |
+| chip | **Disk cache** | `ImageDiskCache` | Core | The promise card 4 keeps. |
+| chip | **Data loader** | `DataLoader` | Core | The promise card 5 keeps. |
+| chip | **Decoder** | `ImageDecoder` | Core | The promise card 6 keeps. |
 
-Not on the list yet: a file loader, a disk index, an auth header, image processing, metrics. *"I'll add those if we go there."*
+Six cards, three chips.
 
-No use case and no composite here: it's a library with no app rules and no model built from several sources.
+**A library's roles**, with their app twins: the **pipeline** coordinates, the **memory cache** is a store of pixels, the **disk cache** a database of bytes, the **loader** a client, the **decoder** a platform adapter. No repository, composite or use case: no app model, no product intent.
+
+**Not drawn:** `ImageURLBuilder`, a pure helper with its own protocol that the pipeline is given (it changes with the CDN, not with the pipeline's rules). **Not on the list yet:** a file loader, a disk index in SQLite, auth headers, processing, metrics.
 :::
 
 ::: 5 · The sketch
@@ -130,190 +141,268 @@ No use case and no composite here: it's a library with no app rules and no model
 flowchart TB
   subgraph A["API"]
     View["`**1 · Image view**
-setImage · LazyImage`"]
+LazyImageView`"]
   end
   subgraph C["CORE"]
     Pipe["`**2 · Image pipeline**
-ImagePipeline`"]
+CoalescingImagePipeline
+one load per key`"]
     Mem["`**3 · Memory cache**
-ImageMemoryCache`"]
-    Loader["`**5 · Data loader**
-«protocol»`"]
+NSCacheImageMemoryCache
+fetch URL + size`"]
+    DiskP["`«protocol»
+ImageDiskCache`"]
+    LoadP["`«protocol»
+DataLoader`"]
+    DecP["`«protocol»
+ImageDecoder`"]
   end
   subgraph IO["I/O"]
     Disk["`**4 · Disk cache**
-ImageDiskCache`"]
-    Net["`**6 · Network loader**
-NetworkDataLoader`"]
-    Dec["`**7 · Decoder**
-ImageDecoder`"]
+FileImageDiskCache
+fetch URL`"]
+    Net["`**5 · Network loader**
+NetworkDataLoader
+GET /images/{id}?w={width}`"]
+    Dec["`**6 · Decoder**
+ImageIODecoder
+@concurrent`"]
   end
   View -- "request → image" --> Pipe
   Pipe -- "key → image" --> Mem
-  Pipe -- "URL → bytes" --> Loader
-  Loader ~~~ Net
-  Net -. "implements" .-> Loader
-  Mem ~~~ Disk
-  Pipe -- "URL → bytes" --> Disk
-  Pipe -- "bytes → image" --> Dec
+  Pipe -- "URL → bytes" --> DiskP
+  Pipe -- "URL → bytes" --> LoadP
+  Pipe -- "bytes → image" --> DecP
+  Mem ~~~ DiskP
+  DiskP ~~~ LoadP
+  LoadP ~~~ DecP
+  DiskP ~~~ Disk
+  Disk -. "implements" .-> DiskP
+  LoadP ~~~ Net
+  Net -. "implements" .-> LoadP
+  DecP ~~~ Dec
+  Dec -. "implements" .-> DecP
   class View pres
-  class Pipe,Mem,Loader dom
+  class Pipe,Mem,DiskP,LoadP,DecP dom
   class Disk,Dec data
   class Net net
 ```
 
-**How to read it.** A solid arrow points from the part that asks to the part that answers: *request → reply*. The dashed arrow means *implements*. On a miss the pipeline tries memory, then disk, then the network, then decodes.
+**How to read it.** A solid arrow points from the asker to the answerer: *request → reply*. Dashed arrows mean *implements*. On a miss the pipeline asks memory, then disk, then the network, then the decoder.
 
-**Dependency inversion, in one line.** The core writes the promise (card 5); the network loader in I/O keeps it (card 6). The arrow points **up**, so the core never imports networking.
+**Dependency inversion, in one line.** The core writes the three promises (the chips); I/O keeps them, so every dashed arrow points **up** and the core never imports networking, the file system or ImageIO.
 
-**One owner per source.** Memory, disk and network each have their own card. The pipeline owns none of them: it only decides which to ask, in order, like a composite.
+**One owner per source.** Memory, disk and network each have one card. The pipeline only decides the order to ask.
 
-**On Miro:** three frames (blue, purple, green), seven cards, six arrows. Point at card 2 and say: *"this is where two rows share one download."*
+**No separate store:** the memory cache already is the one place every screen's pictures live.
+
+**On Miro:** three frames (blue, purple, green), six cards, three chips, five solid arrows. Point at card 2: *"this is where two rows share one download."*
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
-Every part passes around one value:
+**The values everyone passes.** Two keys, said the same way everywhere.
 
 ```swift
+struct PixelSize: Hashable, Sendable { let width, height: Int }
+
+/// What a caller asks for. Equality is URL + size only.
 struct ImageRequest: Hashable, Sendable {
+    /// The picture, without a width. The pipeline adds the bucket.
     let url: URL
-    /// Display size in pixels (points × screen scale), nil = full size
-    let pixelSize: CGSize?
-    /// Visible rows high, prefetch low
-    let priority: Priority
+    /// Points × screen scale, worked out by the view
+    let pixelSize: PixelSize
+}
+
+/// Not part of the request, so a prefetch and a visible row match
+enum ImagePriority: Sendable { case visible, prefetch }
+
+/// The memory cache's key, and the decode's
+struct ImageKey: Hashable, Sendable {
+    /// url + "?w=" bucket: the disk cache's and the download's key
+    let fetchURL: URL
+    let pixelSize: PixelSize
 }
 ```
 
-### 1 · Image view (`setImage`, `LazyImage`)
+### 1 · Image view (`LazyImageView`)
 
-**Job:** the one line a screen calls to show a picture. It cancels the old request when the row is reused.
+**Job:** the one line a screen writes to show a picture. It turns points into pixels and drops results for an old request.
 
 **Interface:**
 
 ```swift
-extension UIImageView {
-    /// nil cancels and clears
-    @MainActor func setImage(_ request: ImageRequest?)
+struct LazyImageView: View {
+    /// Reads the pipeline and displayScale from the environment
+    init(url: URL, size: CGSize)
 }
 
-struct LazyImage: View {
-    init(request: ImageRequest)
+extension UIImageView {
+    /// nil cancels and clears
+    @MainActor func setImage(url: URL?, pipeline: ImagePipeline)
 }
 ```
 
 **Choices:**
 
-- **It checks the memory cache first, synchronously**, so a cached picture shows in the same frame with no flicker.
-- **It keeps its current request as a token** and, before setting a result, checks the result's request still equals it. Cancelling is cooperative, so a late result for the previous row can still arrive; the check drops it.
-- `LazyImage` uses `.task(id: request)`: SwiftUI cancels the load when the request changes or the view disappears, and starts it when the view appears.
+- **It asks the memory cache synchronously first**, so a cached picture shows in the same frame, with no flicker.
+- **It keeps its current request as a token** and sets a result only if it still matches. Cancellation is cooperative, so a late result for the old row can still arrive; this check is the stale-result guard.
+- **SwiftUI:** `.task(id: request)` starts the load on appear and cancels it on disappear or a new request.
 
-### 2 · Image pipeline (`ImagePipeline`)
+### 2 · Image pipeline (`CoalescingImagePipeline`)
 
-**Job:** every request goes through it. It checks memory, joins a load already running for the same picture, or starts one.
-
-**Interface:**
+**Job:** every request goes through it. It picks the fetch URL, checks memory, joins a load already running, or runs one: disk, then network, then decode.
 
 ```swift
-protocol ImagePipelineType: Sendable {
-    /// Synchronous memory lookup, safe on the main thread
+protocol ImagePipeline: Sendable {
+    /// Memory only. Synchronous, safe on the main thread.
     func cachedImage(for request: ImageRequest) -> UIImage?
-    func image(for request: ImageRequest) async throws -> UIImage
-    /// Optional speed-up at low priority; correctness never depends on it
+    /// Throws the load's error, or CancellationError when this
+    /// caller's task is cancelled. Others waiting keep the load.
+    func image(for request: ImageRequest,
+               priority: ImagePriority) async throws -> UIImage
+    /// Best effort. Correctness never depends on it.
     func prefetch(_ requests: [ImageRequest])
     func cancelPrefetch(_ requests: [ImageRequest])
 }
+
+actor CoalescingImagePipeline: ImagePipeline {
+    init(memory: ImageMemoryCache, disk: ImageDiskCache,
+         loader: DataLoader, decoder: ImageDecoder,
+         urls: ImageURLBuilder)
+}
+
+/// Not drawn. Pure: the smallest bucket ≥ the pixel width.
+protocol ImageURLBuilder: Sendable {
+    func fetchURL(for request: ImageRequest) -> URL
+}
 ```
 
 **Choices:**
 
-- **An actor that only keeps the books.** It holds a table of running loads, one per URL + size. It never decodes, or every decode in the app would queue behind it.
-- **A running load is shared.** It stops only when the last caller waiting for it leaves (deep dive 9).
-- **`async throws`**, so the share sheet and tests use the same path as the views. *Rejected:* `AsyncImage` alone. It has no shared memory cache we control and no downsampling. Fine for one screen.
+- **The actor keeps only the in-flight tables:** downloads by fetch URL, decodes by image key, each with a count of who waits. `cachedImage`, `prefetch` and `cancelPrefetch` are `nonisolated`; the first reads the memory cache, which is thread-safe on its own.
+- **The bucket has one owner:** the pipeline asks its URL builder, first, before any cache. The view knows pixels, the loader knows URLs, and nobody else picks a width.
+- **It never decodes itself.** The decoder runs off the actor, at most one decode per CPU core, so a fling doesn't start sixty.
 
-### 3 · Memory cache (`ImageMemoryCache`)
+### 3 · Memory cache (`NSCacheImageMemoryCache`)
 
-**Job:** keeps decoded pictures ready to draw. When it's full, the one unused the longest goes.
+**Job:** keeps decoded pictures ready to draw, by image key, within a byte budget.
 
 ```swift
-protocol ImageMemoryCacheType: Sendable {
+protocol ImageMemoryCache: Sendable {
+    /// Synchronous and thread-safe. nil = not in memory.
     func image(for key: ImageKey) -> UIImage?
-    /// Cost = the picture's bytes
+    /// Cost = bytes per row × pixel height
     func store(_ image: UIImage, for key: ImageKey)
-    /// Called on memory warning
     func removeAll()
 }
 
-/// URL + pixel size: a picture is only reusable at the size it was decoded for
-struct ImageKey: Hashable { let url: URL; let pixelSize: CGSize? }
+final class NSCacheImageMemoryCache: ImageMemoryCache {
+    init(byteLimit: Int)
+}
 ```
 
 **Choices:**
 
-- **A byte budget, not an item count.** One full-screen picture costs as much as a hundred thumbnails. Cost = bytes per row × height of the decoded bitmap.
-- **Emptied on `didReceiveMemoryWarningNotification`**, trimmed on `didEnterBackgroundNotification`. This bounds the *cache*; the app's total memory still moves with everything else it does.
-- **Start with `NSCache`**: set `totalCostLimit` and pass each picture's bytes as `cost` in `setObject(_:forKey:cost:)`. It also evicts on its own under memory pressure. *Switch to* a small LRU (a dictionary plus a linked list) when you need a predictable eviction order or "remove this URL at every size".
+- **A byte budget, not an item count.** One full-screen picture costs as much as a hundred thumbnails. `NSCache` with `totalCostLimit`, each picture's bytes as the cost in `setObject(_:forKey:cost:)`.
+- **Emptied on `didReceiveMemoryWarningNotification`.** This bounds the *cache*; the app's total memory still moves with everything else.
+- *Switch to* a small LRU for a predictable eviction order.
 
-### 4 · Disk cache (`ImageDiskCache`)
+### 4 · Disk cache (`FileImageDiskCache`)
 
-**Job:** keeps the downloaded files, still compressed, so seen pictures show offline.
+**Job:** keeps downloaded files, still compressed, by fetch URL, so seen pictures show offline.
 
 ```swift
-protocol ImageDiskCacheType: Sendable {
-    func data(for url: URL) async -> Data?
-    func store(_ data: Data, for url: URL) async
-    /// Removes the oldest files, off the launch path
+struct CachedData: Sendable {
+    let data: Data
+    let etag: String?
+    /// From Cache-Control max-age
+    let freshUntil: Date
+}
+
+protocol ImageDiskCache: Sendable {
+    /// nil = a miss. A corrupt file is deleted and reads as a miss.
+    func data(for fetchURL: URL) async -> CachedData?
+    /// Atomic: a temporary file, then a rename. Never throws.
+    func store(_ entry: CachedData, for fetchURL: URL) async
+    /// Oldest first, off the launch path
     func trim(toBytes limit: Int) async
 }
+
+actor FileImageDiskCache: ImageDiskCache {
+    init(directory: URL, files: FileManager)
+}
 ```
 
 **Choices:**
 
-- **Compressed bytes, keyed by URL alone.** Bytes don't depend on display size, so every size shares one file.
-- **In `Library/Caches`**, with a size cap. The system may clear it, and that's fine for a cache.
-- **The CDN's headers decide freshness; we decide retention.** Past `max-age`, a copy is revalidated with its `ETag` when online, and still shown when offline.
-- *Simpler:* `URLCache` gives a disk HTTP cache for free. Own this card only because offline must outlive `max-age` and we want a cap and eviction we control (deep dive 11).
+- **Keyed by the fetch URL, bucket included.** The CDN sends different bytes for `w=160` and `w=640`, so they are two files. Nearby display sizes share a bucket, so they share a file.
+- **In `Library/Caches`, with a size cap.** The system may clear it; that's fine for a cache.
+- **The headers decide freshness, we decide retention** (deep dive 11).
 
-### 5 · Data loader (`DataLoader`)
+### 5 · Network loader (`NetworkDataLoader`)
 
-**Job:** the promise "give me the bytes at this URL". The pipeline depends on it, not on the network.
+**Job:** downloads a fetch URL from the CDN. It knows nothing about sizes or caches.
 
 ```swift
+enum LoadedData: Sendable {
+    case new(CachedData)
+    /// 304: the copy on disk is still right, fresh until this date
+    case notModified(freshUntil: Date)
+}
+
 protocol DataLoader: Sendable {
-    /// Throws on cancel, a bad status or a short body
-    func data(for url: URL) async throws -> Data
+    /// Throws on a bad status, a short body or cancel.
+    /// Cancelling the caller cancels the download.
+    func data(for fetchURL: URL, ifNoneMatch etag: String?,
+              priority: ImagePriority) async throws -> LoadedData
+}
+
+final class NetworkDataLoader: DataLoader {
+    init(visible: URLSession, prefetch: URLSession)
 }
 ```
 
-**Choice:** the one protocol drawn on the board, because it earns two things: a fake that holds its reply, to test sharing and cancelling, and a place to grow. A file loader is a new conformance, never a `switch` in the pipeline.
-
-### 6 · Network loader (`NetworkDataLoader`)
-
-**Job:** downloads the bytes from the CDN.
-
-**Interface:** conforms to `DataLoader`. Built with `init(session: URLSession)`.
-
 **Choices:**
 
-- **It asks the CDN for the right width**, rounded up to a few buckets (160, 320, 640, 1280), so nearby sizes share one cached copy.
-- **Visible requests go first.** It sets `URLSessionTask.priority` high for visible rows and low for prefetches. Prefetches use a session with `allowsConstrainedNetworkAccess = false`, so they skip Low Data Mode.
+- **Visible first.** It sets `URLSessionTask.priority` high for visible rows and low for prefetches. Priority is a hint; the real lever is cancelling prefetches the user flung past.
+- **Prefetches use their own session** with `allowsConstrainedNetworkAccess = false`, so they don't run in Low Data Mode.
+- **The protocol earns a fake** that holds its reply (to test sharing and cancelling) and new sources as new conformances.
 
-### 7 · Decoder (`ImageDecoder`)
+### 6 · Decoder (`ImageIODecoder`)
 
-**Job:** turns compressed bytes into a picture, shrunk to the display size, off the main thread.
+**Job:** turns compressed bytes into a picture at the pixel size, off every actor.
 
 ```swift
-protocol ImageDecoderType: Sendable {
-    func image(from data: Data, maxPixelSize: CGFloat?) async throws -> UIImage
+protocol ImageDecoder: Sendable {
+    /// Throws if the bytes aren't an image. Checks cancellation first.
+    func image(from data: Data, maxPixelSize: Int) async throws -> UIImage
+}
+
+struct ImageIODecoder: ImageDecoder {
+    /// Runs on the global pool, not the pipeline actor
+    @concurrent func image(from data: Data,
+                           maxPixelSize: Int) async throws -> UIImage
 }
 ```
 
 **Choices:**
 
-- **Downsample while decoding** with ImageIO (`CGImageSourceCreateThumbnailAtIndex`, with `kCGImageSourceThumbnailMaxPixelSize`), so the full-size bitmap is never created.
-- **Decode now, not at first draw** (`kCGImageSourceShouldCacheImmediately`), or the first draw decodes on the main thread mid-scroll.
-- *Simpler:* `UIImage.byPreparingThumbnail(ofSize:)` does much the same in one line. Use it unless you need ImageIO's options.
+- **`@concurrent`, because of Swift 6.2.** Under SE-0461 a plain `nonisolated async` function runs on its caller's actor, so a decode would block the pipeline.
+- **Downsample while decoding:** `CGImageSourceCreateThumbnailAtIndex` with `kCGImageSourceThumbnailMaxPixelSize`, so the full bitmap never exists, and `kCGImageSourceShouldCacheImmediately`, so the first draw doesn't decode on the main thread.
 
-**Why these parts, and no more.** Each changes for a different reason: the view helpers with UIKit and SwiftUI, the pipeline with coordination, the caches with eviction, the loader with the network, the decoder with formats. Each protocol earns its place: `DataLoader` a fake and new sources, `ImagePipelineType` a fake for screens' tests, the cache and decoder protocols fakes that let pipeline tests count calls. In a smaller codebase I'd keep those last three concrete. What I'd *not* add: a use case or repository (no app rules), a plugin or processor chain, a generic cache, a DI container. Constructor injection is enough.
+**Why these parts, and no more.** Each card changes for one reason:
+
+| Card | Changes when |
+|---|---|
+| 1 · Image view | a platform API (SwiftUI, UIKit) |
+| 2 · Image pipeline | a product rule (order, sharing, cancelling) |
+| 3 · Memory cache | what several screens share (the pixel budget) |
+| 4 · Disk cache | a storage schema (files, retention) |
+| 5 · Network loader | an endpoint or payload (the CDN's HTTP) |
+| 6 · Decoder | a platform API (ImageIO) |
+| not drawn · URL builder | an endpoint or payload (the `?w=` buckets) |
+
+Each protocol earns a fake or a new conformance. Not added: a use case or repository (no app rules, no app model), a processor chain, a generic cache, a DI container. Constructor injection is enough.
 :::
 
 ::: 7 · Key flows through the sketch
@@ -326,14 +415,14 @@ sequenceDiagram
   participant P as Pipeline
   participant L as Network loader
   participant X as Decoder
-  A->>P: image(url, 160px)
-  Note over P: no load running, start one
-  B->>P: image(url, 160px)
+  A->>P: image(url, 150px)
+  Note over P: fetch URL w=160, no load running
+  B->>P: image(url, 150px)
   Note over P: same key loading, wait
-  P->>L: data(url)
+  P->>L: data(w=160 URL)
   alt downloaded
     L-->>P: bytes
-    P->>X: image(bytes, 160)
+    P->>X: image(bytes, 150)
     X-->>P: image
     P-->>A: image
     P-->>B: same image
@@ -344,7 +433,7 @@ sequenceDiagram
   end
 ```
 
-One download and one decode serve both rows. The pipeline also saves the bytes to disk and the picture to memory.
+One download and one decode serve both rows. Bytes go to disk under the fetch URL, the picture to memory under the image key.
 
 **Flow 2 — a row is reused before its picture arrives.**
 
@@ -356,7 +445,7 @@ sequenceDiagram
   participant L as Network loader
   A->>P: image(url)
   B->>P: image(url)
-  P->>L: data(url)
+  P->>L: data(fetch URL)
   Note over A: row A reused for another post
   A->>P: cancel
   alt row B still waiting
@@ -367,65 +456,64 @@ sequenceDiagram
   end
 ```
 
-Cancelling takes the row off the waiting list. The download stops only when the last caller leaves. If row A's result still arrives, its view sees the request token no longer matches and drops it.
+Cancelling takes the row off the waiting list. The download stops only when the last caller leaves. A late result for row A is dropped by its view's token check.
 :::
 
 ::: 8 · The server contract
 ```
-GET https://img.example.com/{id}?w={160|320|640|1280}
-    → 200  image/jpeg
-           Cache-Control: max-age=86400
-           ETag: "a1b2"
+GET  /v1/images/{id}?w={160|320|640|1280}
+     → 200  image/jpeg
+            Cache-Control: max-age=86400
+            ETag: "a1b2"
 
-GET same URL, If-None-Match: "a1b2"
-    → 304  (keep the copy on disk)
+GET  /v1/images/{id}?w=640   If-None-Match: "a1b2"
+     → 304  (no body: keep the copy on disk)
 ```
 
-- **Width buckets**, so the phone downloads a 640-pixel picture, not a 4000-pixel original, and nearby sizes share one CDN copy.
+- **Width buckets**, so the phone downloads 640 pixels, not a 4000-pixel original, and nearby sizes share one CDN copy and one disk file.
 - **`Cache-Control` says how long a copy is fresh; `ETag` checks a stale one cheaply.** A 304 sends no bytes.
-- **The client chooses how long to keep files.** Past `max-age` a copy is stale, not gone: offline, the app still shows it.
+- **Pictures are shared, so the CDN caches them hard.** Private ones would need signed URLs (section 12).
 :::
 
 ::: 9 · Deep dive — "Two cells show the same avatar. Walk me through it."
-**Decision:** the pipeline actor keeps a table: key (URL + pixel size) → the running load and how many callers wait on it.
+**Decision:** the pipeline actor keeps two in-flight tables. Downloads are keyed by fetch URL, decodes by image key. Each entry holds the running task and how many callers wait on it.
 
 1. **Check memory.** A hit returns at once.
-2. **If a load for this key is running, join it.** Add one to its count and wait on the same task.
-3. **Otherwise, put a new load in the table straight away**, before any `await`.
-4. **When a caller cancels, take one off the count.** That caller gets `CancellationError`. Cancel the load only when the count reaches zero. Remove the entry when it finishes, success or failure.
+2. **If a decode for this image key is running, join it.** Add one to its count and await the same task.
+3. **Otherwise, put a new entry in the table straight away**, before any `await`. Its task reads disk, joins or starts the download for the fetch URL, then decodes.
+4. **When a caller cancels, take one off the count.** That caller gets `CancellationError`. Cancel the task only at zero. Remove the entry when it finishes, success or failure.
 
-**Why step 3 says "straight away".** An actor lets other callers in every time it waits. If it waited before recording the load, two callers could both find nothing and both download.
+**Why "straight away".** An actor lets other callers in at every `await`, so two callers could both find nothing and both download.
 
-**Why the view still checks.** Cancellation is cooperative: it sets a flag, and work stops at its next check. A result can already be on its way, so the view compares it with its current request before setting it.
-
-The same URL at two sizes is two keys, two decodes. After the first download the bytes are on disk, so the second doesn't download again.
+**Why two tables.** A 150-pixel and a 160-pixel request share the `w=160` bucket but decode to two sizes. Keying downloads by fetch URL gives them one download and two decodes.
 
 *Rejected:* cancel the shared load when any caller cancels. Row A scrolls away and kills the download row B still needs.
 :::
 
-::: 10 · Deep dive — "This grid gets the app killed on an iPhone 12. Why?"
+::: 10 · Deep dive — "This grid gets the app killed on an older iPhone. Why?"
 **The fact:** a decoded picture costs width × height × 4 bytes. A 4032 × 3024 photo is a 2 MB JPEG but about 49 MB decoded. Twenty of those is the kill.
 
-**Decision:** decode straight to the display size, off the main thread.
+**Decision:** download a bucket near the display size, and decode straight to the display size, off the main thread.
 
-1. The view computes the size in **pixels**: points × screen scale. The loader asks the CDN for the next width bucket up.
-2. The decoder makes a thumbnail at that size from the compressed bytes. The full-size bitmap is never created.
-3. The memory cache counts each picture's bytes against a budget (a slice of what the app may use).
-4. A memory warning empties the cache. Visible rows simply ask again.
+1. The view works out the size in **pixels**: points × screen scale.
+2. The pipeline's URL builder picks the smallest bucket that covers that width.
+3. The decoder makes a thumbnail at the pixel size from the compressed bytes. The full-size bitmap never exists.
+4. The memory cache counts each picture's bytes against its budget. A memory warning empties it; visible rows ask again.
 
 *Rejected:* decode full size, then redraw smaller. Peak memory is still the full picture.
 
-**Prefetching is an optimization, not correctness.** In UIKit, `UICollectionViewDataSourcePrefetching` tells us about rows before they appear (we call `prefetch`) and when the user flings past (`collectionView(_:cancelPrefetchingForItemsAt:)`, we cancel). Those callbacks aren't guaranteed, so a row still loads its own picture when it appears. Visible rows run at high priority, prefetches at low. SwiftUI has no prefetch callback: start the load when a row appears and cancel when it disappears (lazy stacks build rows a little before they're on screen).:::
+**Prefetching is an optimization, not correctness.** UIKit's `UICollectionViewDataSourcePrefetching` calls `prefetch` and `cancelPrefetch`, but its callbacks aren't guaranteed, so each row still loads its own picture. SwiftUI has none: start on appear, cancel on disappear.
+:::
 
 ::: 11 · Deep dive — "Why not just use URLCache?"
-**Decision:** own a disk cache of compressed bytes, with a size cap.
+**Decision:** own a disk cache of compressed bytes, keyed by fetch URL, with a size cap.
 
 1. **Compressed, not decoded.** Bytes are 10–50 times smaller, and decoding is cheap next to downloading.
-2. **Safe writes.** Write to a temporary file, then rename, so a crash can't leave a half-written file under the real name.
-3. **Oldest out first**, using a small index of size and last use, trimmed off the launch path.
-4. **Freshness from the headers.** Within `max-age`, use the copy. Past it, show the copy at once and check in the background with `If-None-Match`. Offline, keep showing it.
+2. **Safe writes.** A temporary file, then a rename, so a crash can't leave a half-written file under the real name.
+3. **Oldest out first**, from a small index of size and last use, trimmed off the launch path.
+4. **Freshness from the headers.** Within `max-age`, use the copy. Past it, show the copy at once and revalidate in the background with `If-None-Match`. Offline, keep showing it.
 
-*Rejected:* `URLCache` alone. With the default policy, a copy past `max-age` needs the network to revalidate, and you don't choose what it evicts or when. *Switch to it* if offline doesn't matter: it's free and already honours the CDN's headers.
+*Rejected:* `URLCache` alone. With the default policy a copy past `max-age` needs the network to revalidate, and you don't choose what it evicts. *Switch to it* if offline doesn't matter: it's free and already honours the headers.
 :::
 
 ::: 12 · Failure modes, production and scale
@@ -436,36 +524,36 @@ The same URL at two sizes is two keys, two decodes. After the first download the
 | Offline | Disk hits show, even if stale; misses fail fast to a placeholder |
 | Download fails | One retry for timeouts and 5xx, none for 4xx; remember a 404 briefly |
 | 429 from the CDN | Honour `Retry-After`; drop prefetches first |
-| Corrupt file | Delete it from disk, download once more, then placeholder |
+| Corrupt file | Delete it, download once more, then placeholder |
 | Memory warning | Empty the memory cache; visible rows ask again |
-| Late result into a reused row | Dropped by the request-token check |
+| Late result into a reused row | Dropped by the request token |
 | Signed URL expired | Ask the app for a fresh URL, retry once |
-| App killed mid-write | The temporary file is never renamed; the old copy stays |
+| Killed mid-write | The temporary file is never renamed; the old copy stays |
 
 **Production notes** (short, not on the board)
 
-- **Networking:** a timeout per request; retry only what's safe, with backoff; visible first, prefetch low; cancel what no row needs.
-- **Metrics:** memory and disk hit rate, load time, decode time, memory warnings, failure rate by status. No URLs in logs if images are private.
-- **Security:** HTTPS only. Private images use signed, expiring URLs or an auth header in the loader. Key the cache on the image ID, not the signature, or every new signature is a miss. Keep private files in their own folder with file protection, and clear it on sign-out.
+- **Networking:** a timeout per request; safe retries with backoff; cancel what no row needs.
+- **Metrics:** memory and disk hit rate, load time, decode time, memory warnings, failures by status. No URLs in logs if images are private.
+- **Security:** HTTPS only. Private images: see the bank.
 
-**Scale, back of the envelope.** Use the interviewer's numbers; the shape is what matters.
+**Scale, back of the envelope**, with the interviewer's numbers:
 
 ```text
 pictures on screen × pixels each × 4 bytes   = memory for one screen
 users a day × pictures each × bytes each     = CDN bandwidth
 ```
 
-30 thumbnails × 400 × 400 px × 4 bytes is about 19 MB a screen, so a cache budget of a few screens is 50–100 MB. The same 30 at a 12-megapixel full size would be about 1.5 GB. 10M users × 200 pictures × 40 KB is about 80 TB a day: width buckets and hit rate move cost, not the client architecture.
+30 thumbnails × 400 × 400 × 4 bytes is about 19 MB a screen, so a budget of a few screens is 50–100 MB. The same 30 at 12 megapixels would be 1.5 GB. 10M × 200 × 40 KB is about 80 TB a day: buckets and hit rate move the cost, not the client architecture.
 
 **Grow only when asked**
 
 ```text
 One screen, few pictures  → AsyncImage, or URLCache + NSCache
-A fling grid              → this pipeline: share, cancel, downsample
+A fling grid              → this pipeline: coalesce, cancel, downsample
 Offline past max-age      → our own disk cache
-Bigger disk cache         → move its index to SQLite
+Bigger disk cache         → its index in SQLite
 Private images            → auth in the loader, a protected folder
-Older phones              → decode one screen ahead, fetch bytes further
+Another source            → a new DataLoader conformance
 ```
 :::
 
@@ -477,31 +565,37 @@ Answer out loud first, then open.
 <details>
 <summary>"Walk me through the layers."</summary>
 
-API: the view helpers callers touch. Core: the pipeline, the memory cache and the data loader promise. I/O: disk cache, network loader, decoder.
+API: the view helpers. Core: the pipeline, the memory cache and the three promises. I/O: disk cache, network loader, decoder.
 </details>
 
 <details>
-<summary>"Where's the use case? The composite repository?"</summary>
+<summary>"Where's the use case? The repository?"</summary>
 
-There are none. A library has no app rules and no model combined from several sources, so neither earns its place.
+There are none. A library has no user intent with a product rule and no app model; its roles are pipeline, cache, loader and decoder.
 </details>
 
 <details>
 <summary>"Show me dependency inversion."</summary>
 
-The pipeline holds a `DataLoader` protocol. The network loader implements it. The arrow points up, so the core never imports networking.
+The core writes `ImageDiskCache`, `DataLoader` and `ImageDecoder`; I/O implements them. The arrows point up, so the core imports no networking, files or ImageIO.
 </details>
 
 <details>
-<summary>"Where do bytes become a picture?"</summary>
+<summary>"Where does mapping happen?"</summary>
 
-Only in the decoder. The disk cache and loader deal in bytes; the memory cache and views deal in pictures.
+A request becomes a fetch URL in the URL builder; bytes become a picture only in the decoder. Caches and loader never convert anything.
 </details>
 
 <details>
-<summary>"Why seven parts and not one ImageManager?"</summary>
+<summary>"Where does shared state come from? A composite, a store?"</summary>
 
-Each changes for a different reason: the loader with the network, the decoder with formats, the caches with eviction, the pipeline with coordination. One class would change for all of them.
+Neither. The memory cache is the one shared place for pictures, and the pipeline's tables are its own bookkeeping.
+</details>
+
+<details>
+<summary>"Why six parts and not one ImageManager?"</summary>
+
+Each changes for one reason: the view with UIKit or SwiftUI, the pipeline with its rules, the caches with retention, the loader with HTTP, the decoder with ImageIO.
 </details>
 
 <details>
@@ -510,107 +604,89 @@ Each changes for a different reason: the loader with the network, the decoder wi
 One screen, few pictures, no offline need. It has no memory cache we control and no downsampling.
 </details>
 
-<details>
-<summary>"Isn't this a lot of protocols for one library?"</summary>
-
-`DataLoader` earns a fake and new sources; the pipeline protocol earns a fake for screens. The cache and decoder protocols are only for pipeline tests, so I'd keep them concrete in a small codebase.
-</details>
-
-### Caching
+### Caching and keys
 
 <details>
-<summary>"Why two caches?"</summary>
+<summary>"What's the disk cache key?"</summary>
 
-Memory gives a same-frame hit when scrolling back. Disk gives offline and saves data. They hold different things: pictures and bytes.
+The fetch URL, bucket included. The CDN sends different bytes for each width, so each width is its own file.
 </details>
 
 <details>
-<summary>"Why does the memory cache key on URL plus size?"</summary>
+<summary>"And the memory key?"</summary>
 
-A picture decoded for 80 points can't be reused at 300. Bytes are the same at every size, so disk keys on URL alone.
+The fetch URL plus the pixel size, because a picture decoded for 150 pixels isn't the one for 160.
 </details>
 
 <details>
-<summary>"Why a byte budget?"</summary>
+<summary>"Who picks the width bucket?"</summary>
 
-One full-screen picture can cost as much as a hundred thumbnails. Counting items doesn't bound memory.
+The pipeline, through its URL builder, before any cache lookup. The view only knows pixels, the loader only knows URLs.
 </details>
 
 <details>
 <summary>"Why not store decoded pictures on disk?"</summary>
 
-They're 10–50 times bigger. Decoding is cheap next to the disk space.
-</details>
-
-<details>
-<summary>"NSCache or your own LRU?"</summary>
-
-`NSCache` first, with `totalCostLimit` and each picture's bytes as its cost. Own an LRU when you need a known eviction order or "remove this URL at every size".
-</details>
-
-<details>
-<summary>"When is a cached file stale?"</summary>
-
-When it's past the CDN's `max-age`. Stale isn't gone: show it, revalidate with `ETag` when online, keep showing it offline.
+They're 10–50 times bigger, and decoding is cheap next to the disk space.
 </details>
 
 <details>
 <summary>"Does the app's memory stay flat while scrolling?"</summary>
 
-No. The image cache is bounded by bytes and empties on memory warnings, so image memory doesn't grow with scroll depth. Total app memory still moves.
+No. The image cache is bounded and empties on a memory warning, so image memory doesn't grow with scroll depth. Total app memory still moves.
 </details>
 
 <details>
 <summary>Follow-up chain: "Revalidation."</summary>
 
 1. *"The picture on the server changed."* → The disk copy has an `ETag`.
-2. *"When do you check?"* → Once it's past the CDN's `max-age`, in the background.
+2. *"When do you check?"* → Past `max-age`, in the background.
 3. *"What does the user see meanwhile?"* → The old copy, at once.
-4. *"And if it's unchanged?"* → A 304, no bytes. Just mark it fresh.
+4. *"And if it's unchanged?"* → A 304 with no body; mark the copy fresh.
 </details>
 
 ### Concurrency and cancellation
 
 <details>
-<summary>"Two rows want the same picture."</summary>
-
-The pipeline finds the running load for that key and the second row waits on it. One download, one decode.
-</details>
-
-<details>
 <summary>"Why is the pipeline an actor?"</summary>
 
-Its table of running loads is changed by many callers. An actor makes sure only one changes it at a time.
+Its in-flight tables are changed by many callers. The actor makes sure one changes them at a time.
 </details>
 
 <details>
-<summary>"Why not decode inside the actor?"</summary>
+<summary>"Then how is cachedImage synchronous?"</summary>
 
-Every decode in the app would queue behind one actor. The actor keeps the books, the decoder runs elsewhere.
+It's `nonisolated` and reads the memory cache, which is thread-safe on its own. The actor guards only the in-flight tables.
 </details>
 
 <details>
 <summary>"An async function runs off the main thread, right?"</summary>
 
-Not always. With SE-0461's behaviour on (Swift 6.2), a plain `nonisolated async` function runs on the caller's actor. Mark the decoder `@concurrent` to move it off.
+Not always. Under SE-0461 a plain `nonisolated async` function runs on its caller's actor, so the decoder is marked `@concurrent`.
 </details>
 
 <details>
-<summary>"A cell is reused. What happens?"</summary>
+<summary>"A fling starts sixty decodes. Fine?"</summary>
 
-The view cancels its request and starts the new one. The pipeline cancels the download only if nobody else waits.
+No. The pipeline lets one decode per CPU core run, and cancelled rows leave the queue before they decode.
+</details>
+
+<details>
+<summary>"A prefetch is running and the row becomes visible."</summary>
+
+Priority isn't part of the request, so the visible row joins the same load. Swift raises the awaited task's priority.
 </details>
 
 <details>
 <summary>Follow-up chain: "The wrong picture flashes."</summary>
 
 1. *"A reused row shows the old picture for a moment."* → The old result arrived after cancel.
-2. *"Why, if you cancelled?"* → Cancelling only sets a flag. Work stops at its next check.
+2. *"Why, if you cancelled?"* → Cancellation only sets a flag; work stops at its next check.
 3. *"Fix?"* → The view keeps a request token and sets a result only if it matches.
-4. *"Why not just cancel harder?"* → A result can already be on its way; only the check makes it harmless.
+4. *"Why not cancel harder?"* → A result can already be on its way. The token is the stale-result guard.
 </details>
 
-### Performance and memory
+### Performance and network
 
 <details>
 <summary>"How much memory does a picture take?"</summary>
@@ -621,78 +697,48 @@ Width × height × 4 bytes, decoded. A 12-megapixel photo is about 49 MB.
 <details>
 <summary>"It stutters. Where do you start?"</summary>
 
-Instruments first. Usual causes: decoding on the main thread, decoding at full size, decoding at first draw.
+Instruments first. Usual causes: decoding on the main thread, at full size, or at first draw.
 </details>
 
 <details>
 <summary>"How does prefetch work?"</summary>
 
-The collection view's prefetch callback calls `prefetch` at low priority, and its cancel callback cancels it. It's an optimization: the callbacks aren't guaranteed, so each row still loads its own picture.
-</details>
-
-<details>
-<summary>"And in SwiftUI?"</summary>
-
-No prefetch callback. Start the load when the row appears and cancel when it disappears; `.task(id:)` does both.
+UIKit's prefetch callback calls `prefetch` at low priority and its cancel callback cancels. The callbacks aren't guaranteed, so each row still loads its own picture.
 </details>
 
 <details>
 <summary>"Visible rows and prefetches compete. Who wins?"</summary>
 
-Visible rows. They get high task priority, and the loader caps connections per host (`httpMaximumConnectionsPerHost`).
+Visible rows, by task priority. Priority is only a hint, so cancelling prefetches the user flung past matters more.
 </details>
 
-<details>
-<summary>"Low Data Mode?"</summary>
-
-Prefetches use a session with `allowsConstrainedNetworkAccess = false`, so they don't run. Visible rows still load, at a smaller bucket.
-</details>
-
-### Testing, security and change
+### Testing and change
 
 <details>
-<summary>"How do you test deduplication?"</summary>
+<summary>"How do you test coalescing and cancelling?"</summary>
 
-A fake loader that holds its reply. Ask twice for the same URL, then check it was called once.
-</details>
-
-<details>
-<summary>"How do you test cancellation?"</summary>
-
-Two callers, cancel one, check the fake loader wasn't cancelled. Cancel both, check it was.
+A fake loader that holds its reply. Ask twice: one call. Cancel one caller: not cancelled. Cancel both: cancelled.
 </details>
 
 <details>
 <summary>"Some images are private now."</summary>
 
-Signed, expiring URLs or an auth header in the network loader, over HTTPS. Key the cache on the image ID, not the signature. A separate disk folder with file protection, cleared on sign-out.
+Signed URLs or an auth header in the loader, over HTTPS. Key on image ID + bucket, not the signature, in a protected folder cleared on sign-out.
 </details>
 
 <details>
-<summary>"What would you measure in production?"</summary>
+<summary>"What changes at 10×?"</summary>
 
-Memory and disk hit rate, load time, decode time, memory warnings, failures by status.
-</details>
-
-<details>
-<summary>"What changes at 10x?"</summary>
-
-Mostly the CDN. On the client: smaller buckets for thumbnails, a fixed memory budget, backing off on 429s, a disk index in SQLite.
-</details>
-
-<details>
-<summary>"Add a file or bundle source."</summary>
-
-A new `FileDataLoader` conforming to `DataLoader`. The pipeline doesn't change.
+Mostly the CDN. On the client: smaller thumbnail buckets, backing off on 429s, a disk index in SQLite.
 </details>
 
 <details>
 <summary>Follow-up chain: "A second screen."</summary>
 
-1. *"Tap a thumbnail to open it full screen."* → A new request, same URL, bigger size.
-2. *"Does it download again?"* → Bytes are on disk under the URL. Only the decode is new.
-3. *"Show something at once?"* → Show the cached thumbnail, then swap in the sharp one.
-4. *"Memory?"* → The full-screen picture is one entry in the same budget.
+1. *"Tap a thumbnail to open it full screen."* → A new request: same URL, bigger pixel size, so a bigger bucket.
+2. *"Does it download again?"* → Yes, the `w=1280` file is different bytes. The `w=320` file stays for the grid.
+3. *"Show something at once?"* → The full-screen view shows the grid's cached thumbnail, then swaps in the sharp one.
+4. *"Avoid the second download?"* → Fetch the original once and downsample both from it, at a bandwidth cost on every thumbnail.
 </details>
 :::
 
@@ -704,13 +750,13 @@ A new `FileDataLoader` conforming to `DataLoader`. The pipeline doesn't change.
 | 3 | Give a rejected alternative for each choice | |
 | 4 | Say out of scope first; separate required from later | |
 | 5 | Say the idea, list the parts, then sketch | |
-| 6 | Keep the sketch to about seven cards | |
-| 7 | Name the server contract: width buckets, `max-age`, `ETag` | |
+| 6 | Keep the sketch to nine type cards | |
+| 7 | Name the endpoint, width buckets, `max-age` and `ETag` | |
 | 8 | Give the decoded cost: width × height × 4 | |
-| 9 | Bound the image cache by bytes; purge on memory warning | |
-| 10 | Share one download per URL + size between rows | |
-| 11 | Cancel only when the last caller leaves; check late results | |
-| 12 | Decode to display size, off the main thread | |
+| 9 | Key disk by fetch URL, memory by fetch URL + size | |
+| 10 | Give the bucket one owner: the pipeline | |
+| 11 | Coalesce loads; cancel only when the last caller leaves | |
+| 12 | Decode to display size, `@concurrent`, off the actor | |
 | 13 | Call prefetching an optimization; visible rows first | |
 | 14 | Land the recap inside 60 seconds | |
 
@@ -718,5 +764,5 @@ A new `FileDataLoader` conforming to `DataLoader`. The pipeline doesn't change.
 :::
 
 ::: 15 · The 60-second recap
-A view asks for a picture by URL and by the pixel size it will show it at. One pipeline actor checks a memory cache keyed by URL plus size, and if the same picture is already loading, it joins that load, so two rows share one download. On a miss, bytes come from a disk cache keyed by URL alone, or from the CDN at a rounded width. The decoder shrinks them to display size off the main thread, because a decoded picture costs width × height × 4 bytes whatever the file size. The memory cache has a byte budget and empties on memory warnings, so image memory is bounded, not the whole app's. The disk cache keeps compressed bytes: the CDN's headers decide when a copy is stale, we decide how long to keep it, so seen pictures show offline. A reused row cancels its request, the download stops only when the last caller leaves, and the view's request token drops a late result. Prefetching only makes it faster, visible rows first. The pipeline depends on a loader protocol, so a new source or a test fake plugs in without changing it; anything more waits until it's asked for.
+A view asks for a picture by URL and pixel size. The pipeline turns that into a fetch URL with the smallest CDN width bucket that covers it, and that one choice sets both keys: disk by fetch URL, memory by fetch URL plus size. On a miss it reads disk or downloads, and two rows asking for the same thing share one load, which stops only when the last caller leaves. A `@concurrent` decoder downsamples to the display size off every actor, because a decoded picture costs width × height × 4 bytes. The memory cache has a byte budget, the disk cache keeps compressed files the headers mark stale but never delete, and the view's token drops late results. The core depends only on protocols, so a new source or a fake plugs in unchanged.
 :::

@@ -6,17 +6,17 @@ sources:
 - weeeBox · Mobile system design, the Twitter feed walkthrough (cursor pagination, local storage, real-time options) | https://github.com/weeeBox/mobile-system-design
 - System Design Handbook · iOS system design interview | https://www.systemdesignhandbook.com/guides/ios-system-design-interview/
 - WWDC21 · Make blazing fast lists and collection views | https://developer.apple.com/videos/play/wwdc2021/10252/
-- WWDC19 · Advances in UI data sources | https://developer.apple.com/videos/play/wwdc2019/220/
 - WWDC23 · Discover Observation in SwiftUI | https://developer.apple.com/videos/play/wwdc2023/10149/
-- Apple · UICollectionViewDataSourcePrefetching | https://developer.apple.com/documentation/uikit/uicollectionviewdatasourceprefetching
-- Apple · NSDiffableDataSourceSnapshot.reconfigureItems(_:) | https://developer.apple.com/documentation/uikit/nsdiffabledatasourcesnapshot/reconfigureitems(_:)
+- Apple · List | https://developer.apple.com/documentation/swiftui/list
 - Apple · onScrollTargetVisibilityChange(idType:threshold:_:) | https://developer.apple.com/documentation/swiftui/view/onscrolltargetvisibilitychange(idtype:threshold:_:)
-- Apple · allowsConstrainedNetworkAccess | https://developer.apple.com/documentation/foundation/urlsessionconfiguration/allowsconstrainednetworkaccess
+- Apple · UICollectionViewDataSourcePrefetching | https://developer.apple.com/documentation/uikit/uicollectionviewdatasourceprefetching
+- Apple · NSDiffableDataSourceSnapshot.reconfigureItems(_:) | https://developer.apple.com/documentation/uikit/nsdiffabledatasourcesnapshot-swift.struct/reconfigureitems(_:)
+- SE-0461 · Run nonisolated async functions on the caller's actor by default (@concurrent) | https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md
 ---
 
-*An image-heavy feed is one of the most common senior mobile prompts. The answer below stays small on purpose: three endpoints, one repository per source, and a like that stays correct however fast the user taps. Start simple; add parts only when the interviewer asks for them.*
+*One of the most common senior mobile prompts. The answer stays small: three endpoints, one repository per source, a read-only composite, and a like that stays correct however fast the user taps.*
 
-> **Interviewer:** "We have a feed of photos — think Instagram's home feed. It scrolls forever. Design the client for me."
+> **Interviewer:** "We have a feed of photos, like a social app's home feed. It scrolls forever. Design the client for me."
 
 ## Run it as a round, not as reading
 
@@ -27,7 +27,7 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 | 0:00–0:02 | The prompt | Repeat it back in one sentence |
 | 0:02–0:07 | Clarify | Ask yours, then read section 1 |
 | 0:07–0:12 | Scope | Out of scope first, then required, then later |
-| 0:12–0:24 | High level | The idea · the parts · the sketch · each part · two flows |
+| 0:12–0:24 | High level | The idea · the parts · the sketch · one line each · two flows |
 | 0:24–0:40 | Deep dives | The interviewer picks one of sections 9–11 |
 | 0:40–0:45 | Recap | Follow-ups, then the 60-second summary |
 
@@ -39,20 +39,20 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 - **A like that feels instant and stays correct** when the user taps three times fast.
 - **Knowing what not to build.** Ranking is the server's job. The photos come from question 1's image loader.
 
-**Traps:** page numbers instead of a cursor; saying "a cursor guarantees no duplicates"; caching the personal feed on a CDN; "cancel the old request, last tap wins"; showing "not liked" when the likes call failed.
+**Traps:** page numbers instead of a cursor; "a cursor guarantees no duplicates"; caching the personal feed on a CDN; "cancel the old request, last tap wins"; showing "not liked" when the likes call failed.
 
 ::: Words used in this chapter
-- **Server, API, endpoint** — the server stores the posts; the API is the list of requests it accepts; an endpoint is one of those requests.
-- **Page, cursor** — posts arrive about 20 at a time (a page). The cursor is a bookmark the server hands back with each page. Only the server can read it.
-- **Layer** — a group of parts with the same kind of job: *presentation* (what you see), *domain* (the app's own rules and data), *data* (where data comes from).
-- **View model, view state** — the view model is the screen's brain. The view state is one value that describes everything the screen shows.
-- **Model, DTO, mapping** — the *model* is the app's own description of a post. A *DTO* is the server's format. *Mapping* turns one into the other.
-- **Protocol** — a promise of what a part can do, without saying how. A fake can keep the same promise in tests.
-- **Repository** — the one place the app asks for one kind of data. **Composite** — a repository that combines two sources into one model.
-- **Use case** — one job of the app with its own rules, like "like a post".
+- **Repository** — the one owner of one kind of data. It turns the server's format into the app's model.
+- **Composite** — a repository that only reads: it asks two repositories and combines their answers into one model.
+- **Store** — in-memory state that several screens show at once. Not needed here yet.
+- **Use case** — one user intent with a product rule, like "only the latest tap counts".
+- **View model** — the screen's brain. It owns the screen's state and hands the screen one view state.
+- **Page, cursor** — about 20 posts at a time; the cursor is a bookmark only the server can read.
+- **DTO, mapping** — a DTO is the server's format. Mapping turns it into the app's model.
+- **Protocol** — a promise of what a part can do, without saying how. A fake keeps the same promise in tests.
 - **Optimistic update** — show the result of a tap at once, and correct it if the server refuses.
 - **Idempotent** — sending the same request twice has the same effect as once.
-- **CDN** — servers near the user that keep copies of files, like photos, that are the same for everyone.
+- **CDN** — servers near the user that keep copies of shared files, like photos.
 :::
 
 ::: 1 · The interviewer answers your clarifying questions
@@ -66,9 +66,11 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 
 **"New posts live?"** → *No. Pull to refresh is enough.*
 
+**"Other screens showing the same posts?"** → *Not now. Just the feed.*
+
 **"How many users?"** → *Say ten million a day. Don't design the backend.*
 
-**"Minimum OS, UIKit or SwiftUI?"** → *iOS 17, SwiftUI. Tell me if you'd use UIKit for the list.*
+**"Minimum OS, UIKit or SwiftUI?"** → *iOS 17, SwiftUI, Swift 6. Tell me if you'd use UIKit for the list.*
 
 **"What hurts today?"** → *Stutter on older phones, and the list jumping when photos load.*
 :::
@@ -84,7 +86,7 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 
 **What must feel good:** smooth on an old phone · rows never jump · bounded image memory · no duplicate posts, no wrong hearts.
 
-**Production considerations** (say them, don't draw them): token refresh, retries and timeouts, image CDN sizes, metrics. They're in section 12.
+**Production considerations** (say, don't draw): token refresh, retries, timeouts, metrics. See section 12.
 
 **Optional follow-ups** (add only when asked):
 
@@ -100,25 +102,25 @@ Live updates                          → push, or a socket — only if required
 :::
 
 ::: 3 · The idea, in 30 seconds — before you draw anything
-> *"The server gives me pages of my feed with an opaque cursor, in the order to show them. A posts repository calls `GET /feed`, a likes repository calls `GET /likes` and `POST /like`, and a composite combines them into one Post model. The view model loads pages, guards against double loads and stale pages, and gives the screen one view state. Liking is a use case: the heart changes at once, and it sends one request at a time per post, always the latest state the user wants. Three layers: presentation, domain, data."*
+> *"The server gives me pages of my feed with an opaque cursor, in the order to show them. A posts repository calls `GET /feed`, a likes repository calls `GET /likes` and `POST /posts/{id}/like`, and each maps its own data. A read-only composite combines posts and liked IDs into one `Post`. The view model loads pages, guards against double loads and stale pages, and gives the screen one view state. Liking is a use case with a rule: the heart changes at once, and one request at a time per post sends the latest state the user wants."*
 :::
 
 ::: 4 · What we need — the components, before the sketch
 | # | Part | Type | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Feed screen** | `FeedView` | Presentation | Draws the view state. |
-| 2 | **Feed view model** | `FeedViewModel` | Presentation | Turns posts into a view state. |
-| 3 | **Image loader** | `ImagePipeline` | Reused | Delivers each photo, from question 1. |
-| 4 | **Feed repository** | `FeedRepository` | Domain | Promises pages of posts. |
-| 5 | **Like use case** | `LikePostUseCase` | Domain | Sends likes, one at a time per post. |
-| 6 | **Likes repository** | `LikesRepository` | Domain | Promises likes: read and save. |
-| 7 | **Composite feed repository** | `CompositeFeedRepository` | Data | Combines posts and likes into `Post`. |
-| 8 | **Posts repository** | `PostsRepository` | Data | Fetches pages of posts. |
-| 9 | **Likes repository** | `RemoteLikesRepository` | Data | Reads and saves the user's likes. |
+| 1 | **Feed screen** | `FeedView` | Presentation | Draws the view state, forwards actions. |
+| 2 | **Feed view model** | `FeedViewModel` | Presentation | Rows, paging and hearts → one view state. |
+| 3 | **Image loader** | reused from Q1 | Reused | Delivers each photo. |
+| 4 | **Like use case** | `SerialLikePostUseCase` | Domain | One like per post in flight, latest wins. |
+| 5 | **Composite feed repository** | `CompositeFeedRepository` | Data | Posts + liked IDs → `Post`. |
+| 6 | **Posts repository** | `RemotePostsRepository` | Data | `GET /feed` → posts and a cursor. |
+| 7 | **Likes repository** | `RemoteLikesRepository` | Data | `GET /likes` and `POST /posts/{id}/like`. |
+| chip | **Feed repository** | `FeedRepository` | Domain | The promise card 5 keeps. |
+| chip | **Likes repository** | `LikesRepository` | Domain | The write promise card 7 keeps. |
 
-The `Post` model isn't a card: it's what the composite returns, written on its card. The HTTP client the two data repositories share isn't drawn either.
+Seven cards, two chips. `Post` isn't a card; it's written on the composite's.
 
-Not on the list yet: everything under "optional follow-ups" in section 2.
+**Not drawn:** the `HTTPClient` that cards 6 and 7 share (draw it as card 8, orange, if they ask where auth lives). **Not on the list yet:** everything under "optional follow-ups".
 :::
 
 ::: 5 · The sketch
@@ -132,34 +134,36 @@ FeedViewModel`"]
   Img["`**3 · Image loader**
 reused from Q1`"]
   subgraph D["DOMAIN"]
-    Feed["`**4 · Feed repository**
-«protocol»`"]
-    Like["`**5 · Like use case**
-LikePostUseCase`"]
-    Likes["`**6 · Likes repository**
-«protocol»`"]
+    Feed["`«protocol»
+FeedRepository`"]
+    Like["`**4 · Like use case**
+SerialLikePostUseCase
+app-scoped actor`"]
+    Likes["`«protocol»
+LikesRepository`"]
   end
   subgraph DA["DATA"]
-    Comp["`**7 · Composite feed repository**
+    Comp["`**5 · Composite feed repository**
 CompositeFeedRepository
 posts + likes → Post`"]
-    Posts["`**8 · Posts repository**
-PostsRepository
+    Posts["`**6 · Posts repository**
+RemotePostsRepository
 GET /feed`"]
-    LikesImpl["`**9 · Likes repository**
+    LikesImpl["`**7 · Likes repository**
 RemoteLikesRepository
-GET /likes · POST /like`"]
+GET /likes
+POST /posts/{id}/like`"]
   end
   View -- "URL → photo" --> Img
   VM -- "like → outcome" --> Like
-  Like -- "send → ok" --> Likes
+  Like -- "send → state" --> Likes
   Likes ~~~ LikesImpl
   LikesImpl -. "implements" .-> Likes
   VM -- "load → posts" --> Feed
   Like ~~~ Feed
   Feed ~~~ Comp
   Comp -. "implements" .-> Feed
-  Comp -- "page → DTOs" --> Posts
+  Comp -- "cursor → posts" --> Posts
   Comp -- "IDs → liked" --> LikesImpl
   class View,VM pres
   class Feed,Like,Likes dom
@@ -167,15 +171,19 @@ GET /likes · POST /like`"]
   class Img reuse
 ```
 
-**How to read it.** A solid arrow points from the part that asks to the part that answers: *request → reply*. The dashed arrows mean *implements*. The grey dashed card is reused from question 1.
+**How to read it.** A solid arrow points from the asker to the answerer: *request → reply*. Dashed arrows mean *implements*; the grey card is reused from question 1.
 
-**Dependency inversion, in one line.** The domain writes the two promises (cards 4 and 6); the data layer keeps them (cards 7 and 9). Both dashed arrows point **up**, so the view model and the use case never depend on networking, and tests swap in fakes.
+**Dependency inversion, in one line.** The domain writes the two promises (the chips); the data layer keeps them (cards 5 and 7), so both dashed arrows point **up** and the view model and use case never see networking.
 
-**On Miro:** three frames (blue, purple, green), nine cards, nine arrows. Point at card 7 and say: *"two sources, one composite, one model — and if the backend added `isLiked` to the feed, this card would go away."*
+**One class, two promises.** Card 5 reaches card 7 through a narrow read promise, `LikedPostsSource`, which isn't drawn. The use case sees only the write promise.
+
+**No shared store on this sketch:** one screen shows the posts. A second screen would add one.
+
+**On Miro:** three frames (blue, purple, green), seven cards, two chips, seven solid arrows. Point at card 5: *"two sources, one model. If the feed carried `isLiked`, this card would go away."*
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
-**The model everyone shares.** It's what the composite returns; the screen never sees a DTO.
+**The model everyone shares.** The screen never sees a DTO.
 
 ```swift
 struct Post: Identifiable, Hashable, Sendable {
@@ -188,30 +196,36 @@ struct Post: Identifiable, Hashable, Sendable {
     /// liked, notLiked, or unknown (the likes call failed)
     var like: LikeState
 }
+
+struct FeedPage: Sendable {
+    let posts: [Post]
+    /// nil = the end
+    let next: Cursor?
+}
 ```
 
-The photo's **size** is in the model, the photo itself isn't. Pixels live in the image loader's bounded cache.
+The photo's **size** is in the model; its pixels live in the image loader's bounded cache.
 
 ### 1 · Feed screen (`FeedView`)
 
-**Job:** draws what the view model hands it and reports taps and scrolls. It decides nothing.
+**Job:** draws the view state and reports taps, rows appearing and refresh. It decides nothing.
 
-**Interface:** reads `viewModel.viewState`; calls `onAppear()`, `onNearEnd()`, `refresh()`, `toggleLike(_:)`.
+**Interface:** reads `viewModel.viewState`; calls `onAppear()`, `rowAppeared(_:)`, `refresh()`, `toggleLike(_:)`.
 
-**Choice:** SwiftUI `List` or a lazy stack first, since the prompt says SwiftUI. *Switch to* a `UICollectionView` wrapped for SwiftUI if it stutters on the oldest phone: it gives you cell reuse and a prefetch callback.
+**Choice:** SwiftUI `List` first: it reuses its rows (it's backed by a collection view). A `LazyVStack` builds rows lazily but doesn't recycle them. *Switch to* a wrapped `UICollectionView` only for prefetch callbacks or hitches measured on the oldest phone.
 
 ### 2 · Feed view model (`FeedViewModel`)
 
-**Job:** keeps the rows and the loading state, guards loads, flips hearts at once, and turns it all into one view state.
+**Job:** keeps the rows, the paging session and fresh hearts, as one view state.
 
 **Interface:**
 
 ```swift
 struct FeedViewState: Equatable {
     let rows: [PostRow]
-    /// loading, loaded, failed(message) — the first page
+    /// loading, loaded, failed(message): the first page
     let initialLoad: LoadState
-    /// idle, loading, failed(message), end — the pages after it
+    /// idle, loading, failed(message), end: the pages after it
     let pagination: PaginationState
 }
 
@@ -230,12 +244,13 @@ struct PostRow: Equatable, Identifiable {
 
 @MainActor @Observable
 final class FeedViewModel {
-    init(feed: FeedRepository, likePost: LikePostUseCaseType)
+    init(feed: FeedRepository, likePost: LikePostUseCase)
 
     var viewState: FeedViewState { get }
 
     func onAppear() async
-    func onNearEnd() async
+    /// Loads the next page when this row is 5 from the end
+    func rowAppeared(_ id: PostID) async
     func refresh() async
     func toggleLike(_ id: PostID) async
 }
@@ -243,35 +258,21 @@ final class FeedViewModel {
 
 **Choices:**
 
-- **One view state**, so the screen stays dumb and a test checks one value.
-- **Two small states, not one status enum.** A feed can have rows *and* be loading more, or have rows *and* a failed next page. `initialLoad` and `pagination` say both without a dozen cases.
-- **Optimistic UI lives here.** `toggleLike` flips the heart and the count at once, then asks the use case. It only corrects the heart if the use case reports a failure for the *latest* tap.
+- **One view state, two small load states.** A feed can have rows *and* be loading more, or rows *and* a failed next page; one status enum can't say both.
+- **The heart overlay lives here**, because only this screen shows it: per post, the wanted heart and the heart before the taps, laid over every page until the use case reports. The *sending* rule lives in the use case.
 - **Main actor**, so "check, then mark loading" needs no lock.
 
-### 3 · Image loader (`ImagePipeline`, from question 1)
+### 3 · Image loader (reused from question 1)
 
 **Job:** gives each row its photo at the size the row shows.
 
 **Interface:** the row asks with the photo's URL and its display size, and cancels when the row goes away.
 
-**Choice:** reused, not redesigned. Say "the image loader from question 1" and list what it does in one breath: memory cache, disk cache, one download per URL, cancellation, downsizing off the main thread. Section 10 has the parts the feed leans on.
+**Choice:** reused, not redesigned: memory and disk cache, one download per URL, cancellation, downsizing off the main thread.
 
-### 4 · Feed repository (`FeedRepository`)
+### 4 · Like use case (`SerialLikePostUseCase`)
 
-**Job:** the promise the view model needs: pages of finished posts.
-
-```swift
-protocol FeedRepository: Sendable {
-    /// Posts in display order, plus the next cursor (nil = end)
-    func posts(after cursor: Cursor?) async throws -> FeedPage
-}
-```
-
-**Choice:** a protocol, because it earns two things: the view model is tested with a fake, and it never knows there are two sources. Not because "every repository needs a protocol".
-
-### 5 · Like use case (`LikePostUseCase`)
-
-**Job:** sends likes to the server, one request at a time per post, always the latest state the user wants.
+**Job:** sends likes, one request per post at a time, always the latest wanted state.
 
 ```swift
 enum LikeOutcome: Equatable, Sendable {
@@ -279,79 +280,111 @@ enum LikeOutcome: Equatable, Sendable {
     case saved
     /// A newer tap on this post took over and will report instead
     case superseded
-    /// The latest state was refused; this is what the server holds
-    case failed(serverState: Bool)
+    /// The latest state was refused. nil = no reply said what
+    /// the server holds; the screen restores its pre-tap heart.
+    case failed(serverState: Bool?)
 }
 
-protocol LikePostUseCaseType: Sendable {
-    /// wasLiked is the heart before the user's first tap
-    func setLiked(_ liked: Bool, post: PostID, wasLiked: Bool) async -> LikeOutcome
+protocol LikePostUseCase: Sendable {
+    /// Never throws. Not cancelled by the caller's task: the like
+    /// still lands, the caller only stops waiting.
+    func setLiked(_ liked: Bool, post: PostID) async -> LikeOutcome
+}
+
+actor SerialLikePostUseCase: LikePostUseCase {
+    init(likes: LikesRepository)
 }
 ```
-
-Built with `init(likes: LikesRepository)`.
 
 **Choices:**
 
-- **It sends the final state** ("liked: true"), never "toggle". Sent twice, it's still liked; a toggle sent twice undoes itself.
-- **One request at a time per post**, not "cancel the old one". Cancelling a task doesn't un-send a request the server may already have, and two requests in flight can arrive in either order.
-- **Why this earns a use case and loading doesn't:** it has a rule (serialize, send the latest). Loading a page is one call; a use case there would only pass it through.
+- **The rule a product manager would state:** "only the latest tap counts, and the heart never lies". That's why it's a use case and loading isn't.
+- **App-scoped, one instance, an `actor`.** Its per-post table only works if every caller shares it: a feed pushed again mid-like would otherwise bring a second table and send in parallel.
+- **It sends the final state** ("liked: true"), never "toggle", one request at a time per post (section 11).
+- **It runs each send in its own task**, so a screen closing mid-like doesn't cancel the write.
 
-### 6 · Likes repository (`LikesRepository`)
+### 5 · Composite feed repository (`CompositeFeedRepository`)
 
-**Job:** the promise for likes: which posts the user liked, and saving a like.
+**Job:** combines a page of posts with which of them are liked. It owns no source and never writes.
 
 ```swift
-protocol LikesRepository: Sendable {
-    /// Which of these posts the user has liked
-    func likedIDs(among posts: [PostID]) async throws -> Set<PostID>
-    /// Saves the final state on the server
-    func setLiked(_ liked: Bool, post: PostID) async throws
+protocol FeedRepository: Sendable {
+    /// Posts in display order with hearts filled in, or .unknown
+    /// if likes failed. Throws only if posts failed.
+    /// Cancelling the caller cancels both requests.
+    func posts(after cursor: Cursor?) async throws -> FeedPage
+}
+
+final class CompositeFeedRepository: FeedRepository {
+    init(posts: PostsRepository, likedPosts: LikedPostsSource)
 }
 ```
-
-**Choice:** its own small protocol, because the like use case needs likes and nothing else. A change to posts can't break liking.
-
-### 7 · Composite feed repository (`CompositeFeedRepository`)
-
-**Job:** gets a page of posts and the user's likes for them, and combines them into `Post`s.
-
-**Interface:** conforms to `FeedRepository`. Built with `init(posts: PostsRepositoryType, likes: LikesRepository)`.
 
 **How it combines:**
 
-1. Ask the posts repository for a page → `PostDTO`s and the next cursor.
-2. Ask the likes repository which of those IDs are liked.
-3. Map each `PostDTO` to a `Post`: `liked` or `notLiked` from the set — or `unknown` for the whole page if step 2 failed.
+1. Ask the posts repository for a page: `Post`s with every heart `unknown`, plus the cursor.
+2. Ask which of those IDs are liked.
+3. Set each heart to `liked` or `notLiked`, or leave the page `unknown` if step 2 failed.
 
 **Choices:**
 
-- **One source failing never hides the feed.** No likes → posts with `unknown` hearts, not empty ones.
-- **Mapping happens here.** DTOs never leave the data layer.
-- **The trade-off, said out loud:** two sources keep ownership clean, but two requests add latency. In production I'd ask the backend to return `isLiked` with each feed item; then this composite and the likes read disappear, and nothing above the domain changes.
+- **One source failing never hides the feed**, and it combines app models only; each repository maps its own DTOs.
+- **The trade-off, said out loud:** two sources keep ownership clean, but two requests add latency. In production I'd ask the backend for `isLiked` on each feed item; then this card and the likes read go away, and nothing above the domain changes.
 
-### 8 · Posts repository (`PostsRepository`)
+### 6 · Posts repository (`RemotePostsRepository`)
 
-**Job:** fetches pages of posts from `GET /feed`.
+**Job:** fetches `GET /feed` and maps each `PostDTO` to a `Post` with its heart `unknown`.
 
 ```swift
-protocol PostsRepositoryType: Sendable {
-    /// The server's page, as it sent it
-    func page(after cursor: Cursor?) async throws -> FeedPageDTO
+protocol PostsRepository: Sendable {
+    /// Throws on failure. Cancelling the caller cancels the request.
+    func page(after cursor: Cursor?) async throws -> FeedPage
 }
 ```
 
-**Choice:** it passes the cursor back untouched. The feed is personal and signed-in, so it isn't shared through a CDN; only the photos are.
+**Choices:**
 
-### 9 · Likes repository (`RemoteLikesRepository`)
+- **It passes the cursor back untouched**, and maps here, so DTOs never leave this card.
+- **Decoding is off the caller's actor.** Under Swift 6.2 a plain `nonisolated async` function runs on its caller's actor, so the HTTP client marks decoding `@concurrent`.
 
-**Job:** reads likes from `GET /likes` and saves them with `POST /like`.
+### 7 · Likes repository (`RemoteLikesRepository`)
 
-**Interface:** conforms to `LikesRepository`.
+**Job:** reads which posts are liked with `GET /likes`, and saves one with `POST /posts/{id}/like`. Two callers, so two small promises.
 
-**Choice:** plain and stateless. Ordering rules live in the use case, display rules in the view model, so this stays a thin adapter over two endpoints.
+```swift
+/// Domain: the like use case's promise
+protocol LikesRepository: Sendable {
+    /// Saves the final state and returns what the server holds.
+    /// Throws if refused or unreachable. Cancelling the caller
+    /// cancels the request; the use case runs it in its own task.
+    func setLiked(_ liked: Bool, post: PostID) async throws -> Bool
+}
 
-**Why these parts, and no more.** Each one changes for a different reason: the screen with design, the view model with screen behaviour, the use case with like rules, each repository with its endpoint. Each protocol earns its place: a fake for tests, or a smaller promise for a smaller caller. What I'd *not* add yet: a use case for loading, a protocol for the view model, a DI container, a generic repository. Constructor injection is enough.
+/// Data-internal: the composite's promise
+protocol LikedPostsSource: Sendable {
+    /// Throws on failure; the caller turns that into unknown, never "none".
+    func likedIDs(among posts: [PostID]) async throws -> Set<PostID>
+}
+
+final class RemoteLikesRepository: LikesRepository, LikedPostsSource {
+    init(http: HTTPClient)
+}
+```
+
+**Choice:** one class, two promises (interface segregation). The use case can't read likes, the composite can't write them, and each fake needs one method. Rules live in the use case, so this stays a thin adapter.
+
+**Why these parts, and no more.** Each card changes for one reason:
+
+| Card | Changes when |
+|---|---|
+| 1 · Feed screen | the screen's design |
+| 2 · Feed view model | the screen's behaviour |
+| 4 · Like use case | a product rule (how likes are sent) |
+| 5 · Composite | how two sources combine |
+| 6 · Posts repository | an endpoint or payload (`/feed`) |
+| 7 · Likes repository | an endpoint or payload (`/likes`, `/like`) |
+
+Each protocol earns a fake or a smaller promise. Not added: a use case for loading (a pass-through), a protocol for the view model, a shared store, a DI container. Constructor injection is enough.
 :::
 
 ::: 7 · Key flows through the sketch
@@ -365,15 +398,15 @@ sequenceDiagram
   participant L as Likes repo
   VM->>C: posts(after: nil)
   C->>P: page(after: nil)
-  P-->>C: 20 PostDTOs + cursor
+  P-->>C: 20 Posts, hearts unknown, cursor
   C->>L: likedIDs(among: 20 IDs)
   alt likes loaded
     L-->>C: liked IDs
+    Note over C: set each heart
   else likes failed
     L-->>C: error
-    Note over C: hearts unknown, not empty
+    Note over C: hearts stay unknown
   end
-  Note over C: map to Posts
   C-->>VM: FeedPage
 ```
 
@@ -393,11 +426,11 @@ sequenceDiagram
   VM-->>V: heart off, 412 likes
   VM->>U: setLiked(false)
   Note over U: one in flight, so remember false
-  L-->>U: ok, server holds true
-  Note over U: wants false, server has true
+  L-->>U: server holds true
+  Note over U: wants false, sent true
   U->>L: setLiked(false)
   alt accepted
-    L-->>U: ok
+    L-->>U: server holds false
     U-->>VM: saved
   else refused
     L-->>U: error
@@ -406,7 +439,7 @@ sequenceDiagram
   end
 ```
 
-The first `setLiked(true)` call returns `superseded`, so the view model ignores it. Only the latest tap can change the heart back.
+The first `setLiked(true)` returns `superseded`; only the latest tap can change the heart back.
 :::
 
 ::: 8 · The server contract
@@ -424,23 +457,22 @@ POST /v1/posts/{id}/like   { "liked": true }
      → 200 { "liked": true, "likeCount": 413 }
 ```
 
-- **An opaque cursor, owned by the server.** The client sends it back untouched. Inside, the server might encode the last item's sort position or a feed snapshot ID; the client doesn't need to know. A cursor avoids the shifting that page numbers suffer when new posts arrive, but only if the server keeps a stable order for that pagination session. That's a backend promise, so the client still skips IDs it already shows.
-- **Width and height in the post**, so rows are sized before the photo loads. Image URLs can carry the display width, so the CDN sends a resized copy.
-- **The like request carries the final state**, and the reply carries the server's truth, so the client can reconcile.
-- **Personal vs shared.** The feed response is per user: cached on the server where it makes sense, never on a shared CDN. Photos are the same for everyone: cached hard on the CDN.
+- **An opaque cursor, owned by the server.** It avoids the shifting page numbers suffer only if the server keeps a stable order for the session, so the client still skips IDs it already shows.
+- **Width and height in the post**, so rows are sized before the photo loads.
+- **The like carries the final state, and the reply carries the server's truth.** The feed is personal, never on a shared CDN; photos are shared and cached hard.
 :::
 
 ::: 9 · Deep dive — "The user flings to the bottom, then pulls to refresh."
-**Trigger:** ask for the next page about one screen before the end, not at the last row.
+**Trigger:** ask for the next page about one screen before the end. On iOS 17, the row five from the end calls `rowAppeared` from its `.onAppear`. On iOS 18, `onScrollTargetVisibilityChange` reports visible rows directly.
 
 **Guard — load once, not five times:**
 
 1. If a page is loading, or there are no more pages, return.
 2. Otherwise mark `pagination = .loading` **at once**, before any `await`.
-3. Await the page, then append it, skipping IDs already shown (a duplicate ID breaks a diffable list).
+3. Await the page, then append it, skipping IDs already shown (a duplicate ID breaks a list's identity).
 4. Failure → `pagination = .failed`; the rows stay, and a retry row appears.
 
-The view model is on the main actor, so step 2 needs no lock: the first call wins, the others see "loading".
+On the main actor step 2 needs no lock: the first call wins.
 
 **Refresh starts a new session:**
 
@@ -449,45 +481,45 @@ The view model is on the main actor, so step 2 needs no lock: the first call win
 3. Replace the rows and the cursor, and reset `pagination`.
 4. Any page that arrives tagged with an old generation is dropped.
 
-*Why both cancel and a counter:* cancellation in Swift is cooperative. A request that already returned can still finish and try to append. The counter makes that harmless.
+*Why both cancel and a counter:* cancellation in Swift is cooperative. A reply that's already back can still try to append. The generation is the stale-result guard; cancel only saves bandwidth.
 
-**Scroll position:** pull to refresh happens at the top, so replacing is fine. Never replace rows under a user who is reading further down; that's what the "new posts" pill is for.
+**Scroll position:** refresh happens at the top, so replacing is fine. Never replace rows under someone reading lower down.
 :::
 
-::: 10 · Deep dive — "It stutters on an iPhone 12, and the list jumps. Why?"
+::: 10 · Deep dive — "It stutters on an older iPhone, and the list jumps. Why?"
 Measure first (Instruments: Hangs, Animation Hitches). The usual causes:
 
 1. **Full-size photos decoded on the main thread.** The image loader downsizes them off the main thread, to the row's pixel size.
 2. **Rows measured after the photo arrives.** That's the jump. Size from the model: `height = width ÷ aspectRatio`.
-3. **Reloading a whole row for one like.** Update it in place (`reconfigureItems` in UIKit).
-4. **Formatting in the cell.** Format once, in the view state.
+3. **Rebuilding a whole row for one like.** Change only the heart. In UIKit, `reconfigureItems` updates a cell in place.
+4. **Formatting in the row.** Format once, in the view state.
 
-**What the feed needs from the image loader:** one download per URL even if two rows ask; cancel when a row scrolls away; and a check that the photo arriving still belongs to the row (a reused cell must not show the previous post's photo). Ask the CDN for the display width, not the original.
+**From the image loader:** one download per URL, cancel when a row scrolls away, and a check that the arriving photo still belongs to the row. Ask the CDN for the display width.
 
-**Prefetching is an optimization, not a correctness mechanism.** In UIKit, `UICollectionViewDataSourcePrefetching` can start photos before rows appear, and its cancel callback stops them. The callbacks aren't guaranteed, so a row must still load its own photo when it appears. Visible rows go first; prefetches run at lower priority. In SwiftUI there's no prefetch callback: start a row's photo when it appears and cancel when it disappears (lazy stacks usually build rows a little before they're on screen).
+**Prefetching is an optimization, not correctness.** In UIKit, `UICollectionViewDataSourcePrefetching` starts photos early and cancels them, but its callbacks aren't guaranteed, so a row still loads its own photo. SwiftUI has no prefetch callback: start on appear, cancel on disappear.
 
-**Memory:** posts are small; decoded photos are big. The image cache has a cost limit and empties on a memory warning, so image memory stays bounded however far you scroll. The app's total memory still moves; the point is that it doesn't grow with scroll depth.
+**Memory:** decoded photos are what's big. The image cache has a cost limit and empties on a memory warning, so image memory doesn't grow with scroll depth.
 :::
 
 ::: 11 · Deep dive — "The user taps like three times, fast. Then the likes call fails."
 **Three quick taps** (like, unlike, like). The use case keeps, per post, the state the user wants now:
 
 1. Remember the wanted state.
-2. If a request for this post is in flight, stop: the earlier call becomes `superseded`.
+2. If a request for this post is in flight, stop. The earlier call becomes `superseded`.
 3. Otherwise send the wanted state.
-4. When it finishes, if the wanted state differs from what the server now holds, send again. Otherwise report `saved`, or `failed(serverState)` if the latest request was refused.
+4. When it finishes, if the wanted state differs from what was just sent, send again. Otherwise report `saved`, or `failed` with the server's last known state if refused, and forget the post.
 
-Like, unlike, like while the first request is out: one request, `liked: true`, and the third tap gets `saved`. No second request was needed.
+Like, unlike, like while the first is out: one request, and the third tap gets `saved`.
 
-**Why not "cancel the old one, last tap wins"?** Cancelling a task doesn't recall a request the server already received, and two requests in flight can land in either order. The server could end on "unliked" while the screen shows "liked". One at a time per post makes order a non-issue.
+**Why not "cancel the old one, last tap wins"?** Cancelling a task doesn't recall a request the server already got, and two in flight can land in either order, so the server could end on "unliked" under a filled heart.
 
-**Safe rollback.** The view model only corrects the heart on `failed`, and only the latest call can return it. An old request failing can never undo a newer tap. On `failed`, the heart goes to `serverState`, not to "the opposite".
+**Safe rollback.** Only the latest call can return `failed`, so an old failure never undoes a newer tap. The heart goes to `serverState`, not "the opposite"; with no reply (a timeout), to the heart before the taps, until a refresh corrects it.
 
-**A refresh during a like.** The view model keeps the heart for any post whose like hasn't settled and lays it over the refreshed page. A refresh can't flip a heart the user is still changing.
+**A refresh during a like.** The view model lays its unsettled hearts over the refreshed page, so a refresh can't flip a heart mid-change.
 
-**The likes call fails.** Failing is not "not liked". The rows show a dimmed, disabled heart (`unknown`), and the next page or refresh tries again. *The simpler option:* show empty hearts. Rejected: it tells the user something false, and they'd tap to like a post they already liked.
+**The likes read fails.** Rows show a dimmed, disabled heart (`unknown`) until the next page or refresh. *Rejected:* empty hearts. They'd be false, and the user would like a post twice.
 
-**A second screen shows the same post** (a profile grid). Two copies drift. When that screen exists, move the posts into one shared, observable post store that both view models read and the like use case updates. Not before.
+**A second screen shows the same post** (a profile grid). Then posts and the heart overlay move into one shared `@MainActor` post store both view models read; the use case writes outcomes to it and keeps the rule.
 :::
 
 ::: 12 · Failure modes, production and scale
@@ -498,35 +530,34 @@ Like, unlike, like while the first request is out: one request, `liked: true`, a
 | First page fails | Full-screen error with retry |
 | Later page fails | Keep the rows, show a retry row |
 | Photo fails | Placeholder; retry on tap or when the row reappears |
-| Likes unavailable | Keep known hearts; unknown ones dimmed, never shown as "not liked" |
+| Likes unavailable | Known hearts stay; unknown ones dimmed, never "not liked" |
 | Like refused | Heart goes to the server's state, short message |
-| Cursor expired | Start a new feed session from the first page |
-| Signed-in token expired | Refresh the token, retry the request once |
-| Offline | Show cached content if there is any, else an error with retry |
+| Cursor expired | Start a new session from the first page |
+| Token expired | The HTTP client refreshes it and retries once |
+| Offline | Error with retry (cached pages come later, if asked) |
 
 **Production notes** (short, not on the board)
 
-- **Networking:** a timeout per request; retry only what's safe (timeouts, 5xx, with backoff); honour `Retry-After` on 429; cancel work for screens that are gone.
-- **Caching:** HTTP caching for the feed only where the server allows it; photos in memory and on disk, with the CDN's cache headers deciding freshness.
-- **Metrics:** first-page time, page failure rate, image cache hit rate, image load and decode time, scroll hitches, like failure rate.
-- **Security:** HTTPS only; the server checks who may see and like what; signed, expiring image URLs when photos are private.
+- **Networking:** a timeout per request; retry only what's safe (timeouts, 5xx, with backoff); honour `Retry-After` on 429; cancel reads for screens that are gone, never the like.
+- **Caching:** photos in memory and on disk, with the CDN's cache headers deciding freshness.
+- **Metrics:** first-page time, page failure rate, image cache hit rate, decode time, scroll hitches, like failure rate.
 
-**Scale, back of the envelope.** Use the interviewer's numbers; the shape is what matters.
+**Scale, back of the envelope**, with the interviewer's numbers:
 
 ```text
 daily users × sessions a day × pages a session × posts a page = feed items read
 photos shown × average photo size                            = CDN bandwidth
 ```
 
-10M × 5 × 3 × 20 is three billion items a day. That's why page size, photo size per screen width, and cache hit rate are what move cost, not the client architecture.
+10M × 5 × 3 × 20 is three billion items a day. Page size, photo size and cache hit rate move the cost, not the client architecture.
 
 **Grow only when asked**
 
 ```text
-One screen                → one view model
-A second screen           → a shared post store
+One screen                → the heart overlay in the view model
+A second screen           → a shared post store holds posts and the overlay
 Offline reading           → persist the last pages, show them first
-Offline likes             → a small persistent queue (now you own sync and conflicts)
+Offline likes             → a persistent queue (now you own sync and conflicts)
 Live updates              → push or a socket, only if the product needs it
 ```
 :::
@@ -539,43 +570,43 @@ Answer out loud first, then open.
 <details>
 <summary>"Walk me through the layers."</summary>
 
-Presentation: screen and view model. Domain: Post, the feed and likes protocols, the like use case. Data: a posts repository, a likes repository, and a composite that combines them.
+Presentation: screen and view model. Domain: `Post`, the two protocols, the like use case. Data: posts and likes repositories, and a read-only composite.
 </details>
 
 <details>
 <summary>"Why does liking get a use case and loading doesn't?"</summary>
 
-Liking has a rule: one request at a time per post, always the latest state. Loading a page is one call; a use case would only pass it through.
+Liking has a product rule: only the latest tap counts, one request per post at a time. Loading a page is one call with no rule; a use case would only pass it through.
 </details>
 
 <details>
 <summary>"Why two repositories and a composite, not one?"</summary>
 
-Posts and likes come from different endpoints and change for different reasons. The composite is the one place they meet. If the feed returned isLiked, I'd drop it.
+Different endpoints, different reasons to change; the composite is where they meet. If the feed returned `isLiked`, I'd drop it.
 </details>
 
 <details>
 <summary>"Show me dependency inversion."</summary>
 
-The feed and likes protocols live in the domain; the composite and the remote likes repository implement them. Both arrows point up, so the view model and use case never import networking.
+The feed and likes protocols live in the domain; the composite and the likes repository implement them. Both arrows point up, so the view model and use case never import networking.
 </details>
 
 <details>
 <summary>"Where does mapping happen?"</summary>
 
-In the composite, where the post DTOs and the liked IDs meet. DTOs never leave the data layer.
+In each repository: the posts repository maps `PostDTO` to `Post`, the likes repository turns the reply into a set of IDs. The composite only combines app models.
 </details>
 
 <details>
-<summary>"Isn't this a lot of protocols for one screen?"</summary>
+<summary>"Where does the combined state come from?"</summary>
 
-Two, each with a reason: a fake for the view model's tests, and a smaller promise for the use case. I wouldn't add one for the view model or the screen.
+The composite, for each page. There's no store, because only one screen shows the posts; a second screen would add one.
 </details>
 
 <details>
-<summary>"Why is ranking out of scope, and is the feed the same for everyone?"</summary>
+<summary>"Why does the likes repository have two protocols?"</summary>
 
-Ranking is the server's job. The feed is personal: membership and order are per user, while each post object is shared.
+Two callers need different halves: the composite reads, the use case writes. One class, two small promises.
 </details>
 
 ### Pagination
@@ -587,27 +618,15 @@ New posts shift page numbers, so you see repeats. A cursor says "continue from h
 </details>
 
 <details>
-<summary>"What's inside the cursor?"</summary>
-
-I don't know, and I don't need to: it's opaque. The server might encode the last item's sort position or a snapshot ID.
-</details>
-
-<details>
 <summary>"What guarantees you get no duplicates?"</summary>
 
-The server's stable ordering for the session. The client still skips IDs it already shows, because that guarantee lives on another machine.
+The server's stable order for the session. The client still skips IDs it already shows, because that guarantee lives on another machine.
 </details>
 
 <details>
-<summary>"What if ranking changes between pages?"</summary>
+<summary>"How does SwiftUI tell you to load more?"</summary>
 
-That's why the server pins the order for a pagination session. If it doesn't, you may see a repeat or miss a post; dedupe handles repeats, refresh starts a fresh session.
-</details>
-
-<details>
-<summary>"What if the cursor expires?"</summary>
-
-The server returns an error for it; the client starts a new session from the first page.
+The row five from the end calls the view model from `.onAppear`; on iOS 18, `onScrollTargetVisibilityChange` can do it. The view model decides.
 </details>
 
 <details>
@@ -629,7 +648,7 @@ The first marks pagination loading before any await, on the main actor. The seco
 <details>
 <summary>"What if the user taps like three times quickly?"</summary>
 
-The heart follows each tap at once. The use case sends one request at a time per post and, when it finishes, sends the latest state only if it differs.
+The heart follows each tap. One request per post at a time; when it finishes, the latest state goes only if it differs.
 </details>
 
 <details>
@@ -639,19 +658,25 @@ It can't: there's only one request per post in flight. That's the reason to seri
 </details>
 
 <details>
-<summary>"Why send liked: true instead of toggle?"</summary>
-
-A final state is safe to retry or repeat. A toggle sent twice undoes itself.
-</details>
-
-<details>
 <summary>"An old request fails after a newer tap. Do you roll back?"</summary>
 
-No. Only the latest call gets an outcome; older ones are superseded. The heart is corrected only when the latest state is refused, and then to the server's state.
+No. Older calls are superseded; only the latest gets an outcome. The heart is corrected only when the latest state is refused, and then to the server's state.
 </details>
 
 <details>
-<summary>"What happens if the likes request fails?"</summary>
+<summary>"The user leaves the screen mid-like. Is the like cancelled?"</summary>
+
+No. The protocol promises the write lands; the use case runs it in its own task, and the closing screen only stops waiting.
+</details>
+
+<details>
+<summary>"Why is the use case an actor, and why only one?"</summary>
+
+Its per-post table is shared state, so it needs isolation. One app-wide instance, because a second one would have its own table and send in parallel.
+</details>
+
+<details>
+<summary>"What happens if the likes read fails?"</summary>
 
 Hearts become unknown: dimmed and disabled until the next page or refresh. Showing "not liked" would be false.
 </details>
@@ -660,35 +685,17 @@ Hearts become unknown: dimmed and disabled until the next page or refresh. Showi
 <summary>Follow-up chain: "A second screen."</summary>
 
 1. *"A profile grid shows the same post. User likes it in the feed."* → With separate copies, the grid is wrong.
-2. *"Fix it."* → One shared observable post store; both screens read it, the use case updates it.
-3. *"Why not refetch everywhere?"* → A network call per like on every screen, and flicker.
+2. *"Fix it."* → One shared observable post store; both screens read it, and the heart overlay moves there.
+3. *"Where does the rule go?"* → It stays in the use case, which now writes outcomes to the store.
 4. *"When wouldn't you do this?"* → With only one screen.
 </details>
 
 ### Images and performance
 
 <details>
-<summary>"How do you avoid downloading full-resolution photos?"</summary>
+<summary>"How do you stop a reused row showing the wrong image?"</summary>
 
-Ask the CDN for the row's pixel width, and downsample when decoding.
-</details>
-
-<details>
-<summary>"How do you stop a reused cell showing the wrong image?"</summary>
-
-Cancel the old request when the cell is reused, and check the arriving photo still matches the row's current URL before showing it.
-</details>
-
-<details>
-<summary>"What does prefetching do?"</summary>
-
-Starts photos for rows about to appear. It's an optimization: callbacks aren't guaranteed, so each row still loads its own photo.
-</details>
-
-<details>
-<summary>"How do you bound image memory?"</summary>
-
-The memory cache has a cost limit and clears on memory warnings. Photos never live in the Post model.
+Cancel the old request on reuse, and check the arriving photo still matches the row's current URL before showing it.
 </details>
 
 <details>
@@ -700,7 +707,7 @@ Size each row from the width and height in the post, before the photo arrives. N
 <details>
 <summary>"UICollectionView or SwiftUI List?"</summary>
 
-List first, since we're in SwiftUI. A wrapped collection view if profiling on the oldest phone says so.
+`List` first: it reuses rows. A wrapped collection view only if I need prefetch callbacks or the oldest phone hitches.
 </details>
 
 ### Production and change
@@ -708,31 +715,19 @@ List first, since we're in SwiftUI. A wrapped collection view if profiling on th
 <details>
 <summary>"What would you add for offline support?"</summary>
 
-Persist the last pages and show them first. Offline likes need a small persistent queue, which means owning sync and conflicts, so only if required.
-</details>
-
-<details>
-<summary>"What would you measure in production?"</summary>
-
-First-page time, page failures, image cache hit rate, decode time, scroll hitches, like failures.
-</details>
-
-<details>
-<summary>"What changes at 10x traffic?"</summary>
-
-Mostly the server. On the client: page and photo sizes, cache hit rate, and backing off on 429s.
+Persist the last pages and show them first. Offline likes need a persistent queue, which means owning sync and conflicts, so only if required.
 </details>
 
 <details>
 <summary>"How do you test liking?"</summary>
 
-The use case with a fake likes repository that holds its reply: tap like, unlike, like; check one request was sent. The view model with a fake use case returning failed: check the heart goes to the server state.
+The use case with a fake likes repository that holds its reply: like, unlike, like, one request sent. The view model with a fake use case returning failed: the heart goes to the server state.
 </details>
 
 <details>
 <summary>Follow-up chain: "Two weeks instead of six."</summary>
 
-1. *"What do you cut?"* → Offline and the second-screen store.
+1. *"What do you cut?"* → Offline and anything for a second screen.
 2. *"What can't you cut?"* → Cursor pages, the load guard, rows sized from the post, serialized likes.
 3. *"Risk?"* → No content offline. Fixable next release.
 </details>
@@ -746,19 +741,19 @@ The use case with a fake likes repository that holds its reply: tap like, unlike
 | 3 | Give a trade-off for each choice | |
 | 4 | Say out of scope first; separate required from later | |
 | 5 | Say the idea, list the parts, then sketch | |
-| 6 | Keep the sketch to about nine cards | |
+| 6 | Keep the sketch to nine type cards, one line each | |
 | 7 | Explain the cursor as opaque and server-owned | |
 | 8 | Name the three endpoints, and the two-request trade-off | |
-| 9 | Keep DTOs out of the domain | |
+| 9 | Map in each repository; keep the composite read-only | |
 | 10 | Make the like optimistic and serialized per post | |
 | 11 | Roll back only the latest tap, to the server's state | |
-| 12 | Guard load-more, and drop stale pages after refresh | |
-| 13 | Size rows from the post; prefetch as an optimization | |
+| 12 | Say the use case is one app-wide actor, and a like isn't cancelled | |
+| 13 | Guard load-more, and drop stale pages after refresh | |
 | 14 | Land the recap inside 60 seconds | |
 
 14+ is a pass.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero names the thing to read about next.<!--/public-->
 :::
 
 ::: 15 · The 60-second recap
-The server gives me my personal feed in pages, with an opaque cursor it owns; I send it back untouched and still skip IDs I already show. A main-actor view model loads the next page a screen before the end, marks it loading before any await so it fires once, and drops stale pages after a refresh with a generation counter. Posts and likes each have a repository and a composite combines them into one `Post`; in production I'd ask for `isLiked` in the feed and drop the second call. Rows are sized from the post, photos come from question 1's image loader, and prefetching only makes it faster. Liking flips the heart at once, and a use case sends one request per post at a time, always the latest state, so only the latest tap can be corrected. Offline, a second screen and live updates come when they're asked for.
+The server gives me my personal feed in pages, with an opaque cursor it owns; I send it back untouched and still skip IDs I already show. A main-actor view model loads the next page five rows before the end, marks it loading before any await so it fires once, and drops stale pages after a refresh with a generation counter. A posts repository and a likes repository each map their own data, and a read-only composite combines them into one `Post`; in production I'd ask for `isLiked` in the feed and drop the second call. Liking flips the heart at once, and one app-wide use case sends one request per post at a time, always the latest state, so only the latest tap can be corrected.
 :::

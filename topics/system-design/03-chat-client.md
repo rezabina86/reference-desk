@@ -4,16 +4,23 @@ summary: "Design the client side of a chat app."
 minutes: 50
 sources:
 - weeeBox · Mobile system design exercise, Chat application | https://github.com/weeeBox/mobile-system-design/blob/master/exercises/chat-app.md
-- techinterview.org · Design a mobile chat app, the hard parts | https://www.techinterview.org/post/3233474982/design-mobile-chat-app-whatsapp-imessage/
-- techinterview.org · A chat system that won't lose or reorder messages | https://www.techinterview.org/post/3233476407/chat-system-design-delivery-ordering-presence/
+- techinterview.org · Chat delivery, ordering, presence | https://www.techinterview.org/post/3233476407/chat-system-design-delivery-ordering-presence/
 - Apple · URLSessionWebSocketTask | https://developer.apple.com/documentation/foundation/urlsessionwebsockettask
+- Apple · sendPing(pongReceiveHandler:) | https://developer.apple.com/documentation/foundation/urlsessionwebsockettask/sendping(pongreceivehandler:)
+- Apple · ScenePhase | https://developer.apple.com/documentation/swiftui/scenephase
 - Apple · NWPathMonitor | https://developer.apple.com/documentation/network/nwpathmonitor
-- Apple · UIApplication.beginBackgroundTask(withName:expirationHandler:) | https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)
+- Apple · beginBackgroundTask(withName:expirationHandler:) | https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)
 - Apple · UNNotificationServiceExtension | https://developer.apple.com/documentation/usernotifications/unnotificationserviceextension
-- WWDC23 · Discover Observation in SwiftUI | https://developer.apple.com/videos/play/wwdc2023/10149/
+- Apple · LazyVStack | https://developer.apple.com/documentation/swiftui/lazyvstack
+- Apple · scrollPosition(id:anchor:) | https://developer.apple.com/documentation/swiftui/view/scrollposition(id:anchor:)
+- Apple · defaultScrollAnchor(_:) | https://developer.apple.com/documentation/swiftui/view/defaultscrollanchor(_:)
+- Apple · NSFetchedResultsController | https://developer.apple.com/documentation/coredata/nsfetchedresultscontroller
+- Apple · SwiftData Query | https://developer.apple.com/documentation/swiftdata/query
+- Apple · ModelContext.fetchHistory(_:) (iOS 18) | https://developer.apple.com/documentation/swiftdata/modelcontext/fetchhistory(_:)
+- GRDB · ValueObservation | https://swiftpackageindex.com/groue/grdb.swift/documentation/grdb/valueobservation
 ---
 
-*A recurring senior mobile prompt, and one of the public exercises interviewers draw their wording from. The answer below stays small on purpose: one repository per source, one composite to combine them, five endpoints and one socket. Start simple; add parts only when the interviewer asks for them.*
+*A recurring senior mobile prompt. The answer stays small: a database the screen observes, one repository per source, a read-only composite, one socket and a background sender.*
 
 > **Interviewer:** "Let's design the client side of a chat app. One-to-one and small group conversations. Where would you start?"
 
@@ -26,106 +33,113 @@ Set a timer. Sketch. Talk the whole time. Open a section only when its slot is o
 | 0:00–0:02 | The prompt | Repeat it back in one sentence |
 | 0:02–0:07 | Clarify | Ask yours, then read section 1 |
 | 0:07–0:12 | Scope | Out of scope first, then required, then later |
-| 0:12–0:24 | High level | The idea · the parts · the sketch · each part · two flows |
+| 0:12–0:24 | High level | The idea · the parts · the sketch · one line each · two flows |
 | 0:24–0:40 | Deep dives | The interviewer picks one of sections 9–11 |
 | 0:40–0:45 | Recap | Follow-ups, then the 60-second summary |
 
 ## What this question is really testing
 
 - **Who decides the order?** The server's sequence number, not the phone's clock.
-- **A send that doesn't wait for the network**, and a retry the server can recognise: a client message ID.
-- **The screen reads only the local database.** The network only writes into it.
-- **Catching up after a gap**, from the last sequence number you have, because the socket can miss things.
-- **Keeping it small.** Fan-out, presence and storage at scale are the server's job.
+- **A send that doesn't wait**, and a retry the server recognises: a client message ID.
+- **The screen observes a database on the phone.** The network only writes into it.
+- **Catching up after a gap**, because a socket can miss things.
+- **Honest splits:** the socket, the sending loop and each source are separate parts.
 
-**Traps:** ordering by the phone's clock; a send button that waits for the server; a retry that sends a new ID; trusting push notifications for delivery; drawing the screen straight from the socket; showing "not read" when the receipts call failed.
+**Traps:** ordering by the phone's clock; a send that waits for the server; a retry with a new ID; one "read up to" for a group of 50; trusting push; "not read" when receipts failed.
 
 ::: Words used in this chapter
-- **Server, API, endpoint** — the server passes messages and keeps the history; the API is the requests it accepts; an endpoint is one of them.
-- **WebSocket** — a line kept open to the server, so it can say "new message" the moment it happens.
-- **Sequence number** — a counter the server stamps on each message in a conversation: 417, 418, 419. The server promises it is the order.
-- **Client message ID** — an ID the phone gives a message before sending it. Sent twice, the server keeps one.
-- **Outbox** — messages written on the phone that the server hasn't accepted yet. Here, the unsent rows.
-- **Idempotent** — sending the same request twice has the same effect as once.
-- **Layer** — a group of parts with the same kind of job: *presentation* (what you see), *domain* (the app's own rules and data), *data* (where data comes from).
-- **View model, view state** — the view model is the screen's brain. The view state is one value that describes everything the screen shows.
-- **Model, DTO, mapping** — the *model* is the app's own description of a message. A *DTO* is the server's format. *Mapping* turns one into the other.
-- **Protocol** — a promise of what a part can do, without saying how. A fake can keep the same promise in tests.
-- **Repository** — the one place the app asks for data. **Composite** — a repository that combines several sources into one model.
-- **Receipt** — the server telling you how far the others have got: "delivered up to 418, read up to 417".
+- **Repository** — the one owner of one kind of data. It turns the server's format into the app's model.
+- **Composite** — a repository that only reads: it asks two repositories and combines their answers into one model.
+- **Store** — in-memory state that several screens show at once. Not needed here yet.
+- **Use case** — one user intent with a product rule, like "a read marker only moves forward".
+- **View model** — the screen's brain. It owns the screen's state and hands the screen one view state.
+- **WebSocket** — a line kept open, so the server can say "new message" at once.
+- **Sequence number** — the server's counter per conversation: 417, 418, 419. It is the order.
+- **Client message ID** — an ID the sender's device gives a message. Sent twice, the server keeps one.
+- **Outbox** — messages saved on the phone that the server hasn't accepted yet.
+- **Read position** — how far one member has read: "read up to 417". A group has one per member.
 :::
 
 ::: 1 · The interviewer answers your clarifying questions
-**"One-to-one only, or groups?"** → *Both. Groups are small, up to about 50 people.*
+**"One-to-one only, or groups?"** → *Both. Groups up to about 50 people.*
 
-**"What's in a message?"** → *Text only. Attachments are out of scope.*
+**"What's in a message?"** → *Text only.*
 
-**"Offline?"** → *Yes. Read your conversations with no signal, and write a message that goes out later.*
+**"Offline?"** → *Yes. Read with no signal; write a message that goes out later.*
 
-**"Several devices per user?"** → *A phone and an iPad at once. Both show the same order.*
+**"Several devices?"** → *A phone and an iPad. Both show the same order.*
 
-**"What status does a sent message show?"** → *Sending, sent, delivered, read. And failed, with a retry.*
+**"What does a sent message show?"** → *Sending, sent, delivered, read. Failed, with a retry.*
 
-**"How do I know who has read what?"** → *A separate receipts endpoint. A message is shared by everyone in the conversation; how far each person has read is per user.*
+**"Who has read what?"** → *A receipts endpoint, one read position per member.*
 
-**"How many users?"** → *Say 20 million a day, sending about 30 messages each. Don't design the backend.*
+**"Which screens?"** → *The conversation screen. The conversation list comes later.*
 
-**"Typing, presence, encryption?"** → *Typing is nice to have. Presence and end-to-end encryption are out.*
+**"How many users?"** → *20 million a day, 30 messages each. Don't design the backend.*
 
-**"Minimum OS, UI framework?"** → *iOS 17, SwiftUI.*
+**"Minimum OS?"** → *iOS 17, SwiftUI, Swift 6.*
 :::
 
 ::: 2 · Requirements and scope — what you should have said
-**Out of scope, said first:** the server (fan-out, storage, presence), attachments, calls, editing and deleting, search, encryption, sign-in.
+**Out of scope, said first:** the server, attachments, typing, calls, editing, search, encryption, sign-in, the conversation list.
 
 **Required for the prompt**
 
 1. Open a conversation instantly, even offline.
-2. Send a message, online or offline: it shows at once, the server keeps it once, and it shows its status.
+2. Send online or offline: it shows at once, is kept once, and shows its status.
 3. Receive new messages live, and catch up on anything missed.
 4. Scroll back through older messages.
 
-**What must feel good:** no lost or doubled messages, in the server's order on every device · opening and sending don't wait on the network · survives tunnels and a closed app · one socket, only while the app is open.
+**What must feel good:** no lost or doubled messages · the same order on every device · never waiting on the network · ticks that never lie.
 
-**Production considerations** (say them, don't draw them): token refresh, timeouts and safe retries, socket reconnect, metrics, data protection. See section 12.
+**Production considerations** (say, don't draw): token refresh, timeouts, safe retries, metrics. See section 12.
 
 **Optional follow-ups** (add only when asked):
 
 ```text
-The conversation list        → a second reader of the same database
-Typing indicators            → socket events, kept in memory
-New messages while closed    → push notifications, then a catch-up
-Sending after hours closed   → a background sync step
-Attachments                  → upload first, then send a message with the URL
+The conversation list      → a second reader of the same database
+Typing indicators          → socket events, kept in memory
+New messages while closed  → push to nudge, catch-up to deliver
+"Read by 12 of 49"         → fetched when the user asks
+Sending after hours closed → a background refresh
 ```
 
 *"I'll start simple and add each of these when the requirement appears."*
 :::
 
 ::: 3 · The idea, in 30 seconds — before you draw anything
-> *"One repository per source. A messages repository calls `GET /conversations/{id}/messages` (`?before=` for history, `?after=` to catch up), `POST /conversations/{id}/messages`, and listens on the `/live` WebSocket. A receipts repository calls `GET /conversations/{id}/receipts` and `POST /conversations/{id}/read`. Both save into a database on the phone, so a conversation opens instantly, even offline. A composite repository owns no source: it combines messages and receipts into one `Message` with a send state and a receipt state. Sending saves first, then posts unsent rows oldest first, each with an ID the phone chose, so the server can recognise a retry. Three layers: presentation, domain, data."*
+> *"The screen observes a database on the phone, so it opens instantly and works offline. A messages repository owns messages: `GET /conversations/{id}/messages` for history and catch-up, `POST /conversations/{id}/messages` to deliver. A receipts repository owns read positions: `GET /conversations/{id}/receipts` and `POST /conversations/{id}/read`. One live connection holds `WSS /live` while the app is open and hands each event to its owner. Sending saves first, with an ID the phone chose; an outbox sender delivers unsent rows oldest first, with the same ID on retry. A read-only composite combines messages and positions into one `Message` with its ticks, and marking read is a use case, because the read marker only moves forward."*
 :::
 
 ::: 4 · What we need — the components, before the sketch
 | # | Part | Type | Layer | Its one job |
 |---|---|---|---|---|
-| 1 | **Conversation screen** | `ConversationView` | Presentation | Draws the view state. |
-| 2 | **Conversation view model** | `ConversationViewModel` | Presentation | Turns messages into a view state. |
-| 3 | **Message repository** | `MessageRepository` | Domain | Promises a conversation and sending. |
-| 4 | **Composite message repository** | `CompositeMessageRepository` | Data | Combines messages and receipts into `Message`. |
-| 5 | **Messages repository** | `MessagesRepository` | Data | Fetches, sends and receives messages. |
-| 6 | **Receipts repository** | `ReceiptsRepository` | Data | Reads and sends read receipts. |
-| 7 | **Message database** | `MessageStore` | Data | Keeps the chat on the phone. |
+| 1 | **Conversation screen** | `ConversationView` | Presentation | Draws the view state, forwards actions. |
+| 2 | **Conversation view model** | `ConversationViewModel` | Presentation | Messages and history → one view state. |
+| 3 | **Mark-read use case** | `ForwardOnlyMarkReadUseCase` | Domain | The read marker only moves forward. |
+| 4 | **Composite conversation repository** | `CompositeConversationRepository` | Data | Messages + read positions → `Message`. |
+| 5 | **Messages repository** | `LocalFirstMessagesRepository` | Data | Owns messages. |
+| 6 | **Receipts repository** | `LocalFirstReceiptsRepository` | Data | Owns read positions. |
+| 7 | **Outbox sender** | `OutboxSender` | Data | Delivers unsent rows, oldest first. |
+| 8 | **Live connection** | `LiveConnection` | Data | One socket while open; routes events. |
+| 9 | **Message database** | `SQLiteMessageDatabase` | Data | Rows on disk, observed. |
+| chip | **Conversation repository** | `ConversationRepository` | Domain | The read promise card 4 keeps. |
+| chip | **Messages repository** | `MessagesRepository` | Domain | The send promise card 5 keeps. |
+| chip | **Receipts repository** | `ReceiptsRepository` | Domain | The mark-read promise card 6 keeps. |
 
-The `Message` model isn't a card: it's what the composite returns, written on its card. The HTTP client and the one socket connection the two source repositories share aren't drawn either.
+Nine cards, three chips. `Message` is written on the composite's card.
 
-**No use case.** Sending's rules (save first, oldest first, same ID on retry) touch only messages; marking read's rule (only up, at most every two seconds) touches only receipts; loading has none. A use case earns its place once a rule spans both sources.
+**No use case for sending or loading:** same-ID retries and oldest-first draining are delivery mechanics, and loading has no rule.
 
-Not on the list yet: everything under "optional follow-ups" in section 2.
+**Not drawn:** `APIClient` (HTTP, auth) for cards 5 and 6, `WebSocketClient` over `URLSessionWebSocketTask` for card 8, and `NetworkMonitor` (protocol `NetworkStatus`) over `NWPathMonitor` for card 7. **Not on the list yet:** everything under "optional follow-ups".
 :::
 
 ::: 5 · The sketch
 ```mermaid
+---
+config:
+  layout: elk
+---
 flowchart TB
   subgraph P["PRESENTATION"]
     View["`**1 · Conversation screen**
@@ -133,79 +147,105 @@ ConversationView`"] -- "actions → view state" --> VM["`**2 · Conversation vie
 ConversationViewModel`"]
   end
   subgraph D["DOMAIN"]
-    Repo["`**3 · Message repository**
-«protocol»`"]
+    Mark["`**3 · Mark-read use case**
+ForwardOnlyMarkReadUseCase`"]
+    Conv["`«protocol»
+ConversationRepository`"]
+    MsgP["`«protocol»
+MessagesRepository`"]
+    RcpP["`«protocol»
+ReceiptsRepository`"]
   end
   subgraph DA["DATA"]
-    Comp["`**4 · Composite message repository**
-CompositeMessageRepository
-messages + receipts → Message`"]
+    Comp["`**4 · Composite conversation repository**
+CompositeConversationRepository
+messages + positions → Message`"]
+    Out["`**7 · Outbox sender**
+OutboxSender`"]
+    Live["`**8 · Live connection**
+LiveConnection
+WSS /live`"]
     Msgs["`**5 · Messages repository**
-MessagesRepository
-GET messages · POST message · socket`"]
-    Rcpts["`**6 · Receipts repository**
-ReceiptsRepository
-GET receipts · POST read`"]
-    DB["`**7 · Message database**
-MessageStore
-source of truth`"]
+LocalFirstMessagesRepository
+GET /conversations/{id}/messages
+POST /conversations/{id}/messages`"]
+    Rcps["`**6 · Receipts repository**
+LocalFirstReceiptsRepository
+GET /conversations/{id}/receipts
+POST /conversations/{id}/read`"]
+    DB["`**9 · Message database**
+SQLiteMessageDatabase`"]
   end
-  VM -- "watch → messages" --> Repo
-  Repo ~~~ Comp
-  Comp -. "implements" .-> Repo
-  Comp -- "sync, send → ok" --> Msgs
-  Comp -- "sync, read → ok" --> Rcpts
-  Msgs -- "save → ok" --> DB
-  Rcpts -- "save → ok" --> DB
-  Comp -- "watch → rows" --> DB
+  VM -- "send → saved" --> MsgP
+  MsgP ~~~ Msgs
+  Msgs -. "implements" .-> MsgP
+  MsgP ~~~ Out
+  VM -- "watch → messages" --> Conv
+  Conv ~~~ Comp
+  Comp -. "implements" .-> Conv
+  VM -- "mark → done" --> Mark
+  Mark ~~~ Conv
+  Mark ~~~ MsgP
+  Mark -- "send → position" --> RcpP
+  RcpP ~~~ Rcps
+  Rcps -. "implements" .-> RcpP
+  RcpP ~~~ Live
+  Comp -- "watch → messages" --> Msgs
+  Comp -- "watch → positions" --> Rcps
+  Out -- "next → delivered" --> Msgs
+  Live -- "message events" --> Msgs
+  Live -- "receipt events" --> Rcps
+  Msgs -- "save → rows" --> DB
+  Rcps -- "save → positions" --> DB
   class View,VM pres
-  class Repo dom
-  class Comp,Msgs,Rcpts,DB data
+  class Mark,Conv,MsgP,RcpP dom
+  class Comp,Out,Msgs,Rcps,DB data
+  class Live net
 ```
 
-**How to read it.** A solid arrow points from the part that asks to the part that answers: *request → reply*. The dashed arrow means *implements*.
+**How to read it.** Solid arrows: *request → reply*, asker to answerer. Dashed: *implements*. Orange is the network connection.
 
-**Dependency inversion, in one line.** The domain writes the promise (card 3); the data layer keeps it (card 4). The arrow points **up**, so the domain never depends on the database or the network.
+**Dependency inversion, in one line.** The domain writes the three promises (the chips); cards 4, 5 and 6 keep them, so the dashed arrows point **up** and the view model never sees a socket, a database or HTTP.
 
-**One owner per source.** Messages come only through card 5, receipts only through card 6; each saves into its own table in card 7, the screen's source of truth. The composite owns nothing: it reads both and combines them.
+**One owner per source.** Messages reach the database only through card 5, positions only through card 6. The socket and the sending loop have their own lifecycles, so they are cards 7 and 8.
 
-**On Miro:** three frames (blue, purple, green), seven cards, eight arrows. Point at card 7 and say: *"the screen only ever reads from here."*
+**No shared store on this sketch:** one screen shows the conversation. When the list arrives, the database is what both screens observe.
+
+**On Miro:** three frames, nine cards, three chips. Point at card 9: *"the screen reads only this; the network only writes."*
 :::
 
 ::: 6 · Each component: its job, its interface, the choice inside it
-**The model everyone shares.** It's what the composite returns; the screen never sees a DTO.
+**The model everyone shares.** The screen never sees a DTO or a row.
 
 ```swift
 struct Message: Identifiable, Hashable, Sendable {
-    /// the client message ID, chosen on the phone
+    /// the client message ID, chosen by the sender's device
     let id: MessageID
     let senderID: UserID
     let text: String
     let sentAt: Date
-    /// the server's order, nil until the server accepts it
+    /// the server's order, nil until accepted
     let sequence: Int?
-    /// sending, sent, failed — my message reaching the server
+    /// pending, sent, failed: my message reaching the server
     var send: SendState
-    /// unknown, notDelivered, delivered, read — only once sent
+    /// unknown, sent, delivered, read: how far the others got
     var receipt: ReceiptState
 }
 ```
 
-The ID is the one the phone made, so a bubble keeps its identity from "sending" to "read" and doesn't flicker.
-
-**Two states, not one status enum.** "Did my send reach the server?" and "how far have the others got?" come from different sources and fail separately. `unknown` means no receipts ever loaded: a dimmed tick, never "not delivered".
+The ID comes from the sender's device, so a bubble keeps its identity from "sending" to "read".
 
 ### 1 · Conversation screen (`ConversationView`)
 
-**Job:** draws what the view model hands it and reports taps and scrolls. It decides nothing.
+**Job:** draws the view state and reports actions and scrolling. It decides nothing.
 
-**Interface:** reads `viewModel.viewState`; calls `onAppear()`, `send(_:)`, `retry(_:)`, `onTopReached()`, `onNewestVisible(_:)`.
+**Interface:** reads `viewModel.viewState`; calls `start()` from `.task`, `send(_:)`, `retry(_:)`, `topReached()`, `newestVisible(_:)`.
 
-**Choice:** a SwiftUI `List` anchored to the bottom, newest last. *Switch to* a wrapped `UICollectionView` if long conversations stutter on the oldest phone.
+**Choice:** a `ScrollView` with a `LazyVStack`, `defaultScrollAnchor(.bottom)` to open at the newest message, and `scrollPosition(id:)` so prepending history keeps the reader on the same bubble. *Switch to* a wrapped `UICollectionView` if it stutters: a lazy stack doesn't reuse rows.
 
 ### 2 · Conversation view model (`ConversationViewModel`)
 
-**Job:** watches the conversation and turns it into one view state.
+**Job:** observes one conversation and turns it, plus history paging, into one view state.
 
 **Interface:**
 
@@ -213,8 +253,6 @@ The ID is the one the phone made, so a bubble keeps its identity from "sending" 
 struct ConversationViewState: Equatable {
     let title: String
     let rows: [MessageRow]
-    /// e.g. "Waiting for network…", nil when online
-    let banner: String?
     /// idle, loading, failed(message), beginning
     let history: HistoryState
 }
@@ -225,189 +263,308 @@ struct MessageRow: Equatable, Identifiable {
     let isMine: Bool
     /// already formatted, e.g. "14:02"
     let time: String
-    /// clock, red retry, one tick, two ticks, read, dimmed;
-    /// nil for other people's messages
+    /// clock, retry, one tick, two, read, dimmed. nil if not mine
     let ticks: Ticks?
 }
 
 @MainActor @Observable
 final class ConversationViewModel {
-    init(conversation: ConversationID, repository: MessageRepository)
+    init(conversation: ConversationID,
+         reader: ConversationRepository,
+         messages: MessagesRepository,
+         markRead: MarkReadUseCase)
 
     var viewState: ConversationViewState { get }
 
-    func onAppear() async
-    func send(_ text: String)
-    func retry(_ id: MessageID)
-    func onTopReached() async
-    func onNewestVisible(_ id: MessageID)
+    /// Runs until the view's task is cancelled
+    func start() async
+    func send(_ text: String) async
+    func retry(_ id: MessageID) async
+    func topReached() async
+    func newestVisible(_ id: MessageID)
 }
 ```
 
 **Choices:**
 
-- **One view state**, so the screen stays dumb and a test checks one value. Rows, banner and history can coexist, so they're separate fields, not one status.
-- **Optimistic "sending" bubble** with a clock icon, before the server answers. Nothing to roll back: it's a saved row. A failure turns **only that bubble** red with "tap to retry"; the messages around it don't change.
+- **No optimistic overlay.** A pending message is a real saved row, so its bubble comes from the database. Nothing to roll back; a rejection turns only that bubble red.
+- **History is this screen's state**, guarded so a second `topReached()` returns while one load is out.
 
-### 3 · Message repository (`MessageRepository`)
+### 3 · Mark-read use case (`ForwardOnlyMarkReadUseCase`)
 
-**Job:** the one promise the view model needs: a live conversation, sending, older history and marking read.
+**Job:** moves my read marker forward, one request per conversation at a time, always the highest position seen.
 
 ```swift
-protocol MessageRepository: Sendable {
-    /// The conversation, sorted, updated on every change
+protocol MarkReadUseCase: Sendable {
+    /// Never throws. Ignores positions at or below the highest
+    /// wanted. Not cancelled by the caller's task.
+    func markRead(upTo sequence: Int, in conversation: ConversationID) async
+}
+
+actor ForwardOnlyMarkReadUseCase: MarkReadUseCase {
+    init(receipts: ReceiptsRepository)
+}
+```
+
+**Choices:**
+
+- **The rule a product manager would state:** "the read marker never moves back". That's why it's a use case and sending isn't.
+- **One app-wide `actor`**, so every caller shares its "highest wanted" per conversation.
+- **Serialized, latest wins.** While a request is out, newer positions only raise the wanted number; when it returns, send again if higher. A failure waits for the next call, which covers it.
+
+### 4 · Composite conversation repository (`CompositeConversationRepository`)
+
+**Job:** combines messages with members' read positions into `Message`s with ticks. It owns no source and never writes.
+
+```swift
+protocol ConversationRepository: Sendable {
+    /// Replays the current value, one stream per caller, ends
+    /// when the caller's task is cancelled. Never fails: ticks
+    /// stay .unknown until positions load once.
     func messages(in conversation: ConversationID) -> AsyncStream<[Message]>
-    func send(_ text: String, in conversation: ConversationID) async
-    func retry(_ id: MessageID) async
-    /// Loads 50 older messages, returns false at the beginning
-    func loadOlder(in conversation: ConversationID) async throws -> Bool
-    func markRead(upTo sequence: Int, in conversation: ConversationID)
+}
+
+final class CompositeConversationRepository: ConversationRepository {
+    init(messages: MessageStream, positions: ReadPositionStream)
 }
 ```
 
-**Choices:**
+**How it combines,** each time either stream emits:
 
-- **A stream, not a one-off fetch**, because the conversation keeps changing.
-- **What the protocol earns:** the view model is tested with a fake whose stream the test controls, and it never knows there are two sources or a database.
-
-### 4 · Composite message repository (`CompositeMessageRepository`)
-
-**Job:** combines message rows and receipt numbers into `Message`s, and passes each action to the repository that owns it.
-
-**Interface:** conforms to `MessageRepository`. Built with `init(messages: MessagesRepositoryType, receipts: ReceiptsRepositoryType, store: MessageStoreType)`.
-
-**How it combines:**
-
-1. On watch, ask both repositories to sync, then watch the database.
-2. Send state from the row: no sequence → `sending` (or `failed` if marked), else `sent`.
-3. Receipt state from the numbers: none saved yet → `unknown`; up to `readUpTo` → `read`; up to `deliveredUpTo` → `delivered`; else `notDelivered`.
-4. Sort by sequence. Messages still sending go last, oldest first.
+1. Take the latest messages and the latest positions.
+2. No positions yet → ticks stay `unknown`.
+3. For each of my sent messages, look at the **other** members: all read past it → `read`; all delivered → `delivered`; else `sent`.
+4. Sort by sequence; pending ones last, oldest first.
 
 **Choices:**
 
-- **It owns no source of its own.** Send, retry and load older go to card 5; mark read goes to card 6.
-- **Mapping in two steps.** Each source repository maps its DTOs to rows before saving; the composite maps rows to `Message`. DTOs never leave the data layer.
-- **The trade-off, said out loud:** a separate receipts endpoint adds a request when a conversation opens. In production I'd ask the backend to return the receipt numbers with the catch-up reply; then the receipts read disappears, and nothing above the domain changes.
+- **The trade-off, said out loud:** receipts cost a second request on open. In production I'd ask for positions in the catch-up reply; nothing above the domain changes.
 
-### 5 · Messages repository (`MessagesRepository`)
+### 5 · Messages repository (`LocalFirstMessagesRepository`)
 
-**Job:** owns messages: `GET messages`, `POST message` and socket message events, all saved to the database.
+**Job:** the one owner of messages: saves pending ones, fetches history and catch-up, delivers on request, applies socket events.
 
 ```swift
-protocol MessagesRepositoryType: Sendable {
-    /// Listens for message events and catches up with ?after=
-    func sync(_ conversation: ConversationID) async
-    /// Saves as sending, then posts with the same ID until it's accepted
-    func send(_ text: String, in conversation: ConversationID) async
-    func retry(_ id: MessageID) async
-    /// Fetches 50 older with ?before=, false at the beginning
+/// Domain: the view model's promise
+protocol MessagesRepository: Sendable {
+    /// Saves a pending row with a new client ID
+    func send(_ text: String, in conversation: ConversationID) async throws
+    /// Failed → pending again, same ID, back of the queue
+    func retry(_ id: MessageID) async throws
+    /// GET ?before=, false at the beginning. Cancellable.
     func loadOlder(in conversation: ConversationID) async throws -> Bool
 }
-```
 
-**Choices:**
-
-- **Catch up from the newest sequence it has**, on watch and after every reconnect. The socket is fast but can miss events while it's down; the catch-up fills them in.
-- **The outbox is the unsent rows**, sent oldest first, one at a time, each with its own client ID kept for every retry. No separate queue type: the database already survives a relaunch.
-- **One shared instance for the app**, so a send outlives the screen that started it. Unsent rows are retried on launch and when the network returns (`NWPathMonitor`).
-
-### 6 · Receipts repository (`ReceiptsRepository`)
-
-**Job:** owns receipts: `GET receipts`, `POST read` and socket receipt events, saved to the database.
-
-```swift
-protocol ReceiptsRepositoryType: Sendable {
-    /// Fetches receipts now, then listens for receipt events
-    func sync(_ conversation: ConversationID) async
-    /// Sent at most every two seconds, and only if the number went up
-    func markRead(upTo sequence: Int, in conversation: ConversationID)
+/// Data-internal: the composite's. Opening it catches up.
+protocol MessageStream: Sendable {
+    func messages(in conversation: ConversationID) -> AsyncStream<[Message]>
 }
-```
 
-**Choice:** receipts are "up to" numbers, not one flag per message. One number covers every tick, and reading is cumulative, so one request is enough.
+/// Data-internal: the outbox sender's
+protocol PendingMessages: Sendable {
+    func unsentChanged() -> AsyncStream<Void>
+    func oldestUnsent() async throws -> MessageID?
+    /// POST and save. Throws .temporary or .rejected (row failed)
+    func deliver(_ id: MessageID) async throws(DeliveryError)
+}
 
-### 7 · Message database (`MessageStore`)
+/// Data-internal: the live connection's
+protocol MessageEventSink: Sendable {
+    func apply(_ event: MessageEventDTO) async
+    /// Catches up every conversation being observed
+    func reconnected() async
+}
 
-**Job:** stores message rows and receipt numbers on the phone, and tells watchers when they change.
-
-```swift
-protocol MessageStoreType: Sendable {
-    /// Rows and receipts, re-sent on every change
-    func observe(_ conversation: ConversationID) -> AsyncStream<ConversationRecord>
-    /// Insert or update by message ID
-    func saveMessages(_ rows: [MessageRecord], in conversation: ConversationID) async throws
-    func saveReceipts(_ receipts: ReceiptsRecord, in conversation: ConversationID) async throws
-    func unsent() async throws -> [MessageRecord]
-    func newestSequence(in conversation: ConversationID) async throws -> Int?
+final class LocalFirstMessagesRepository: MessagesRepository,
+    MessageStream, PendingMessages, MessageEventSink {
+    init(api: APIClient, database: MessageDatabase)
 }
 ```
 
 **Choices:**
 
-- **SwiftData or SQLite**; SQLite if you need tight control of queries and migrations.
-- **Save by ID**, so a message delivered twice is stored once.
-- **Protected on disk** (`completeUntilFirstUserAuthentication`) and deleted on sign-out.
+- **One class, four small promises** (interface segregation): each caller sees only its part, and each fake needs a method or two.
+- **Saved by client ID, and a row only moves forward** (pending → sent, never back). That is the stale-result guard, carried by the ID and the sequence: a late catch-up can't undo a newer event.
+- **It runs no loop.** Cards 7 and 8 call it.
 
-**What the three data protocols earn:** the composite is tested alone, with fake sources and an in-memory store, no server.
+### 6 · Receipts repository (`LocalFirstReceiptsRepository`)
 
-**Why these parts, and no more.** Each part changes for a different reason: the screen with design, the view model with screen behaviour, each source repository with its endpoints, the composite with how sources combine, the database with storage. What I'd *not* add yet: a use case that only passes calls through, a protocol for the view model, a separate outbox or sync-engine type, a DI container, a generic repository. Constructor injection is enough.
+**Job:** the one owner of read positions: fetches them, posts mine, applies socket receipt events.
+
+```swift
+/// Domain: the use case's promise
+protocol ReceiptsRepository: Sendable {
+    /// Returns the server's position. Throws if refused or
+    /// unreachable. Cancelling the caller cancels it.
+    func markRead(upTo sequence: Int, in conversation: ConversationID) async throws -> Int
+}
+
+/// Data-internal: the composite's. nil until one fetch works.
+protocol ReadPositionStream: Sendable {
+    func positions(in conversation: ConversationID) -> AsyncStream<ReadPositions?>
+}
+
+/// Data-internal: the live connection's
+protocol ReceiptEventSink: Sendable {
+    func apply(_ event: ReceiptEventDTO) async
+    func reconnected() async
+}
+
+final class LocalFirstReceiptsRepository: ReceiptsRepository,
+    ReadPositionStream, ReceiptEventSink {
+    init(api: APIClient, database: MessageDatabase)
+}
+```
+
+**Choice:** a position is saved as the **higher** of old and new, so a late event can't move a tick back.
+
+### 7 · Outbox sender (`OutboxSender`)
+
+**Job:** delivers unsent messages, oldest first, one at a time.
+
+```swift
+actor OutboxSender {
+    init(pending: PendingMessages, network: NetworkStatus)
+    /// Called once at launch
+    func start()
+    func stop()
+}
+```
+
+**Choices:**
+
+- **Triggers:** launch, the network coming back, a new unsent row.
+- **One at a time.** In parallel, the server could accept them in any order.
+- **Temporary error → back off; rejected → move on.** It owns no endpoint: card 5 delivers.
+
+### 8 · Live connection (`LiveConnection`)
+
+**Job:** holds one WebSocket while in the foreground and hands each event to its owner.
+
+```swift
+actor LiveConnection {
+    init(socket: WebSocketClient,
+         messages: MessageEventSink,
+         receipts: ReceiptEventSink)
+    /// The app root calls these from scenePhase
+    func start()
+    func stop()
+}
+```
+
+**Choices:**
+
+- **Foreground only.** A closed app gets push; the catch-up delivers.
+- **A dead socket can look open.** `sendPing` every 30 seconds finds out; then reconnect with backoff and jitter, and call `reconnected()` on both sinks.
+- **Auth:** a short-lived token at connect; an expired one is refreshed, then it reconnects.
+
+### 9 · Message database (`SQLiteMessageDatabase`)
+
+**Job:** keeps rows and positions on disk, and re-sends a query's result after every write.
+
+```swift
+protocol MessageDatabase: Sendable {
+    /// Re-sent after each committed write
+    func messageRows(in conversation: ConversationID) -> AsyncStream<[MessageRecord]>
+    func positionRows(in conversation: ConversationID) -> AsyncStream<[PositionRecord]>
+    /// Insert or update by client ID, in one transaction
+    func save(_ rows: [MessageRecord]) async throws
+    func save(_ positions: [PositionRecord]) async throws
+}
+```
+
+**Choices:**
+
+- **SQLite with GRDB's `ValueObservation`**, which re-runs a query after each committed write. On Core Data, `NSFetchedResultsController` does the same.
+- **Rejected on iOS 17: SwiftData behind a view model.** `@Query` observes only inside a view, and `fetchHistory` is iOS 18.
+- **Records only.** File protection on, deleted at sign-out.
+
+**Why these parts, and no more.** Each card changes for one reason:
+
+| Card | Changes when |
+|---|---|
+| 1 · Conversation screen | the screen's design |
+| 2 · Conversation view model | the screen's behaviour |
+| 3 · Mark-read use case | a product rule (how the marker moves) |
+| 4 · Composite | how two sources combine |
+| 5 · Messages repository | an endpoint or payload (`/messages`) |
+| 6 · Receipts repository | an endpoint or payload (`/receipts`, `/read`) |
+| 7 · Outbox sender | a background job's lifecycle (triggers, backoff) |
+| 8 · Live connection | a connection's lifecycle |
+| 9 · Message database | a storage schema |
+
+Each protocol earns a fake or a smaller promise. Not added: a sending or loading use case, a view model protocol, a shared store, a DI container.
 :::
 
 ::: 7 · Key flows through the sketch
-**Flow 1 — sending a message.**
+**Flow 1 — opening a conversation.**
 
 ```mermaid
 sequenceDiagram
   participant VM as View model
   participant C as Composite
   participant M as Messages repo
+  participant R as Receipts repo
   participant DB as Database
+  VM->>C: messages(in: c)
+  C->>M: messages(in: c)
+  C->>R: positions(in: c)
+  M->>DB: observe rows
+  DB-->>M: saved rows, at once
+  M-->>C: Messages
+  R-->>C: saved positions or nil
+  C-->>VM: Messages with ticks
+  Note over M: GET ?after= newest saved
+  M-->>C: new Messages after save
+  C-->>VM: updated list
+```
+
+**Flow 2 — sending in a tunnel.**
+
+```mermaid
+sequenceDiagram
+  participant VM as View model
+  participant M as Messages repo
+  participant DB as Database
+  participant O as Outbox sender
   participant S as Server
-  VM->>C: send("On my way")
-  C->>M: send(text)
-  M->>DB: save, sending, id 9F2C
-  DB-->>C: rows changed
-  C-->>VM: stream, sending
+  VM->>M: send("On my way")
+  M->>DB: save pending, id 9F2C
+  Note over VM: the stream shows a clock
+  M-->>O: unsent changed
+  O->>M: deliver(9F2C)
   M->>S: POST /messages, id 9F2C
   alt accepted
     S-->>M: 201, sequence 418
-    M->>DB: save, sent, 418
-    DB-->>C: rows changed
-    C-->>VM: stream, sent
+    M->>DB: save sent, 418
+    M-->>O: delivered
   else timeout or 5xx
-    Note over M: stays sending, retry same ID
+    M-->>O: temporary
+    Note over O: back off, same ID later
   else rejected
     S-->>M: 4xx
-    M->>DB: save, failed
-    DB-->>C: rows changed
-    C-->>VM: stream, failed, tap to retry
+    M->>DB: save failed
+    M-->>O: rejected, move on
   end
 ```
 
-Only message 9F2C changes state, and every retry posts 9F2C again.
-
-**Flow 2 — receiving: live, then catch-up.**
+**Flow 3 — receiving live, then catching up.**
 
 ```mermaid
 sequenceDiagram
   participant S as Server
+  participant L as Live connection
   participant M as Messages repo
   participant DB as Database
-  participant C as Composite
-  participant VM as View model
-  S-->>M: socket, message 419
+  S-->>L: message 419
+  L->>M: apply(event)
   M->>DB: save by ID
-  DB-->>C: rows changed
-  C-->>VM: stream, 419 added
-  Note over S,M: socket drops in a tunnel
-  S-->>M: socket connected again
-  M->>DB: newestSequence()
-  DB-->>M: 419
-  M->>S: GET /messages?after=419
-  S-->>M: 420, 421, 422
-  M->>DB: save 3 messages
-  DB-->>C: rows changed
-  C-->>VM: stream, 3 added
+  Note over S,L: socket drops in a tunnel
+  L->>S: reconnect, backoff and jitter
+  L->>M: reconnected()
+  M->>S: GET ?after=419
+  S-->>M: 420, 421
+  M->>DB: save 2 by ID
 ```
 :::
 
@@ -415,79 +572,89 @@ sequenceDiagram
 ```
 GET  /v1/conversations/{id}/messages?before={sequence}&limit=50
 GET  /v1/conversations/{id}/messages?after={sequence}&limit=50
-     → { "items": [ { "id", "clientMessageId", "senderId",
-                      "text", "sequence", "sentAt" } ],
+     → { "items": [ { "clientMessageId", "senderId", "text",
+                      "sequence", "sentAt" } ],
          "hasMore": true }
 
 POST /v1/conversations/{id}/messages
      { "clientMessageId": "9F2C…", "text": "On my way" }
-     → 201 { "id", "clientMessageId", "sequence": 418, "sentAt" }
+     → 201 { "clientMessageId", "sequence": 418, "sentAt" }
        (same clientMessageId again → 200, the same message)
 
 GET  /v1/conversations/{id}/receipts
-     → { "deliveredUpTo": 418, "readUpTo": 417 }
+     → { "members": [ { "userId", "deliveredUpTo": 418,
+                        "readUpTo": 417 } ] }
 
 POST /v1/conversations/{id}/read   { "upToSequence": 419 }
-     → 204
+     → 200 { "readUpTo": 419 }       // never lower than before
 
-WSS  /v1/live
-     ← { "type": "message" | "receipt" | "typing", … }
+WSS  /v1/live                       // token at connect
+     ← { "type": "message", "message": { … } }
+     ← { "type": "receipt", "conversationId", "userId",
+         "deliveredUpTo", "readUpTo" }
 ```
 
-The first three belong to the messages repository, the next two to the receipts repository. The one shared socket routes each event type to its owner.
-
-- **Sequence numbers per conversation.** The server promises they are the order and have no holes, so a jump shows a gap. The client still saves by ID.
-- **`clientMessageId` makes sending idempotent.** A retry after a lost reply is safe, as long as the server remembers the ID.
-- **Shared vs per user.** A message is shared by the conversation; receipts are per user, so they have their own endpoint. That costs a request on open; the `?after=` reply could carry the numbers instead.
+- **Sequence numbers per conversation**, promised in order with no holes, so a jump shows a gap.
+- **`clientMessageId` makes sending idempotent**, if the server remembers IDs longer than the client retries.
+- **Positions per member**, because a group's "read" must say *whose*. A second request on open; the `?after=` reply could carry them.
 :::
 
 ::: 9 · Deep dive — "Messages arrive out of order, twice, or not at all."
-**Decision:** the server's sequence is the order, the ID removes duplicates, and a catch-up fills gaps.
+**Decision:** the sequence is the order, the client ID removes duplicates, a catch-up fills gaps.
 
-1. **Save by ID.** Already there? Update it. A message delivered twice shows once.
-2. **Sort by sequence.** A late message still lands in the right place.
-3. **Spot a gap.** If 418 is followed by 421, the messages repository calls `GET ?after=418`. This relies on the server's promise of no holes.
-4. **Catch up after every reconnect.** A socket doesn't promise delivery across a drop, and a dead one can look open (`sendPing` finds out). Reconnect with backoff and jitter, then catch up.
+1. **Save by client ID.** A message from the socket and again from the catch-up shows once. So does my own message from the iPad: it arrives with the iPad's client ID.
+2. **Sort by sequence.** A late message lands in the right place.
+3. **Spot a gap.** 418 then 421 → `GET ?after=418`, relying on the no-holes promise.
+4. **Catch up after every reconnect**, from the newest saved sequence. A socket doesn't promise delivery across a drop.
 
-*Rejected:* ordering by the time on the sender's phone. Clocks drift, so two devices would disagree.
+**The pending bubble that moves.** A pending message sits at the bottom. Accepted, it takes its sequence, usually the newest, so it stays put. If another message got in first, it moves above mine once, animated: the order every device shows.
+
+*Rejected:* ordering by the sender's clock. Clocks drift, so two devices would disagree.
 :::
 
 ::: 10 · Deep dive — "I send a message in a tunnel, then close the app."
-**Decision:** save first, show at once, resend with the same ID until the server answers.
+**Decision:** save first, show at once, deliver later with the same ID.
 
-1. **Save** the message with status *sending*. It is on screen at once.
-2. **No network?** It waits in the database. When `NWPathMonitor` says the network is back, or the app next launches, the messages repository sends every unsent row, oldest first, one at a time. In parallel, the server could accept them in any order.
-3. **Temporary error** (timeout, 5xx, 429 with `Retry-After`) → stays *sending*, the queue pauses and retries with backoff. **Permanent error** (4xx) → only that message turns *failed*; the queue moves on, so one bad message doesn't block the rest.
-4. **Every retry uses the same `clientMessageId`**, automatic or tapped. If the server stored it but the reply was lost, it answers "already have it". A tapped retry joins the back of the queue and gets a later sequence.
+1. **Save** the row as *pending*. The database stream puts it on screen at once.
+2. **The outbox sender wakes** on the new row, the network coming back, or the next launch, and delivers oldest first, one at a time.
+3. **Temporary error** (timeout, 5xx, 429 with `Retry-After`) → still *pending*, back off. **Rejected** (4xx) → only that message *fails*; the queue moves on.
+4. **Every retry posts the same `clientMessageId`.** If only the reply was lost, the server answers "already have it".
 
-`beginBackgroundTask` asks for a little time in the background; the system can end it early, and anything left goes on next launch.
+`beginBackgroundTask` asks for a little time after closing; the system can end it early, and the rest goes at next launch.
 
-*Rejected:* disabling send while offline. Safe, but it feels broken.
+*Rejected:* disabling send offline. Safe, but it feels broken.
 :::
 
-::: 11 · Deep dive — "Read receipts, and a second screen."
-**Marking as read.**
+::: 11 · Deep dive — "Read receipts in a group of 50, and a second screen."
+**Marking read.**
 
-1. When the newest message is visible, the view model calls `markRead(upTo: 419)`.
-2. The composite passes it to the receipts repository, which sends `POST /read` at most every two seconds, and only if the number went up. A failure just waits for the next one: the number only grows, so the latest call covers the old.
-3. The others get a receipt event; every message up to 419 shows *read*.
+1. The newest message is on screen, app active: the view model calls `markRead(upTo: 419)`.
+2. The use case drops anything not above the highest wanted; one request per conversation at a time.
+3. The server keeps the higher number and sends the others a receipt event.
+4. Their receipts repositories save the higher position; the composite recomputes ticks.
 
-**Receipts fail to load.** Keep the saved numbers; with none, ticks are `unknown` and dimmed. *Rejected:* showing "not delivered", which may be false.
+**Group ticks.** "Read" means every other member's `readUpTo` is at or past the message: the lowest of 49 numbers. One shared number can't say whose.
 
-**The conversation list shows the same messages.** It is almost free: the list's own repository reads the same database, so one save updates both screens. No shared store, no change bus.
+**Receipts fail to load.** Keep saved positions; with none, ticks are `unknown`, dimmed. *Rejected:* "not delivered", maybe false.
+
+**The conversation list** is a second composite over the same repositories. One save updates both screens, because both observe the database. No shared store, no change bus.
 
 ```mermaid
 flowchart TB
-  CVM["`**Conversation view model**`"] -- "watch" --> Comp["`**Composite message repository**`"]
-  LVM["`**List view model**`"] -- "watch" --> List["`**Conversation list repository**`"]
-  Comp -- "read" --> DB["`**Message database**
-source of truth`"]
-  List -- "read" --> DB
-  Msgs["`**Messages repository**`"] -- "save" --> DB
+  CVM["`**View model**
+ConversationViewModel`"] -- "watch → messages" --> Comp["`**Composite**
+CompositeConversationRepository`"]
+  LVM["`**View model**
+ConversationListViewModel`"] -- "watch → summaries" --> List["`**Composite**
+CompositeConversationListRepository`"]
+  Comp -- "watch → rows" --> Msgs["`**Messages repository**
+LocalFirstMessagesRepository`"]
+  List -- "watch → newest" --> Msgs
+  Msgs -- "observe → rows" --> DB["`**Message database**
+SQLiteMessageDatabase`"]
   class CVM,LVM pres
   class Comp,List,Msgs,DB data
 ```
-
 :::
 
 ::: 12 · Failure modes, production and scale
@@ -495,40 +662,37 @@ source of truth`"]
 
 | Failure | Client behaviour |
 |---|---|
-| Offline | Open from the database, sends wait, "Waiting for network…" banner |
-| Send times out or 5xx | Stays *sending*, retry with backoff, same ID |
+| Offline | Open from the database; sends wait |
+| Send times out or 5xx | Still *pending*; back off, same ID |
 | Send rejected (4xx) | Only that message turns *failed*, tap to retry |
-| Socket drops | Reconnect with backoff and jitter, then catch up `?after=` |
-| Receipts call fails | Keep the saved ticks; none saved → dimmed, never "not delivered" |
-| Duplicate or gap | Saved by ID; a gap triggers a catch-up |
-| App killed mid-send | Row is on disk; next launch resends with the same ID |
-| Token expired | Refresh it, retry the request once, reopen the socket |
-| Signed out | Database deleted, socket closed |
+| Socket drops or goes silent | Ping finds it; reconnect with jitter, catch up |
+| Receipts call fails | Keep saved ticks; none saved → dimmed, never "not delivered" |
+| App killed mid-send | Next launch delivers it, same ID |
+| Token expired | Refresh, retry once; socket reconnects |
+| Signed out | Socket closed, database deleted |
 
 **Production notes** (short, not on the board)
 
-- **Networking:** a timeout per request; retry only what's safe (timeouts, 5xx, and sends, thanks to the ID); honour `Retry-After` on 429; cancellation is cooperative, so a late reply still lands in the database, harmlessly.
-- **Caching:** the database is the cache; personal responses never go on a shared CDN.
-- **Metrics:** send-to-sent time, send failure rate, outbox size, reconnects per hour, catch-up size, time to open a conversation.
-- **Security:** HTTPS and WSS only; file protection on the database; nothing about message text in logs or metrics.
+- **Networking:** a timeout per request; retry only what's safe (timeouts, 5xx, and sends, thanks to the ID); honour `Retry-After` on 429; cancel history reads for a closed screen, never a delivery.
+- **Background:** push nudges a closed app, and a `UNNotificationServiceExtension` can adjust its text; delivery is still the catch-up on open.
+- **Metrics:** send-to-sent time, outbox size, reconnects, time to open. Never message text.
 
-**Scale, back of the envelope.** Use the interviewer's numbers; the shape is what matters.
+**Scale, back of the envelope**, with the interviewer's numbers:
 
 ```text
-daily users × messages each = messages a day
-messages a day ÷ 86,400 s   = sends per second (average)
+daily users × messages each  = messages a day
+messages a day ÷ 86,400 s    = sends per second (average)
 ```
 
-20M × 30 is 600 million messages a day, about 7,000 sends a second on average. A text is under 1 KB, so a phone's history stays small. Cost moves with sockets, fan-out, catch-up size and receipt frequency, not the client architecture.
+20M × 30 is 600 million a day, about 7,000 a second. That's the server's cost, not the client's shape.
 
 **Grow only when asked**
 
 ```text
-One conversation           → one view model over the database
-The conversation list      → a second reader of the same database
+The conversation list      → a second composite, same database
 New messages while closed  → push to nudge, catch-up to deliver
-Big groups                 → "read by 12", fetched when asked
-Sending after hours closed → a background sync step
+"Read by 12 of 49"         → the same positions, shown on request
+Sending after hours closed → a background refresh step
 ```
 :::
 
@@ -540,49 +704,43 @@ Answer out loud first, then open.
 <details>
 <summary>"Walk me through the layers."</summary>
 
-Presentation: screen and view model. Domain: `Message` and the message repository protocol. Data: a messages repository, a receipts repository, a composite that combines them, and the database they save into.
+Presentation: screen, view model. Domain: `Message`, three protocols, the mark-read use case. Data: two repositories, a read-only composite, the sender, the connection, the database.
 </details>
 
 <details>
-<summary>"Why separate messages and receipts repositories and a composite?"</summary>
+<summary>"Why does marking read get a use case and sending doesn't?"</summary>
 
-Messages and receipts are different sources that change for different reasons. One repository each keeps them small; the composite is the one place they meet.
+"The marker never moves back" is a product rule. Same-ID retries and oldest-first draining are delivery mechanics, so they live with the data they deliver.
 </details>
 
 <details>
-<summary>"Why no SendMessageUseCase?"</summary>
+<summary>"Why is the socket its own part?"</summary>
 
-Save-first, oldest-first and same-ID retry touch only messages, so they live in the messages repository. A use case earns its place when a rule spans sources.
+Its lifecycle (foreground, ping, reconnect, token) changes for other reasons than any endpoint. Inside a repository it would be a second job.
 </details>
 
 <details>
 <summary>"Show me dependency inversion."</summary>
 
-The message repository protocol lives in the domain; the composite in the data layer implements it. The arrow points up, so the domain never imports the database or networking.
+The domain owns the three protocols; the data cards implement them, so the view model never imports networking or SQLite.
 </details>
 
 <details>
 <summary>"Where does mapping happen?"</summary>
 
-Each source repository maps its DTOs to database rows; the composite maps rows to `Message`. The domain never sees the server's shape.
+Each repository maps its DTOs to records on save, and records to app models on read. The composite only combines app models.
 </details>
 
 <details>
-<summary>"Where does a message's status come from?"</summary>
+<summary>"Where does the combined state come from?"</summary>
 
-The composite: the send state from the row (no sequence means sending), the receipt state from the saved numbers (up to `readUpTo` means read).
+The composite, each time messages or positions change. No store: one screen, and a second would observe the same database.
 </details>
 
 <details>
-<summary>"Why two states and not one status enum?"</summary>
+<summary>"Why does the messages repository have four protocols?"</summary>
 
-They come from different sources and fail separately. A message can be sent while its receipts are unknown.
-</details>
-
-<details>
-<summary>"Isn't this a lot of protocols?"</summary>
-
-Four, each for a test: a fake repository for the view model, fake sources and an in-memory store for the composite. None for the view model or the screen.
+Four callers need different parts: send, read, deliver, apply events. One class, four small promises.
 </details>
 
 ### Ordering and the API
@@ -590,27 +748,33 @@ Four, each for a test: a fake repository for the view model, fake sources and an
 <details>
 <summary>"Why not order by timestamp?"</summary>
 
-Phone clocks drift and can be changed. The server's sequence number is the same on every device.
+Phone clocks drift and can be changed. The server's sequence is the same on every device.
 </details>
 
 <details>
-<summary>"What guarantees the order and no holes?"</summary>
+<summary>"What guarantees order and no holes?"</summary>
 
-The server's promise. The client still saves by ID and catches up after gaps, because the promise lives on another machine.
+The server's promise. The client still saves by ID and catches up after gaps.
 </details>
 
 <details>
-<summary>"Why are receipts a separate endpoint?"</summary>
+<summary>"How does the UI find out the database changed?"</summary>
 
-A message is shared by the conversation; how far each person has read is per user and changes on its own. The cost is a second request on open, so in production I'd ask for the numbers in the catch-up reply.
+The database re-runs the query after each write and emits rows; the view model iterates the stream from the view's `.task`.
+</details>
+
+<details>
+<summary>"Why not SwiftData?"</summary>
+
+On iOS 17 it observes only through `@Query` in a view; history is iOS 18. Behind a view model I need a stream.
 </details>
 
 <details>
 <summary>Follow-up chain: "The reply is lost."</summary>
 
-1. *"You post a message and the connection times out."* → The row stays *sending*.
+1. *"You post and it times out."* → The row stays *pending*.
 2. *"Did the server get it?"* → You can't know. Retry with the same ID.
-3. *"It had."* → The server returns the stored message. One message, not two.
+3. *"It had."* → It returns the stored message. One message, not two.
 4. *"Retry with a new ID?"* → Your friend gets it twice.
 </details>
 
@@ -619,106 +783,88 @@ A message is shared by the conversation; how far each person has read is per use
 <details>
 <summary>"What happens when I tap send?"</summary>
 
-The messages repository saves it as sending, so it appears at once, then posts it. A success makes it sent, a rejection failed, a timeout keeps it sending for a retry.
+A pending row is saved, so the bubble appears at once. The sender sees it and delivers.
 </details>
 
 <details>
 <summary>"Three messages queued offline. In what order do they go?"</summary>
 
-One at a time, oldest first. Sending in parallel could deliver them out of order.
+One at a time, oldest first. In parallel the server could accept them in any order.
 </details>
 
 <details>
 <summary>"The second of three is rejected."</summary>
 
-Only it turns failed; the third still goes. A tapped retry reuses its ID and gets a later sequence.
+Only it turns failed; the third still goes. A tapped retry keeps its ID and gets a later sequence.
 </details>
 
 <details>
-<summary>"Why not cancel the send when the user leaves the screen?"</summary>
+<summary>"Is the 'sending' bubble optimistic UI state?"</summary>
 
-Cancelling doesn't recall a request the server may have, and the user expects it to go. The messages repository is one shared instance; the screen was only watching.
+No, it's a real saved row: the outbox. Nothing to roll back, so neither the view model nor a repository holds an overlay.
 </details>
 
-<details>
-<summary>"The app is killed mid-send."</summary>
-
-The row is on disk as sending. Next launch resends it with the same ID.
-</details>
-
-### Receiving and sync
-
-<details>
-<summary>"Why read from the database instead of the socket?"</summary>
-
-The database survives restarts and works offline. The socket is a fast way to fill it, not a place to read from.
-</details>
+### Receiving and receipts
 
 <details>
 <summary>"The socket was down for five minutes."</summary>
 
-On reconnect, the messages repository asks `GET ?after=` the newest sequence it has, and saves what comes back.
+On reconnect, `GET ?after=` the newest saved sequence, saved by ID.
 </details>
 
 <details>
-<summary>"Can push notifications replace the socket?"</summary>
+<summary>"I send from my iPad. What does my phone show?"</summary>
 
-No. Delivery isn't guaranteed: they can be late, merged or dropped. They nudge; the catch-up delivers.
+It arrives by socket with the iPad's client ID, saved as mine. A catch-up lands on the same row.
 </details>
 
 <details>
-<summary>"The socket looks connected but nothing arrives."</summary>
+<summary>"What does 'read' mean in a group of 50?"</summary>
 
-A ping finds the dead connection; then reconnect with backoff and catch up from the last sequence.
+Every other member has read past it: the lowest of their positions. "Read by 12" comes from the same numbers.
 </details>
 
 <details>
 <summary>"The receipts call fails. Show 'not read'?"</summary>
 
-No. Keep the saved ticks; with none saved, they're unknown and dimmed. A failed read isn't "false".
-</details>
-
-<details>
-<summary>"Scroll back two years."</summary>
-
-Show what the database has, then `GET ?before=` the oldest sequence, 50 at a time, until `hasMore` is false.
+No. Keep saved ticks; with none, they're unknown and dimmed.
 </details>
 
 <details>
 <summary>Follow-up chain: "A second screen."</summary>
 
-1. *"Add the conversation list. A message arrives."* → The messages repository saves it to the database.
-2. *"How does the list update?"* → Its repository reads the same database, so it updates on its own.
-3. *"No shared store?"* → The database is the shared store.
-4. *"When would you need a change bus?"* → For "everything is stale" events, like sign-out.
+1. *"Add the conversation list. A message arrives."* → The repository saves it.
+2. *"How does the list update?"* → Its composite observes the same repositories.
+3. *"No shared store?"* → The database is what both screens observe.
+4. *"When would you add a store?"* → For in-memory state both show, like a typing indicator.
 </details>
 
-### Offline, testing and change
+### Testing and change
 
 <details>
 <summary>"How do you test sending?"</summary>
 
-A fake HTTP client that times out, then succeeds. Check the row stays sending, then turns sent, and both posts carry the same ID.
+The sender with a fake `PendingMessages` that fails once, then succeeds: two deliveries, same ID.
 </details>
 
 <details>
-<summary>"How do you test the composite repository?"</summary>
+<summary>"How do you test group ticks?"</summary>
 
-An in-memory database with three rows and receipts `readUpTo: 2`. Check two come back read and one not delivered.
+The composite with two fake streams: three messages, positions for three members. Check the lowest position decides "read".
 </details>
 
 <details>
-<summary>"What changes at 10x?"</summary>
+<summary>"What changes at 10×?"</summary>
 
-Mostly the server. On the client: receipts on demand in big groups, less history on the phone, backing off on 429s.
+Mostly the server. On the client: positions in the catch-up reply, less history kept, backing off on 429.
 </details>
 
 <details>
 <summary>Follow-up chain: "Two weeks instead of six."</summary>
 
-1. *"What do you cut?"* → Old-history paging and the 10× work.
-2. *"What can't you cut?"* → The database as source of truth, client IDs, catch-up after reconnect.
-3. *"Risk?"* → Long conversations load slower. Fixable next release.
+1. *"What do you cut?"* → Older-history paging and group detail.
+2. *"What can't you cut?"* → The database as the screen's source, client IDs, catch-up after reconnect.
+3. *"Risk?"* → Long conversations start shorter. Fixable next release.
 </details>
 :::
 
@@ -727,22 +873,22 @@ Mostly the server. On the client: receipts on demand in big groups, less history
 |---|---|---|
 | 1 | Talk the whole time, and listen when interrupted | |
 | 2 | Clarify before designing | |
-| 3 | Give a rejected alternative for each choice | |
+| 3 | Give a trade-off for each choice | |
 | 4 | Say out of scope first, including the server | |
 | 5 | Say the idea, list the parts, then sketch | |
-| 6 | Keep the sketch to about nine cards | |
-| 7 | Name the endpoints and the socket | |
+| 6 | Keep the sketch to nine type cards, one line each | |
+| 7 | Name the five endpoints and the socket | |
 | 8 | Order by the server's sequence, not the clock | |
-| 9 | Give every message a client ID, reused on retry; fail only that message | |
-| 10 | Make the database the screen's only source | |
-| 11 | Catch up after a reconnect; treat failed receipts as unknown | |
-| 12 | One repository per source, a composite that combines them | |
-| 13 | Say why there's no use case, and what each protocol earns | |
+| 9 | Reuse the client ID on retry; fail only that message | |
+| 10 | Make the screen observe the database, and say how | |
+| 11 | Split the socket and the sender from the repositories | |
+| 12 | Keep the composite read-only; map in each repository | |
+| 13 | Group "read" per member; failed receipts unknown | |
 | 14 | Land the recap inside 60 seconds | |
 
 14+ is a pass.<!--private--> Anything scored 0 goes in the progress log and comes back as a recall prompt.<!--/private--><!--public--> A zero names the thing to read about next.<!--/public-->
 :::
 
 ::: 15 · The 60-second recap
-The screen reads only from a database on the phone, so conversations open instantly and work offline. Messages and receipts each have their own repository that saves into it, and a composite combines them into one `Message` with a status; DTOs never leave the data layer. Each message has a send state and a receipt state; a failed receipts call means unknown, not unread. Sending saves first as "sending", then posts unsent rows oldest first with an ID the phone chose, so the server can recognise a retry, and a rejection fails only that message. The server's sequence number is the order on every device. A WebSocket brings new messages, but it can miss things, so after any gap or reconnect the messages repository asks for everything after the last sequence it has. There's no use case: these rules each touch one source. The conversation list, push, and big groups come when they're asked for.
+The screen observes a SQLite database on the phone, so it opens instantly and works offline; the network only writes into it. A messages repository and a receipts repository each own one source, and a read-only composite combines messages and per-member read positions into one `Message` with ticks. Sending saves a pending row with an ID the phone chose; an app-scoped outbox sender delivers unsent rows oldest first and retries with the same ID, so the server keeps each message once. One live connection holds the socket while open, routes events, and triggers a catch-up after every reconnect. The sequence is the order everywhere. Marking read is the one use case: the marker only moves forward.
 :::

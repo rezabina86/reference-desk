@@ -838,7 +838,7 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
 
 
   /* ------------------------------------------------------- mermaid boards */
-  var mermaidLib = null;
+  var mermaidLib = null, elkLoaded = false;
   function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
   function boardClasses() {
     function def(name, fill, stroke, extra) {
@@ -862,7 +862,15 @@ details.reveal[open]>summary{border-bottom:1px solid var(--rule)}
           return document.fonts.load(f);
         })).then(function () { return document.fonts.ready; }).catch(function () {})
       : Promise.resolve();
+    // A board opts into the ELK layout ("config: layout: elk" front matter) when dagre can't stack its
+    // frames; ELK is loaded only for pages that have such a board.
+    var needsElk = Array.prototype.some.call(srcs, function (p) { return /layout:\s*elk/.test(p.textContent); });
     Promise.all([mermaidLib, fontsReady]).then(function (r) { return r[0]; }).then(function (mermaid) {
+      if (!needsElk || elkLoaded) return mermaid;
+      return import('https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0/dist/mermaid-layout-elk.esm.min.mjs')
+        .then(function (e) { mermaid.registerLayoutLoaders(e.default); elkLoaded = true; return mermaid; })
+        .catch(function () { return mermaid; });
+    }).then(function (mermaid) {
       mermaid.initialize({
         startOnLoad: false, securityLevel: 'strict', theme: 'base',
         fontFamily: "'IBM Plex Sans', -apple-system, sans-serif",
