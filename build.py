@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build the knowledge site.
 
-Reads topics/<slug>/topic.json + topics/<slug>/NN-*.md and writes index.html.
+Reads topics/<slug>/topic.json + topics/<slug>/NN-*.md and writes either one
+self-contained file (index.html, docs/index.html) or, with --pages DIR, one page
+per chapter for reza-bina.com/notes. Markup comes from render.py.
 Standard library only: no pip install, no network, works offline forever.
 """
 
@@ -10,8 +12,12 @@ import html as html_module
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import date
+
+import render
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 TOPICS_DIR = os.path.join(ROOT, "topics")
@@ -423,6 +429,7 @@ def load_topics(public=False):
                 "text": re.sub(r"\s+", " ", re.sub(r"[#`*>|\-]", " ", body)).lower()[:24000],
             }
             entry["outline"] = outline_of(entry["html"])
+            entry["path"] = os.path.relpath(os.path.join(folder, name), ROOT)
             if not session_mode and meta.get("group"):
                 entry["group"] = meta["group"]
             if session_mode:
@@ -460,7 +467,136 @@ def load_topics(public=False):
 
 # ------------------------------------------------------------------------ page
 
-def build(public=False, out=None):
+GOATCOUNTER = ('<script data-goatcounter="https://rezabina.goatcounter.com/count" async '
+               'src="//gc.zgo.at/count.js"></script>')
+LIGHT_KEYS = ("slug", "title", "summary", "minutes", "group", "day", "short", "full")
+SLOTS = re.compile(r"__(HEAD|SHELL|VIEW|DATA|ANALYTICS)__")
+
+
+def light_index(topics):
+    """What the sidebar and search results need: no chapter bodies, no full text."""
+    out = []
+    for t in topics:
+        lt = {k: v for k, v in t.items() if k not in ("chapters", "sources")}
+        lt["chapters"] = [{k: c[k] for k in LIGHT_KEYS if k in c} for c in t["chapters"]]
+        out.append(lt)
+    return out
+
+
+def fill(template, head, shell, view, data, analytics=""):
+    """One pass over the template, so text inside a chapter can never be taken for a slot."""
+    values = {
+        "HEAD": head, "SHELL": shell, "VIEW": view, "ANALYTICS": analytics,
+        "DATA": json.dumps(data, ensure_ascii=False).replace("</", "<\\/"),
+    }
+    return SLOTS.sub(lambda m: values[m.group(1)], template)
+
+
+def search_rows(topics):
+    return [{"t": t["slug"], "c": c["slug"], "x": c["text"]} for t in topics for c in t["chapters"]]
+
+
+def git_dates():
+    """path -> (first commit, last commit) as ISO times; a file with uncommitted edits counts as changed today."""
+    dates = {}
+    try:
+        log = subprocess.run(["git", "log", "--format=@%cI", "--name-only", "--", "topics"],
+                             cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "topics"],
+                               cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return dates
+    when = None
+    for line in log.splitlines():
+        if line.startswith("@"):
+            when = line[1:]
+        elif line.strip() and when:
+            first, last = dates.get(line.strip(), (when, when))
+            dates[line.strip()] = (when, last)  # log runs newest first, so the oldest wins "first"
+    today = date.today().isoformat()
+    for line in dirty.splitlines():
+        path = line[3:].strip()
+        first, _ = dates.get(path, (today, today))
+        dates[path] = (first, today)
+    return dates
+
+
+def read_template():
+    with open(os.path.join(ROOT, "template.html"), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def build_single(topics, public, out):
+    """One self-contained file: the local private build, and the public mirror in docs/."""
+    links = render.Links()
+    built = date.today().isoformat()
+    views = {"": {"title": render.SITE, "html": render.home_view(topics, links, built)}}
+    for t in topics:
+        sessions = t.get("kind") == "sessions"
+        views[t["slug"]] = {
+            "title": t["title"] + " · " + render.SHORT,
+            "html": render.session_view(t, links) if sessions else render.topic_view(topics, t, links),
+        }
+        for i, c in enumerate(t["chapters"]):
+            views[t["slug"] + "/" + c["slug"]] = {
+                "title": c["title"] + " · " + render.SHORT,
+                "html": render.chapter_view(topics, t, c, i, links),
+                "outline": c["outline"], "day": c.get("day", ""),
+            }
+    data = {"mode": "single", "built": built, "topics": light_index(topics),
+            "views": views, "search": search_rows(topics)}
+    page = fill(read_template(), render.mirror_head(), "", "", data)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(page)
+    print("built %s — %d topic(s), %d chapters, %.0f KB"
+          % (os.path.relpath(out, ROOT), len(topics), sum(len(t["chapters"]) for t in topics), len(page) / 1024))
+
+
+def build_pages(topics, out_dir, base="/notes/"):
+    """One page per chapter at a real path, each with its own head, for search engines and links."""
+    if os.path.isdir(out_dir) and os.listdir(out_dir) and not os.path.isfile(os.path.join(out_dir, "index.html")):
+        sys.exit("refusing to clear %s: it does not look like an earlier page build" % out_dir)
+    shutil.rmtree(out_dir, ignore_errors=True)
+    os.makedirs(out_dir)
+
+    template, links, built = read_template(), render.Links(base), date.today().isoformat()
+    index, dates = light_index(topics), git_dates()
+    for t in topics:
+        for c in t["chapters"]:
+            first, last = dates.get(c["path"], (None, None))
+            c["published"], c["modified"] = first, last
+
+    def write(rel, head, shell, view, key, page_extra=None):
+        data = {"mode": "pages", "base": base, "built": built, "topics": index,
+                "page": dict({"key": key, "outline": [], "day": ""}, **(page_extra or {}))}
+        path = os.path.join(out_dir, rel, "index.html")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(fill(template, head, shell, view, data, GOATCOUNTER))
+
+    entries = []  # sitemap rows in reading order: home, then each part followed by its chapters
+    write("", render.home_head(topics), "home", render.home_view(topics, links, built), "")
+    for t in topics:
+        write(t["slug"], render.topic_head(topics, t), "", render.topic_view(topics, t, links), t["slug"])
+        latest = max((c["modified"] or "" for c in t["chapters"]), default="")[:10]
+        entries.append((render.PUBLIC_BASE + t["slug"] + "/", latest))
+        for i, c in enumerate(t["chapters"]):
+            write(os.path.join(t["slug"], c["slug"]), render.chapter_head(topics, t, c), "",
+                  render.chapter_view(topics, t, c, i, links), t["slug"] + "/" + c["slug"],
+                  {"outline": c["outline"]})
+            entries.append((render.PUBLIC_BASE + t["slug"] + "/" + c["slug"] + "/", (c["modified"] or "")[:10]))
+    entries.insert(0, (render.PUBLIC_BASE, max((d for _, d in entries), default="")))
+
+    with open(os.path.join(out_dir, "search.json"), "w", encoding="utf-8") as fh:
+        json.dump(search_rows(topics), fh, ensure_ascii=False, separators=(",", ":"))
+    with open(os.path.join(out_dir, "sitemap.xml"), "w", encoding="utf-8") as fh:
+        fh.write(render.sitemap(entries))
+    pages = 1 + sum(1 + len(t["chapters"]) for t in topics)
+    print("built %s — %d pages, sitemap with %d URLs" % (os.path.relpath(out_dir, ROOT), pages, len(entries)))
+
+
+def build(public=False, out=None, pages_dir=None):
     topics = load_topics(public=public)
     if public:
         topics = [t for t in topics if not t.pop("private", False)]
@@ -469,22 +605,16 @@ def build(public=False, out=None):
             t.pop("private", None)
     if not topics:
         print("no topics found under topics/", file=sys.stderr)
-    data = json.dumps({"topics": topics, "built": date.today().isoformat()},
-                      ensure_ascii=False).replace("</", "<\\/")
-    with open(os.path.join(ROOT, "template.html"), encoding="utf-8") as fh:
-        template = fh.read()
-    page = template.replace("__DATA__", data)
-    out = out or (PUBLIC_OUT if public else OUT)
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write(page)
-    chapters = sum(len(t["chapters"]) for t in topics)
-    print("built %s — %d topic(s), %d chapters, %.0f KB"
-          % (os.path.relpath(out, ROOT), len(topics), chapters, len(page) / 1024))
+    if pages_dir:
+        if not public:
+            sys.exit("--pages builds the public site only: pass --public")
+        build_pages(topics, pages_dir)
+    else:
+        build_single(topics, public, out or (PUBLIC_OUT if public else OUT))
+
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    target = None
-    if "--out" in args:
-        target = os.path.abspath(os.path.expanduser(args[args.index("--out") + 1]))
-    build(public="--public" in args, out=target)
+    def arg(flag):
+        return os.path.abspath(os.path.expanduser(args[args.index(flag) + 1])) if flag in args else None
+    build(public="--public" in args, out=arg("--out"), pages_dir=arg("--pages"))

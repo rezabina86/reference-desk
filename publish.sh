@@ -10,7 +10,7 @@ set -euo pipefail
 
 KNOWLEDGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SITE="${SITE_REPO:-$(cd "$KNOWLEDGE/.." && pwd)/reza-bina.com}"
-NOTES="$SITE/public/notes/index.html"
+NOTES="$SITE/public/notes"            # one page per chapter, plus search.json and sitemap.xml
 DRY_RUN=false
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=true
 
@@ -22,13 +22,12 @@ die() { printf 'publish: %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------- build
 cd "$KNOWLEDGE"
 python3 build.py                       # private: everything, stays local
-python3 build.py --public              # docs/index.html, the standalone copy
-mkdir -p "$(dirname "$NOTES")"
-python3 build.py --public --out "$NOTES"
+python3 build.py --public              # docs/index.html, the standalone mirror (noindex)
+python3 build.py --public --pages "$NOTES"
 
 # ------------------------------------------------- refuse to leak the private half
 for term in "Day Sessions" "Kündigungsfrist" "<!--private-->"; do
-  if grep -qF "$term" "$NOTES"; then
+  if grep -rqF "$term" "$NOTES"; then
     die "the public build contains \"$term\" — nothing was committed"
   fi
 done
@@ -64,17 +63,17 @@ cd "$SITE"
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = "main" ] || die "site repo is on '$branch' — switch to main and run again"
 
-if git diff --quiet -- public/notes/index.html && git diff --cached --quiet -- public/notes/index.html; then
+if [ -z "$(git status --porcelain -- public/notes)" ]; then
   say "site: notes unchanged, nothing to publish"
   exit 0
 fi
 
 if $DRY_RUN; then
-  say "site: would commit and push public/notes/index.html as \"$subject\""
+  say "site: would commit and push public/notes/ as \"$subject\""; git status --short -- public/notes | head
   exit 0
 fi
 
-git add public/notes/index.html
+git add -A public/notes
 git commit -q -m "$subject"
 git push -q origin main
 say "site: pushed — https://reza-bina.com/notes/ updates when the Pages action finishes"

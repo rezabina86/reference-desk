@@ -1,6 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The iOS Interview Field Guide</title>
+__HEAD__
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
@@ -618,8 +621,10 @@ article h2{font-weight:500; font-size:29px; letter-spacing:-.015em}
 article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spacing:0}
 .tp > button .pn{font-family:var(--serif); font-size:12.5px; color:var(--accent); min-width:26px}
 </style>
+</head>
+<body>
 
-<div class="shell">
+<div class="shell __SHELL__">
   <aside class="rail" id="rail">
     <div class="rail-head">
       <button class="rail-hide" id="rail-hide" title="Hide the sidebar" aria-label="Hide the sidebar">«</button>
@@ -636,7 +641,7 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
       <a class="tb-brand" href="#/"><span class="long">The iOS Interview Field Guide</span><span class="short">Field Guide</span></a>
       <input id="find2" class="tb-find" type="search" placeholder="Search…" autocomplete="off" aria-label="Search every chapter">
     </div>
-    <div class="wrap" id="view"></div>
+    <div class="wrap" id="view">__VIEW__</div>
   </main>
   <aside class="outline" id="outline"></aside>
 </div>
@@ -645,11 +650,22 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
 <script>
 (function () {
   var DATA = JSON.parse(document.getElementById('payload').textContent);
+  // Two builds share this script: one file with hash routes (#/topic/chapter), and one page
+  // per chapter at a real path, where the reading view is already in the HTML.
+  var PAGES = DATA.mode === 'pages', BASE = DATA.base || '';
+  // A link from before the page build (/notes/#/topic/chapter) opens that chapter's own page.
+  if (PAGES && /^#\//.test(location.hash)) {
+    var old = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+    location.replace(BASE + (old.length ? old.join('/') + '/' : ''));
+    return;
+  }
   var view = document.getElementById('view');
   var tree = document.getElementById('tree');
   var rail = document.getElementById('rail');
   var find = document.getElementById('find');
+  var find2 = document.getElementById('find2');
   var outline = document.getElementById('outline');
+  var shell = rail.parentNode;
 
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -678,12 +694,6 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
   function roman(n) {
     return ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][n] || String(n);
   }
-  // Parts are the reference topics in order; the private day sessions are not a part.
-  function partOf(t) {
-    var parts = DATA.topics.filter(function (x) { return x.kind !== 'sessions'; });
-    var i = parts.indexOf(t);
-    return i === -1 ? '' : 'Part ' + roman(i + 1);
-  }
   // A chapter's number: the one in its title ("03 · Chat client"), else its position.
   function chNum(t, c, i) {
     var st = splitTitle(c);
@@ -691,21 +701,14 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
     var numbered = t.chapters.some(function (x) { return splitTitle(x).n; });
     return { n: numbered ? '·' : pad(i + 1), t: c.title };
   }
-  function countLabel(t) {
-    var gs = groupsOf(t);
-    return gs ? topicCount(t) + ' ' + (t.unit || 'problems') : t.chapters.length + ' ' + (t.unit || 'chapters');
+  function href(topic, chapter) {
+    if (PAGES) return BASE + (topic ? topic + '/' + (chapter ? chapter + '/' : '') : '');
+    return '#/' + (topic ? topic + (chapter ? '/' + chapter : '') : '');
   }
-  // "Chapter 02 of 16" uses the number in the title when the topic numbers its titles.
-  function chapterOf(t, c, idx) {
-    var numbered = t.chapters.filter(function (x) { var n = splitTitle(x).n; return n && !/^0+$/.test(n); });
-    var st = splitTitle(c);
-    if (!numbered.length) return 'Chapter ' + pad(idx + 1) + ' of ' + pad(t.chapters.length);
-    return st.n && !/^0+$/.test(st.n) ? 'Chapter ' + st.n + ' of ' + pad(numbered.length) : 'Start here';
-  }
-  var SITE = 'The iOS Interview Field Guide';
   function topicBy(slug) { return DATA.topics.filter(function (t) { return t.slug === slug; })[0]; }
 
   document.getElementById('foot').textContent = 'Built ' + DATA.built;
+  document.querySelector('.tb-brand').setAttribute('href', href());
 
   /* ------------------------------------------------------------- sidebar */
   var showAllUpcoming = false;
@@ -718,7 +721,7 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
         group = c.group;
       }
       var on = route.topic === t.slug && route.chapter === c.slug;
-      out += '<a class="' + (on ? 'on' : '') + '" href="#/' + t.slug + '/' + c.slug + '" title="' +
+      out += '<a class="' + (on ? 'on' : '') + '" href="' + href(t.slug, c.slug) + '" title="' +
              esc(c.title) + '"><span class="n">' + esc(c.day.replace(/^0+/, '')) + '</span>' +
              esc(c.short || c.title) + '</a>';
     });
@@ -738,7 +741,7 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
              (showAllUpcoming ? 'Show less' : 'Show the remaining ' + (up.length - 2) + ' days') + '</button>';
     }
     var done = t.chapters.filter(function (c) { return c.day && c.day.indexOf('S') !== 0; }).length;
-    return '<p class="tl-sect" style="margin-top:4px"><a href="#/' + t.slug + '" style="color:inherit;text-decoration:none">' +
+    return '<p class="tl-sect" style="margin-top:4px"><a href="' + href(t.slug) + '" style="color:inherit;text-decoration:none">' +
            esc(t.title) + ' · ' + done + ' of ' + (t.total || t.chapters.length) + '</a></p>' + out;
   }
 
@@ -755,18 +758,18 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
       var kids = !open ? '' : gs ? '<div class="kids">' + gs.map(function (g) {
         var cur = g.items.some(function (x) { return x.c.slug === route.chapter; });
         var count = problemCount(g);
-        var head = '<a class="kg' + (cur ? ' cur' : '') + '" href="#/' + t.slug + '/' + g.items[0].c.slug + '">' +
+        var head = '<a class="kg' + (cur ? ' cur' : '') + '" href="' + href(t.slug, g.items[0].c.slug) + '">' +
           '<span class="chev">' + (cur ? '▾' : '▸') + '</span><span>' + esc(g.name) + '</span>' +
           '<span class="ct">' + (count || '') + '</span></a>';
         if (!cur) return head;
         return head + g.items.map(function (x) {
           var st = splitTitle(x.c), on = route.chapter === x.c.slug;
-          return '<a class="kc' + (on ? ' on' : '') + '" href="#/' + t.slug + '/' + x.c.slug + '">' +
+          return '<a class="kc' + (on ? ' on' : '') + '" href="' + href(t.slug, x.c.slug) + '">' +
                  '<span class="num">' + esc(st.n) + '</span><span>' + esc(st.t) + '</span></a>';
         }).join('');
       }).join('') + '</div>' : '<div class="kids">' + t.chapters.map(function (c, i) {
         var on = route.chapter === c.slug, st = chNum(t, c, i);
-        return '<a class="' + (on ? 'on' : '') + '" href="#/' + t.slug + '/' + c.slug + '">' +
+        return '<a class="' + (on ? 'on' : '') + '" href="' + href(t.slug, c.slug) + '">' +
                '<span class="num">' + esc(st.n) + '</span><span>' + esc(st.t) + '</span></a>';
       }).join('') + '</div>';
       return '<div class="tp' + (open ? ' open' : '') + '"><button data-topic="' + esc(t.slug) + '">' +
@@ -779,169 +782,10 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
 
   tree.addEventListener('click', function (e) {
     var more = e.target.closest('[data-more]');
-    if (more) { showAllUpcoming = !showAllUpcoming; route(); return; }
+    if (more) { showAllUpcoming = !showAllUpcoming; paintTree(currentRoute()); return; }
     var head = e.target.closest('[data-topic]');
-    if (head) { location.hash = '#/' + head.getAttribute('data-topic'); }
+    if (head) { location.href = href(head.getAttribute('data-topic')); }
   });
-
-  /* ---------------------------------------------------------------- home */
-  function partToc(t) {
-    var gs = groupsOf(t), items;
-    if (gs && gs.length >= 4) {
-      items = gs.slice(0, 4).map(function (g, i) {
-        var n = problemCount(g);
-        return '<li><a href="#/' + t.slug + '/' + g.items[0].c.slug + '"><span class="n">' + pad(i + 1) + '</span>' +
-          '<span class="t">' + esc(g.name) + '</span><span class="lead"></span>' +
-          '<span class="m">' + (n ? n + (n === 1 ? ' problem' : ' problems') : 'start') + '</span></a></li>';
-      });
-      return { list: items.join(''), all: 'All ' + countLabel(t) };
-    }
-    items = t.chapters.slice(0, 4).map(function (c, i) {
-      var st = chNum(t, c, i);
-      return '<li><a href="#/' + t.slug + '/' + c.slug + '"><span class="n">' + esc(st.n) + '</span>' +
-        '<span class="t">' + esc(st.t) + '</span><span class="lead"></span>' +
-        '<span class="m">' + (c.minutes ? esc(c.minutes) + ' min' : '') + '</span></a></li>';
-    });
-    return { list: items.join(''), all: 'All ' + countLabel(t) };
-  }
-
-  function home() {
-    var parts = DATA.topics.filter(function (t) { return t.kind !== 'sessions'; });
-    var sessions = DATA.topics.filter(function (t) { return t.kind === 'sessions'; });
-    var pages = parts.reduce(function (a, t) { return a + t.chapters.length; }, 0);
-
-    var prog = sessions.map(function (t) {
-      return '<a class="fg-prog" href="#/' + t.slug + '">' + esc(t.title) + '<span>' + t.chapters.length +
-        ' written · ' + (t.total || t.chapters.length) + ' planned</span></a>';
-    }).join('');
-
-    var contents = parts.map(function (t) {
-      var toc = partToc(t);
-      return '<section class="fg-part">' +
-        '<a class="fg-ph" href="#/' + t.slug + '"><span class="fg-pn">' + partOf(t) + '</span>' +
-        '<span class="fg-pt">' + esc(t.title) + '</span><span class="fg-pc">' + countLabel(t) + '</span></a>' +
-        '<p class="fg-tag">' + esc(t.tagline || '') + '</p>' +
-        '<ol class="fg-toc">' + toc.list + '</ol>' +
-        '<a class="fg-all" href="#/' + t.slug + '">' + toc.all + ' →</a></section>';
-    }).join('');
-
-    view.innerHTML =
-      '<header class="fg-title"><div class="fg-bar"></div>' +
-      '<h1>The iOS Interview<br>Field Guide</h1>' +
-      '<p class="fg-sub">Every round of a senior iOS loop, worked through from the interviewer’s chair.</p>' +
-      '<p class="fg-by">Reza Bina · Berlin · ' + pages + ' pages, free to read</p>' + prog + '</header>' +
-      '<section class="fg-contents"><h2>Contents</h2><div class="fg-parts">' + contents + '</div></section>' +
-      '<footer class="fg-foot">Every claim about how something works carries its source, linked where it is used.' +
-      '<span class="meta">Updated ' + esc(DATA.built) + ' · <a href="https://reza-bina.com">reza-bina.com</a></span></footer>';
-    document.title = SITE;
-  }
-
-  /* -------------------------------------------------------- session index */
-  function sessionIndex(t) {
-    var groups = [], byGroup = {};
-    t.chapters.forEach(function (c) {
-      if (!byGroup[c.group]) { byGroup[c.group] = []; groups.push(c.group); }
-      byGroup[c.group].push(
-        '<a class="card" href="#/' + t.slug + '/' + c.slug + '"><span class="n">DAY ' +
-        esc(c.day.replace(/^0+/, '')) + '</span><b>' + esc(c.short || c.title) + '</b>' +
-        '<span class="s">' + esc(c.minutes) + ' min · reading, code, questions</span></a>');
-    });
-    (t.upcoming || []).forEach(function (u) {
-      if (!byGroup[u.group]) { byGroup[u.group] = []; groups.push(u.group); }
-      byGroup[u.group].push(
-        '<div class="card next"><span class="n">DAY ' + esc(u.day) + '</span><b>' + esc(u.short) +
-        '</b><span class="s">not written yet</span></div>');
-    });
-    var done = t.chapters.length;
-    view.innerHTML =
-      '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + done + ' written · ' +
-      (t.total || done) + ' planned · ' + t.minutes + ' min</span></div>' +
-      '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
-      groups.map(function (g) {
-        return '<section class="build"><h3>' + esc(g) + '</h3><div class="cards">' +
-               byGroup[g].join('') + '</div></section>';
-      }).join('');
-    document.title = t.title + ' · Field Guide';
-  }
-
-  /* ---------------------------------------------------------- topic index */
-  function topicIndex(t) {
-    var gs = groupsOf(t);
-    if (gs) {
-      view.innerHTML = '<p class="ix-part">' + partOf(t) + '</p>' +
-        '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + countLabel(t) +
-        ' · ' + gs.filter(problemCount).length + ' groups</span></div>' +
-        '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
-        gs.map(function (g) {
-          return '<section class="ix-group"><h3>' + esc(g.name) + '</h3><ul class="chapters">' +
-            g.items.map(function (x) {
-              var st = splitTitle(x.c);
-              return '<li><a class="' + (st.n ? '' : 'primer') + '" href="#/' + t.slug + '/' + x.c.slug + '">' +
-                '<span class="num">' + esc(st.n) + '</span><span class="ch-t">' + esc(st.t) + '</span>' +
-                '<span class="ch-m">' + esc(x.c.minutes) + ' min</span>' +
-                '<span class="ch-s">' + esc(x.c.summary) + '</span></a></li>';
-            }).join('') + '</ul></section>';
-        }).join('');
-      document.title = t.title + ' · Field Guide';
-      return;
-    }
-    var list = t.chapters.map(function (c, i) {
-      var st = chNum(t, c, i);
-      return '<li><a href="#/' + t.slug + '/' + c.slug + '">' +
-        '<span class="num">' + esc(st.n) + '</span><span class="ch-t">' + esc(st.t) + '</span>' +
-        '<span class="ch-m">' + esc(c.minutes) + ' min</span>' +
-        '<span class="ch-s">' + esc(c.summary) + '</span></a></li>';
-    }).join('');
-    view.innerHTML = '<p class="ix-part">' + partOf(t) + '</p>' +
-      '<div class="ix-head"><h1>' + esc(t.title) + '</h1><span class="meta">' + t.chapters.length +
-      ' chapters · ' + t.minutes + ' min</span></div>' +
-      '<p class="ix-lede">' + esc(t.summary || '') + '</p>' +
-      '<ul class="chapters">' + list + '</ul>';
-    document.title = t.title + ' · Field Guide';
-  }
-
-  /* ------------------------------------------------------------- chapter */
-  function chapter(t, c, idx) {
-    var prev = t.chapters[idx - 1], next = t.chapters[idx + 1];
-    var srcs = c.sources.length ? '<section class="sources"><h2>Sources for this chapter</h2><div class="src">' +
-      c.sources.map(function (s) {
-        return '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' +
-          '<span class="s-r">' + esc(s.ref) + '</span>' +
-          '<span class="s-l">' + esc(s.label) + '<span class="s-u">' + esc(s.url) + '</span></span></a>';
-      }).join('') + '</div></section>' : '';
-
-    var pager = '<nav class="pager">' +
-      (prev ? '<a href="#/' + t.slug + '/' + prev.slug + '"><span class="dir">Previous</span>' +
-              '<span class="nm">' + esc(prev.title) + '</span></a>' : '') +
-      (next ? '<a class="next" href="#/' + t.slug + '/' + next.slug + '"><span class="dir">Next</span>' +
-              '<span class="nm">' + esc(next.title) + '</span></a>' : '') + '</nav>';
-
-    var prog = '';
-    if (t.kind === 'sessions' && c.day && c.day.indexOf('S') !== 0) {
-      var n = parseInt(c.day, 10), total = t.total || t.chapters.length;
-      var slice = 0, size = 0;
-      t.chapters.concat(t.upcoming || []).forEach(function (x) {
-        if (x.group === c.group) { size++; if (String(parseInt(x.day, 10)) === String(n)) slice = size; }
-      });
-      prog = '<div class="prog"><span class="lb">' + esc(c.group) +
-        (slice ? ' · slice ' + slice + ' of ' + size : '') + '</span>' +
-        '<span class="bar"><i style="width:' + Math.round(n / total * 100) + '%"></i></span>' +
-        '<span class="lb">Day ' + n + ' of ' + total + '</span></div>';
-    }
-
-    view.innerHTML = '<article>' + prog +
-      '<div class="eyebrow">' + (partOf(t) ? '<a class="part" href="#/' + t.slug + '">' + partOf(t) + '</a><span class="dot"></span>' : '') +
-      '<a href="#/' + t.slug + '">' + esc(t.title) + '</a><span class="dot"></span>' +
-      (c.group ? esc(c.group) + (splitTitle(c).n && !/^0+$/.test(splitTitle(c).n) ? ' · ' + splitTitle(c).n + ' of ' + topicCount(t) : '') : chapterOf(t, c, idx)) +
-      '<span class="dot"></span>' + esc(c.minutes) + ' min</div>' +
-      '<h1 class="title">' + esc(c.title) + '</h1>' +
-      '<p class="lede">' + esc(c.summary) + '</p>' +
-      c.html + srcs + pager + '</article>';
-    document.title = c.title + ' · Field Guide';
-    paintOutline(c);
-    renderBoards();
-    addCopyButtons();
-  }
 
   function copyFallback(text) {
     var area = document.createElement('textarea');
@@ -1087,52 +931,85 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
   }
 
   /* -------------------------------------------------------------- search */
+  // The page build keeps the full text out of every page and fetches it on the first search.
+  var searchIndex = null, lastQuery = '';
+  function loadSearch() {
+    if (!searchIndex) {
+      searchIndex = PAGES
+        ? fetch(BASE + 'search.json').then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        : Promise.resolve(DATA.search);
+      searchIndex.catch(function () { searchIndex = null; });
+    }
+    return searchIndex;
+  }
   function search(q) {
+    lastQuery = q;
     outline.innerHTML = '';
-    var hits = [];
-    DATA.topics.forEach(function (t) {
-      t.chapters.forEach(function (c, i) {
-        var hay = (c.title + ' ' + c.summary + ' ' + c.text).toLowerCase();
-        if (hay.indexOf(q) !== -1) hits.push({ t: t, c: c, i: i });
+    loadSearch().then(function (index) {
+      if (q !== lastQuery) return;
+      var hits = [];
+      index.forEach(function (e) {
+        var t = topicBy(e.t), i = -1;
+        if (!t) return;
+        t.chapters.forEach(function (c, j) { if (c.slug === e.c) i = j; });
+        if (i === -1) return;
+        var c = t.chapters[i];
+        if ((c.title + ' ' + c.summary).toLowerCase().indexOf(q) !== -1 || e.x.indexOf(q) !== -1) {
+          hits.push({ t: t, c: c, i: i });
+        }
       });
+      view.innerHTML = '<div class="eyebrow">' + hits.length + ' chapter' + (hits.length === 1 ? '' : 's') +
+        ' matching &ldquo;' + esc(q) + '&rdquo;</div>' +
+        (hits.length ? '<ul class="results">' + hits.map(function (h) {
+          return '<li><a href="' + href(h.t.slug, h.c.slug) + '">' +
+            '<div class="where">' + esc(h.t.title) + ' · ' + esc(chNum(h.t, h.c, h.i).n) + '</div>' +
+            '<div class="ch-t">' + esc(h.c.title) + '</div>' +
+            '<div class="ch-s">' + esc(h.c.summary) + '</div></a></li>';
+        }).join('') + '</ul>' : '<p class="empty">Nothing here yet. Try a different word.</p>');
+    }).catch(function () {
+      if (q !== lastQuery) return;
+      view.innerHTML = '<p class="empty">Search could not load. Check the connection and try again.</p>';
     });
-    view.innerHTML = '<div class="eyebrow">' + hits.length + ' chapter' + (hits.length === 1 ? '' : 's') +
-      ' matching &ldquo;' + esc(q) + '&rdquo;</div>' +
-      (hits.length ? '<ul class="results">' + hits.map(function (h) {
-        return '<li><a href="#/' + h.t.slug + '/' + h.c.slug + '">' +
-          '<div class="where">' + esc(h.t.title) + ' · ' + pad(h.i + 1) + '</div>' +
-          '<div class="ch-t">' + esc(h.c.title) + '</div>' +
-          '<div class="ch-s">' + esc(h.c.summary) + '</div></a></li>';
-      }).join('') + '</ul>' : '<p class="empty">Nothing here yet. Try a different word.</p>');
   }
 
   /* -------------------------------------------------------------- router */
-  function route() {
+  var initialView = view.innerHTML;
+  function currentRoute() {
+    var key = PAGES ? DATA.page.key : (location.hash || '#/').replace(/^#\/?/, '');
+    var parts = key.split('/').filter(Boolean);
+    var r = { topic: parts[0], chapter: parts[1], key: parts.join('/') };
+    if (!PAGES && !DATA.views[r.key]) r = { key: '' };
+    return r;
+  }
+  // Put the reading view on screen, then the parts that need a browser.
+  function show(r, first) {
+    if (PAGES) {
+      if (!first && !view.hasAttribute('data-searching')) return;
+      if (!first) view.innerHTML = initialView;
+      view.removeAttribute('data-searching');
+      paintOutline(DATA.page);
+    } else {
+      var v = DATA.views[r.key];
+      view.removeAttribute('data-searching');
+      view.innerHTML = v.html;
+      document.title = v.title;
+      paintOutline(v);
+      window.scrollTo(0, 0);
+    }
+    renderBoards();
+    addCopyButtons();
+  }
+  function route(first) {
     var q = find.value.trim().toLowerCase();
-    var parts = (location.hash || '#/').replace(/^#\/?/, '').split('/').filter(Boolean);
-    var r = { topic: parts[0], chapter: parts[1] };
+    var r = currentRoute();
     shell.classList.toggle('home', !r.topic);
     paintTree(r);
-    if (q.length > 1) { search(q); return; }
-
-    var t = r.topic && topicBy(r.topic);
-    if (!t) { outline.innerHTML = ''; home(); }
-    else if (!r.chapter) {
-      outline.innerHTML = '';
-      if (t.kind === 'sessions') sessionIndex(t); else topicIndex(t);
-    }
-    else {
-      var idx = -1;
-      t.chapters.forEach(function (c, i) { if (c.slug === r.chapter) idx = i; });
-      if (idx === -1) { outline.innerHTML = ''; home(); } else chapter(t, t.chapters[idx], idx);
-    }
-    window.scrollTo(0, 0);
+    if (q.length > 1) { view.setAttribute('data-searching', '1'); search(q); return; }
+    show(r, first === true);
     rail.classList.remove('open');
   }
 
-  var shell = rail.parentNode;
-  var find2 = document.getElementById('find2');
-  window.addEventListener('hashchange', route);
+  if (!PAGES) window.addEventListener('hashchange', function () { route(); });
   find.addEventListener('input', function () { find2.value = find.value; route(); });
   find2.addEventListener('input', function () { find.value = find2.value; route(); });
   function wide() { return window.matchMedia('(min-width:881px)').matches; }
@@ -1148,9 +1025,14 @@ article h3{font-family:var(--serif); font-size:20px; font-weight:600; letter-spa
     if (wide()) setRailHidden(true); else rail.classList.remove('open');
   });
   document.getElementById('home-link').addEventListener('click', function () {
-    find.value = ''; find2.value = ''; location.hash = '#/';
+    find.value = ''; find2.value = '';
+    if (PAGES) { location.href = BASE; return; }
+    location.hash = '#/';
     if (location.hash === '#/') route();
   });
-  route();
+  route(true);
 })();
 </script>
+__ANALYTICS__
+</body>
+</html>
